@@ -36,14 +36,15 @@ import com.paintengine.engine.NativeEngine
 class MainActivity : Activity() {
 
     private var engine: NativeEngine? = null
-    private lateinit var overlay: TextView
+    // Not named "overlay": inside View.apply {} that would resolve to View.getOverlay().
+    private lateinit var overlayText: TextView
     private lateinit var overlayScroll: ScrollView
     private var diagnosticsOn = true
     private var renderMode = NativeEngine.RenderMode.ON_DEMAND
     private val handler = Handler(Looper.getMainLooper())
     private val overlayUpdater = object : Runnable {
         override fun run() {
-            engine?.let { overlay.text = it.statusText() }
+            engine?.let { overlayText.text = it.statusText() }
             handler.postDelayed(this, OVERLAY_PERIOD_MS)
         }
     }
@@ -88,7 +89,7 @@ class MainActivity : Activity() {
 
         root.addView(EngineSurfaceView(this, engine), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
-        overlay = TextView(this).apply {
+        overlayText = TextView(this).apply {
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             setTextColor(Color.WHITE)
@@ -97,7 +98,7 @@ class MainActivity : Activity() {
             text = "starting..."
         }
         overlayScroll = ScrollView(this).apply {
-            addView(overlay)
+            addView(overlayText)
             visibility = if (diagnosticsOn) android.view.View.VISIBLE else android.view.View.GONE
         }
         root.addView(overlayScroll, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP).apply {

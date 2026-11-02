@@ -85,7 +85,7 @@ jobs:
           grep Pkg.Revision "$ANDROID_NDK_HOME/source.properties"
 
       - name: Build debug APK (Kotlin + C++ for arm64-v8a and x86_64)
-        run: ./gradlew :app:assembleDebug --stacktrace --warning-mode all
+        run: ./gradlew :app:assembleDebug --stacktrace --warning-mode summary
 
       - name: Inspect APK (ABIs, JNI exports, 16 KB alignment, Vulkan via dlopen, signature)
         run: |
