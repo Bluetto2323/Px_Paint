@@ -8,6 +8,7 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/core/Log.cpp
     ${PE_CPP_DIR}/core/TaskQueue.cpp
     ${PE_CPP_DIR}/core/TestHooks.cpp        # empty unless PE_ENABLE_TEST_HOOKS
+    ${PE_CPP_DIR}/core/ShutdownReport.cpp
     # graphics abstraction (API independent)
     ${PE_CPP_DIR}/graphics/abstraction/GraphicsTypes.cpp
     ${PE_CPP_DIR}/graphics/abstraction/GraphicsCapabilities.cpp

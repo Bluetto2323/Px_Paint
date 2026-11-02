@@ -68,6 +68,7 @@ private:
     gfx::Extent2D requestedExtent_;  // headless only
     bool recreateSurface_ = false;
     uint32_t recreateCount_ = 0;
+    double lastRebuildMs_ = 0.0;
     EGLint swapInterval_ = 1;
 
     gfx::GraphicsCapabilities caps_;

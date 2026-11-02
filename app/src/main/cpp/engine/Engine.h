@@ -99,6 +99,7 @@ public:
 
     EngineStatus status() const;
     std::string statusText() const;
+    std::string statusJson() const;
     std::string capabilityReport() const;
 
     // Blocks until `predicate(status)` is true or timeout (tests / tooling).

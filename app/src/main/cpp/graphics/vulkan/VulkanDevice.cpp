@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "core/Log.h"
+#include "core/ShutdownReport.h"
 #include "core/TestHooks.h"
 #include "graphics/vulkan/VulkanBackend.h"
 #include "platform/PlatformWindow.h"
@@ -37,8 +38,10 @@ VulkanDevice::~VulkanDevice() {
     for (auto& [key, pass] : renderPasses_) vkDestroyRenderPass(device_, pass, nullptr);
     if (pipelineCache_) vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
     if (allocationCount_ != 0) PE_LOGE(kTag, "%u device memory allocation(s) leaked", allocationCount_);
+    shutdown::recordMemoryLeaks(allocationCount_);
     vkDestroyDevice(device_, nullptr);
     loader::resetDevice();
+    shutdown::recordDeviceDestroyed("Vulkan");
     PE_LOGI(kTag, "Device destroyed");
 }
 
@@ -311,7 +314,9 @@ gfx::SurfaceState VulkanDevice::surfaceState() const {
     s.imageCount = swapchain_->imageCount();
     s.presentMode = swapchain_->presentModeName();
     s.transform = swapchain_->transformName();
+    s.currentTransform = swapchain_->currentTransformName();
     s.recreateCount = swapchain_->recreateCount();
+    s.lastRebuildMs = swapchain_->lastRebuildMs();
     s.captureSupported = swapchain_->captureSupported();
     return s;
 }

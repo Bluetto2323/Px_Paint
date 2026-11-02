@@ -104,7 +104,8 @@ std::string capabilityReport(const gfx::GraphicsCapabilities& c, const std::stri
 
 std::string statusSummary(const EngineStatus& s) {
     std::ostringstream o;
-    char buf[160];
+    char buf[200];
+    const auto& f = s.frames;
     o << "State     " << s.state << (s.paused ? " (paused)" : "") << "\n";
     o << "Backend   " << gfx::toString(s.backend);
     if (s.deviceRecoveries) o << "  recoveries:" << s.deviceRecoveries;
@@ -113,34 +114,137 @@ std::string statusSummary(const EngineStatus& s) {
     o << "API       " << s.api << "\n";
     o << "Driver    " << s.driver << "\n";
     if (s.surface.attached) {
-        std::snprintf(buf, sizeof(buf), "Surface   %ux%u %s  img:%u %s  rebuilt:%u\n", s.surface.extent.width,
-                      s.surface.extent.height, gfx::toString(s.surface.format), s.surface.imageCount,
-                      s.surface.presentMode.c_str(), s.surface.recreateCount);
+        std::snprintf(buf, sizeof(buf), "Surface   %ux%u %s  img:%u %s  rebuilt:%u (last %.2f ms)\n",
+                      s.surface.extent.width, s.surface.extent.height, gfx::toString(s.surface.format),
+                      s.surface.imageCount, s.surface.presentMode.c_str(), s.surface.recreateCount,
+                      s.surface.lastRebuildMs);
         o << buf;
-        o << "Transform " << s.surface.transform << "  window:" << s.windowKind << "\n";
+        o << "Transform " << s.surface.transform << " / display " << s.surface.currentTransform << "\n";
     } else {
         o << "Surface   none\n";
     }
-    std::snprintf(buf, sizeof(buf), "Frames    %llu shown, %llu skipped\n",
-                  static_cast<unsigned long long>(s.frames.framesPresented),
-                  static_cast<unsigned long long>(s.frames.framesSkipped));
+    o << "Mode      render:" << gfx::toString(s.renderMode) << "  diagnostics:" << (s.diagnostics ? "on" : "off")
+      << "\n";
+    std::snprintf(buf, sizeof(buf), "Startup   backend init %.1f ms, first frame %.1f ms after attach\n",
+                  s.backendInitMs, f.firstFrameMs);
     o << buf;
-    std::snprintf(buf, sizeof(buf), "Mode      render:%s  diagnostics:%s\n", gfx::toString(s.renderMode),
-                  s.diagnostics ? "on" : "off");
+    std::snprintf(buf, sizeof(buf), "Frames    %llu rendered, %llu skipped", static_cast<unsigned long long>(f.framesPresented),
+                  static_cast<unsigned long long>(f.framesSkipped));
     o << buf;
-    std::snprintf(buf, sizeof(buf), "CPU frame %.2f ms (avg %.2f, max2s %.2f)\n", s.frames.lastCpuMs, s.frames.avgCpuMs,
-                  s.frames.maxCpuMsWindow);
+    if (f.framesSkipped) {
+        std::snprintf(buf, sizeof(buf), " (no-surface %llu, out-of-date %llu, surface-lost %llu, device-lost %llu, error %llu)",
+                      static_cast<unsigned long long>(f.skippedNoSurface),
+                      static_cast<unsigned long long>(f.skippedOutOfDate),
+                      static_cast<unsigned long long>(f.skippedSurfaceLost),
+                      static_cast<unsigned long long>(f.skippedDeviceLost),
+                      static_cast<unsigned long long>(f.skippedError));
+        o << buf;
+    }
+    o << "\n";
+    if (f.steadyFrames) {
+        std::snprintf(buf, sizeof(buf), "CPU/frame steady avg %.2f ms, max(2s) %.2f ms, last %.2f ms\n",
+                      f.steadyAvgCpuMs, f.steadyMaxCpuMs, f.lastCpuMs);
+    } else {
+        std::snprintf(buf, sizeof(buf), "CPU/frame warming up (last %.2f ms)\n", f.lastCpuMs);
+    }
     o << buf;
-    std::snprintf(buf, sizeof(buf), "Interval  %.2f ms avg  %.0f fps\n", s.frames.avgIntervalMs, s.frames.fps);
-    o << buf;
+    if (s.renderMode == gfx::RenderMode::OnDemand) {
+        o << "Rate      n/a: on-demand (idle between requested frames)\n";
+    } else if (f.rateValid) {
+        std::snprintf(buf, sizeof(buf), "Rate      %.1f fps, %.2f ms between frames\n", f.fps, f.avgIntervalMs);
+        o << buf;
+    } else {
+        o << "Rate      measuring...\n";
+    }
     std::snprintf(buf, sizeof(buf), "GPU res.  %u live (%s), %u pending\n", s.resources.totalLive(),
                   mib(s.resources.liveGpuBytes).c_str(), s.resources.pendingDestruction);
     o << buf;
     o << "SelfTest  " << toString(s.selfTest.status);
     if (!s.selfTest.detail.empty()) o << " - " << s.selfTest.detail;
     o << "\n";
-    o << "Log       " << s.warnings << " warnings, " << s.errors << " errors\n";
+    o << "Engine    " << s.errors << " errors, " << s.warnings << " warnings\n";
+    o << "Valid.lyr " << (s.validationLayerActive ? "active" : "not installed (optional)");
+    if (s.validationLayerActive || s.validationErrors || s.validationWarnings)
+        o << ": " << s.validationErrors << " errors, " << s.validationWarnings << " warnings";
+    o << "\n";
+    if (s.driverDebugMessages) o << "Driver dbg " << s.driverDebugMessages << " messages (informational)\n";
     for (const auto& p : s.recentProblems) o << "  " << p << "\n";
+    return o.str();
+}
+
+namespace {
+std::string jsonEscape(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char b[8];
+                    std::snprintf(b, sizeof(b), "\\u%04x", c);
+                    out += b;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+}  // namespace
+
+std::string statusJson(const EngineStatus& s) {
+    std::ostringstream o;
+    const auto& f = s.frames;
+    auto str = [&](const char* k, const std::string& v, bool comma = true) {
+        o << '"' << k << "\":\"" << jsonEscape(v) << '"' << (comma ? "," : "");
+    };
+    auto num = [&](const char* k, double v) { o << '"' << k << "\":" << v << ','; };
+    auto boolean = [&](const char* k, bool v) { o << '"' << k << "\":" << (v ? "true" : "false") << ','; };
+    o << '{';
+    str("state", s.state);
+    str("backend", gfx::toString(s.backend));
+    str("gpu", s.gpu);
+    str("api", s.api);
+    str("driver", s.driver);
+    boolean("paused", s.paused);
+    str("renderMode", gfx::toString(s.renderMode));
+    boolean("diagnostics", s.diagnostics);
+    boolean("surfaceAttached", s.surface.attached);
+    num("surfaceWidth", s.surface.extent.width);
+    num("surfaceHeight", s.surface.extent.height);
+    num("surfaceRebuilds", s.surface.recreateCount);
+    num("lastRebuildMs", s.surface.lastRebuildMs);
+    str("transform", s.surface.transform);
+    str("currentTransform", s.surface.currentTransform);
+    num("backendInitMs", s.backendInitMs);
+    num("firstFrameMs", f.firstFrameMs);
+    num("framesRendered", static_cast<double>(f.framesPresented));
+    num("framesSkipped", static_cast<double>(f.framesSkipped));
+    num("skippedOutOfDate", static_cast<double>(f.skippedOutOfDate));
+    num("skippedError", static_cast<double>(f.skippedError + f.skippedDeviceLost + f.skippedSurfaceLost));
+    num("steadyFrames", static_cast<double>(f.steadyFrames));
+    num("steadyAvgCpuMs", f.steadyAvgCpuMs);
+    num("steadyMaxCpuMs", f.steadyMaxCpuMs);
+    boolean("rateValid", f.rateValid);
+    num("fps", f.fps);
+    num("liveResources", s.resources.totalLive());
+    num("pendingDestruction", s.resources.pendingDestruction);
+    num("deviceRecoveries", s.deviceRecoveries);
+    str("selfTest", toString(s.selfTest.status));
+    num("selfTestRuns", s.selfTest.runs);
+    str("selfTestDetail", s.selfTest.detail);
+    num("engineErrors", static_cast<double>(s.errors));
+    num("engineWarnings", static_cast<double>(s.warnings));
+    boolean("validationLayerActive", s.validationLayerActive);
+    num("validationErrors", static_cast<double>(s.validationErrors));
+    num("validationWarnings", static_cast<double>(s.validationWarnings));
+    o << "\"driverDebugMessages\":" << s.driverDebugMessages;
+    o << '}';
     return o.str();
 }
 

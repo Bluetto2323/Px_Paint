@@ -34,8 +34,10 @@ struct SurfaceState {
     TextureFormat format = TextureFormat::Unknown;
     uint32_t imageCount = 0;
     std::string presentMode;
-    std::string transform;     // Vulkan pre-transform info
+    std::string transform;          // pre-transform the engine renders with
+    std::string currentTransform;   // what the display currently expects
     uint32_t recreateCount = 0;
+    double lastRebuildMs = 0.0;     // duration of the last swapchain / EGLSurface (re)build
     bool captureSupported = false;
 };
 

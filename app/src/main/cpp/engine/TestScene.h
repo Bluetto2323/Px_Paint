@@ -22,6 +22,8 @@ public:
     void render(gfx::RenderingContext& ctx, gfx::RenderTarget& target);
 
     static SelfTestResult verify(const gfx::CaptureResult& capture);
+    // Centred square viewport used to keep the triangle undistorted.
+    static gfx::Viewport squareViewport(gfx::Extent2D extent);
 
 private:
     gfx::Ref<gfx::BufferResource> vertices_;

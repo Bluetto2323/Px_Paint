@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 
 #include "core/Log.h"
@@ -25,6 +26,14 @@ constexpr Vertex kTriangle[3] = {
     {-0.6f, -0.6f, 0.0f, 1.0f, 0.0f},  // bottom-left: green
     {0.6f, -0.6f, 0.0f, 0.0f, 1.0f},   // bottom-right: blue
 };
+
+gfx::Viewport squareViewportFor(uint32_t w, uint32_t h) {
+    const uint32_t side = std::min(w, h);
+    // Integer offsets: the square is centred, so it is the same region with a
+    // top-left (Vulkan) or bottom-left (GL) viewport origin, give or take 1px.
+    return {static_cast<float>((w - side) / 2), static_cast<float>((h - side) / 2), static_cast<float>(side),
+            static_cast<float>(side)};
+}
 
 bool barycentric(float px, float py, float& w0, float& w1, float& w2) {
     const Vertex &a = kTriangle[0], &b = kTriangle[1], &c = kTriangle[2];
@@ -89,6 +98,10 @@ bool TestScene::create(gfx::GraphicsDevice& device, gfx::TextureFormat targetFor
     return true;
 }
 
+gfx::Viewport TestScene::squareViewport(gfx::Extent2D extent) {
+    return squareViewportFor(extent.width, extent.height);
+}
+
 void TestScene::destroy() {
     pipeline_.reset();
     fragmentShader_.reset();
@@ -104,6 +117,11 @@ void TestScene::render(gfx::RenderingContext& ctx, gfx::RenderTarget& target) {
     pass.clearColor = clearColor();
     pass.debugLabel = "TestScene";
     ctx.beginRenderPass(pass);
+    // Aspect-correct: draw into a centred square so the triangle keeps its
+    // shape whatever the surface size or orientation (the clear still covers
+    // the whole target).
+    const gfx::Viewport square = squareViewport(target.extent());
+    ctx.setViewport(square);
     ctx.bindPipeline(*pipeline_);
     ctx.bindVertexBuffer(*vertices_, 0);
     ctx.draw(3, 0);
@@ -135,16 +153,33 @@ SelfTestResult TestScene::verify(const gfx::CaptureResult& cap) {
         {"corner-bl", -0.95f, -0.95f},  {"corner-br", 0.95f, -0.95f},
     };
 
+    // Triangle probes live in the centred square; corner probes are in
+    // full-surface coordinates (outside the square in non-square targets).
+    const gfx::Viewport sq = squareViewportFor(cap.width, cap.height);
+    auto toPixel = [&](float x, float y, bool inSquare, uint32_t& px, uint32_t& py) {
+        const float ox = inSquare ? sq.x : 0.0f, oy = inSquare ? sq.y : 0.0f;
+        const float w = inSquare ? sq.width : static_cast<float>(cap.width);
+        const float h = inSquare ? sq.height : static_cast<float>(cap.height);
+        px = std::min(cap.width - 1, static_cast<uint32_t>(ox + (x + 1.0f) * 0.5f * w));
+        py = std::min(cap.height - 1, static_cast<uint32_t>(oy + (1.0f - y) * 0.5f * h));
+    };
+    auto isClear = [&](const uint8_t* rgba) {
+        return std::abs(rgba[0] - static_cast<int>(std::lround(clear.r * 255))) <= kTolerance &&
+               std::abs(rgba[1] - static_cast<int>(std::lround(clear.g * 255))) <= kTolerance &&
+               std::abs(rgba[2] - static_cast<int>(std::lround(clear.b * 255))) <= kTolerance;
+    };
+
     int failures = 0;
     std::string detail;
     for (const auto& p : probes) {
-        const uint32_t px = std::min(cap.width - 1, static_cast<uint32_t>((p.x + 1.0f) * 0.5f * cap.width));
-        const uint32_t py = std::min(cap.height - 1, static_cast<uint32_t>((1.0f - p.y) * 0.5f * cap.height));
+        const bool corner = std::strncmp(p.name, "corner", 6) == 0;
+        uint32_t px = 0, py = 0;
+        toPixel(p.x, p.y, !corner, px, py);
         const uint8_t* rgba = &cap.rgba[(static_cast<size_t>(py) * cap.width + px) * 4];
 
         float w0, w1, w2;
         float er, eg, eb;
-        if (barycentric(p.x, p.y, w0, w1, w2)) {
+        if (!corner && barycentric(p.x, p.y, w0, w1, w2)) {
             er = w0 * a.r + w1 * b.r + w2 * c.r;
             eg = w0 * a.g + w1 * b.g + w2 * c.g;
             eb = w0 * a.b + w1 * b.b + w2 * c.b;
@@ -165,9 +200,41 @@ SelfTestResult TestScene::verify(const gfx::CaptureResult& cap) {
             detail += buf;
         }
     }
+
+    // Geometry: bounding box of non-clear pixels must be the triangle's box
+    // (1.2 x 1.2 NDC units of the square = 60% of its side) -> not stretched.
+    uint32_t minX = cap.width, maxX = 0, minY = cap.height, maxY = 0;
+    for (uint32_t y = 0; y < cap.height; ++y) {
+        const uint8_t* row = &cap.rgba[static_cast<size_t>(y) * cap.width * 4];
+        for (uint32_t x = 0; x < cap.width; ++x) {
+            if (isClear(row + x * 4)) continue;
+            minX = std::min(minX, x);
+            maxX = std::max(maxX, x);
+            minY = std::min(minY, y);
+            maxY = std::max(maxY, y);
+        }
+    }
+    bool geometryOk = false;
+    char geo[160];
+    if (maxX >= minX && maxY >= minY) {
+        const double bw = maxX - minX + 1, bh = maxY - minY + 1;
+        const double expected = 0.6 * sq.width;
+        const double aspect = bw / bh;
+        geometryOk = std::abs(aspect - 1.0) <= 0.05 && std::abs(bw - expected) <= 0.05 * expected + 2 &&
+                     std::abs(bh - expected) <= 0.05 * expected + 2;
+        std::snprintf(geo, sizeof(geo), "triangle box %.0fx%.0f px (expected %.0fx%.0f, aspect %.3f)", bw, bh,
+                      expected, expected, aspect);
+    } else {
+        std::snprintf(geo, sizeof(geo), "no triangle pixels found");
+    }
+    if (!geometryOk) {
+        failures++;
+        detail += std::string("geometry: ") + geo + "; ";
+    }
+
     result.status = failures == 0 ? SelfTestStatus::Passed : SelfTestStatus::Failed;
-    result.detail = failures == 0 ? "8/8 probes match (" + std::to_string(cap.width) + "x" +
-                                        std::to_string(cap.height) + ")"
+    result.detail = failures == 0 ? "8/8 probes + geometry OK (" + std::to_string(cap.width) + "x" +
+                                        std::to_string(cap.height) + ", " + geo + ")"
                                   : detail;
     return result;
 }

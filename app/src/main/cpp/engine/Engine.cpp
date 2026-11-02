@@ -1,6 +1,7 @@
 #include "engine/Engine.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 #include <system_error>
 
@@ -113,6 +114,7 @@ void Engine::surfaceChanged(uint32_t width, uint32_t height) {
         if (window_ && window_->kind() == WindowKind::Headless)
             static_cast<HeadlessWindow*>(window_.get())->resize(width, height);
         if (selection_ && surfaceAttached_) selection_.device->notifySurfaceResized({width, height});
+        scheduler_.markWarmup();  // the rebuild frame must not count as steady state
         scheduler_.requestFrame();
         publishStatus(true);
     });
@@ -226,6 +228,8 @@ EngineStatus Engine::status() const {
 }
 
 std::string Engine::statusText() const { return diagnostics::statusSummary(status()); }
+
+std::string Engine::statusJson() const { return diagnostics::statusJson(status()); }
 
 std::string Engine::capabilityReport() const {
     std::lock_guard<std::mutex> lock(statusMutex_);
@@ -441,7 +445,7 @@ void Engine::recoverDevice(const char* reason) {
 }
 
 void Engine::onSurfaceAvailable() {
-    scheduler_.resetIntervalTracking();
+    scheduler_.markAttach(nowNs());
     scheduler_.requestFrame();
     consecutiveOutOfDate_ = 0;
     if (config_.diagnostics && config_.autoSelfTest) selfTestRequested_ = true;
@@ -453,7 +457,7 @@ void Engine::renderFrame() {
     gfx::FrameContext frame;
     gfx::FrameStatus status = device.beginFrame(serial, frame);
     if (status != gfx::FrameStatus::Ok) {
-        scheduler_.endFrameSkipped();
+        scheduler_.endFrameSkipped(status);
         handleFrameStatus(status);
         publishStatus(false);
         return;
@@ -519,6 +523,7 @@ void Engine::renderFrame() {
         logPerfIfDue();
     } else {
         selfTestCaptureInFlight_ = false;
+        scheduler_.endFrameSkipped(status);
         handleFrameStatus(status);
     }
     publishStatus(false);
@@ -561,10 +566,15 @@ void Engine::logPerfIfDue() {
     if (now - lastPerfLogNs_ < kPerfLogPeriodNs) return;
     const auto& st = scheduler_.stats();
     const double seconds = nsToMs(now - lastPerfLogNs_) / 1000.0;
-    PE_LOGI("Perf", "%s: %.1f fps over %.1fs, cpu avg %.2f ms / max %.2f ms, presented %llu, skipped %llu",
-            gfx::toString(scheduler_.mode()), static_cast<double>(st.framesPresented - lastPerfLogFrames_) / seconds,
-            seconds, st.avgCpuMs, st.maxCpuMsWindow, static_cast<unsigned long long>(st.framesPresented),
-            static_cast<unsigned long long>(st.framesSkipped));
+    const uint64_t rendered = st.framesPresented - lastPerfLogFrames_;
+    char rate[64];
+    if (scheduler_.mode() == gfx::RenderMode::Continuous && st.rateValid)
+        std::snprintf(rate, sizeof(rate), "%.1f fps", st.fps);
+    else
+        std::snprintf(rate, sizeof(rate), "rate n/a (%s)", gfx::toString(scheduler_.mode()));
+    PE_LOGI("Perf", "%s: %llu frames rendered in %.1fs, steady cpu avg %.2f ms / max %.2f ms, total rendered %llu, skipped %llu",
+            rate, static_cast<unsigned long long>(rendered), seconds, st.steadyAvgCpuMs, st.steadyMaxCpuMs,
+            static_cast<unsigned long long>(st.framesPresented), static_cast<unsigned long long>(st.framesSkipped));
     lastPerfLogNs_ = now;
     lastPerfLogFrames_ = st.framesPresented;
 }
@@ -600,6 +610,8 @@ void Engine::publishStatus(bool force) {
         s.driver = caps.driverVersion;
         s.surface = selection_.device->surfaceState();
         s.resources = selection_.device->resources().stats();
+        s.validationLayerActive = caps.featureUsable("Validation layer");
+        for (const auto& a : lastAttempts_) s.backendInitMs += a.durationMs;
     }
     s.attempts = lastAttempts_;
     s.windowKind = window_ ? toString(window_->kind()) : "none";
@@ -608,8 +620,12 @@ void Engine::publishStatus(bool force) {
     s.diagnostics = config_.diagnostics;
     s.selfTest = selfTest_;
     s.deviceRecoveries = deviceRecoveries_;
-    s.warnings = log::warningCount();
-    s.errors = log::errorCount();
+    s.warnings = log::warningCount(LogSource::Engine);
+    s.errors = log::errorCount(LogSource::Engine);
+    s.validationErrors = log::errorCount(LogSource::ValidationLayer);
+    s.validationWarnings = log::warningCount(LogSource::ValidationLayer);
+    s.driverDebugMessages =
+        log::errorCount(LogSource::DriverDebug) + log::warningCount(LogSource::DriverDebug);
     s.recentProblems = log::recentProblems(4);
     {
         std::lock_guard<std::mutex> lock(statusMutex_);

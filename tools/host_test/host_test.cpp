@@ -27,8 +27,10 @@
 #include <vector>
 
 #include "core/Log.h"
+#include "core/ShutdownReport.h"
 #include "core/TestHooks.h"
 #include "core/Time.h"
+#include "diagnostics/Diagnostics.h"
 #include "engine/Engine.h"
 #include "platform/PlatformWindow.h"
 
@@ -148,6 +150,12 @@ HookController gHooks;
 // ----------------------------------------------------------------- helpers
 uint64_t frames(const pe::Engine& e) { return e.status().frames.framesPresented; }
 
+// Engine errors plus validation-layer errors: both must stay at zero in the
+// clean suites (driver debug output is informational and not counted).
+uint64_t totalErrors() {
+    return pe::log::errorCount(pe::LogSource::Engine) + pe::log::errorCount(pe::LogSource::ValidationLayer);
+}
+
 bool framesAdvance(const pe::Engine& e, uint64_t delta, std::chrono::milliseconds t = 5s) {
     const uint64_t start = frames(e);
     return e.waitForStatus([&](const EngineStatus& s) { return s.frames.framesPresented >= start + delta; }, t);
@@ -203,7 +211,7 @@ void checkReleaseOrdering(bool returned, const std::shared_ptr<WindowProbe>& pro
 
 // =============================================================== suite: basic
 int suiteBasic(const std::string& pref, const std::string& expected, bool noFallback) {
-    const uint64_t errorsAtStart = pe::log::errorCount();
+    const uint64_t errorsAtStart = totalErrors();
     {
         pe::Engine engine(makeConfig(pref, noFallback, RenderMode::Continuous));
         engine.start();
@@ -234,7 +242,26 @@ int suiteBasic(const std::string& pref, const std::string& expected, bool noFall
         check(s.backend == want, "expected backend selected");
         check(selfTestPassedAfter(engine, 0), "self-test: triangle pixels verified");
         std::printf("    self-test: %s\n", engine.status().selfTest.detail.c_str());
+        check(engine.status().selfTest.detail.find("geometry OK") != std::string::npos,
+              "self-test includes the geometry (aspect) check");
         check(framesAdvance(engine, 30), "continuous mode produces frames");
+
+        section("diagnostics: startup vs steady state, rate, skip reasons");
+        s = engine.status();
+        std::printf("    backend init %.1f ms, first frame %.1f ms, steady avg %.3f ms (%llu steady frames)\n",
+                    s.backendInitMs, s.frames.firstFrameMs, s.frames.steadyAvgCpuMs,
+                    static_cast<unsigned long long>(s.frames.steadyFrames));
+        check(s.backendInitMs > 0.0 && s.frames.firstFrameMs > 0.0, "startup timings reported");
+        check(s.frames.steadyFrames + pe::gfx::FrameScheduler::kWarmupFrames <= s.frames.framesPresented,
+              "warm-up frames excluded from steady-state statistics");
+        check(engine.waitForStatus([](const EngineStatus& st) { return st.frames.rateValid && st.frames.fps > 0.0; }, 5s),
+              "continuous: fps measured");
+        s = engine.status();
+        const auto& fr = s.frames;
+        check(fr.framesSkipped == fr.skippedNoSurface + fr.skippedOutOfDate + fr.skippedSurfaceLost +
+                                      fr.skippedDeviceLost + fr.skippedError,
+              "skipped frames fully attributed to reasons");
+        check(pe::diagnostics::statusJson(s).find("\"framesRendered\":") != std::string::npos, "status JSON available");
 
         section("resize");
         const uint32_t rebuildsBefore = engine.status().surface.recreateCount;
@@ -245,6 +272,7 @@ int suiteBasic(const std::string& pref, const std::string& expected, bool noFall
         if (want == BackendType::OpenGLES) {
             const auto e = engine.status().surface.extent;
             check(e.width == 400 && e.height == 300, "resize: new extent 400x300");
+            check(engine.status().surface.lastRebuildMs > 0.0, "resize: rebuild time reported");
         } else {
             const auto e = engine.status().surface.extent;
             std::printf("    swapchain extent after resize: %ux%u (driver currentExtent)\n", e.width, e.height);
@@ -281,6 +309,7 @@ int suiteBasic(const std::string& pref, const std::string& expected, bool noFall
         check(engine.waitForStatus([](const EngineStatus& st) { return st.renderMode == RenderMode::OnDemand; }, 2s),
               "render mode switched to on-demand");
         check(framesStable(engine), "on-demand: idle when nothing is requested");
+        check(!engine.status().frames.rateValid, "on-demand: idle time is not reported as fps");
         engine.setDiagnosticsEnabled(true);
         check(engine.waitForStatus([](const EngineStatus& st) { return st.diagnostics; }, 2s) &&
                   engine.status().renderMode == RenderMode::OnDemand,
@@ -296,13 +325,17 @@ int suiteBasic(const std::string& pref, const std::string& expected, bool noFall
         s = engine.status();
         std::printf("  frames=%llu skipped=%llu avgCpu=%.2fms live=%u\n",
                     static_cast<unsigned long long>(s.frames.framesPresented),
-                    static_cast<unsigned long long>(s.frames.framesSkipped), s.frames.avgCpuMs,
+                    static_cast<unsigned long long>(s.frames.framesSkipped), s.frames.steadyAvgCpuMs,
                     s.resources.totalLive());
         std::printf("--- overlay text ---\n%s--------------------\n", engine.statusText().c_str());
         engine.shutdown();
         check(probe && probe->released, "shutdown released the attached window");
+        const auto report = pe::shutdown::last();
+        std::printf("    last shutdown: %s\n", pe::shutdown::describe(report).c_str());
+        check(report.valid && report.clean() && report.resourcesCreated == report.resourcesDestroyed,
+              "shutdown report: device destroyed with no leaked resources");
     }
-    const uint64_t newErrors = pe::log::errorCount() - errorsAtStart;
+    const uint64_t newErrors = totalErrors() - errorsAtStart;
     check(newErrors == 0, "no errors logged (incl. leak check at shutdown)");
     if (newErrors)
         for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());
@@ -312,7 +345,7 @@ int suiteBasic(const std::string& pref, const std::string& expected, bool noFall
 // ========================================================== suite: lifecycle
 int suiteLifecycle(const std::string& pref, const std::string& expected, bool noFallback) {
     const BackendType want = expected == "vulkan" ? BackendType::Vulkan : BackendType::OpenGLES;
-    const uint64_t errorsAtStart = pe::log::errorCount();
+    const uint64_t errorsAtStart = totalErrors();
     {
         pe::Engine engine(makeConfig(pref, noFallback, RenderMode::Continuous));
         engine.start();
@@ -364,6 +397,21 @@ int suiteLifecycle(const std::string& pref, const std::string& expected, bool no
         runs = engine.status().selfTest.runs;
         engine.surfaceCreated(trackedWindow(320, 240, probe));
         check(selfTestPassedAfter(engine, runs), "L2: new surface renders correctly");
+
+        // L2b ---------------------------------------------------------------
+        section("L2b extreme aspect ratios: triangle must stay undistorted");
+        for (auto size : {std::pair<uint32_t, uint32_t>{640, 160}, {160, 640}}) {
+            const uint32_t rebuilds = engine.status().surface.recreateCount;
+            engine.surfaceChanged(size.first, size.second);
+            engine.waitForStatus([&](const EngineStatus& st) { return st.surface.recreateCount > rebuilds; }, 5s);
+            runs = engine.status().selfTest.runs;
+            engine.runSelfTest();
+            const bool ok = selfTestPassedAfter(engine, runs);
+            const auto e = engine.status().surface.extent;
+            std::printf("    requested %ux%u, surface %ux%u: %s\n", size.first, size.second, e.width, e.height,
+                        engine.status().selfTest.detail.c_str());
+            check(ok, "L2b: self-test incl. geometry passes on a non-square surface");
+        }
 
         // L4 ----------------------------------------------------------------
         section("L4 rapid surface recreation (50x, no waiting in between)");
@@ -449,7 +497,7 @@ int suiteLifecycle(const std::string& pref, const std::string& expected, bool no
         check(probe->released, "L3: Engine destroyed with queued work: window released, no crash");
     }
 
-    const uint64_t newErrors = pe::log::errorCount() - errorsAtStart;
+    const uint64_t newErrors = totalErrors() - errorsAtStart;
     check(newErrors == 0, "lifecycle suite: no errors logged (incl. leak checks)");
     if (newErrors)
         for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());

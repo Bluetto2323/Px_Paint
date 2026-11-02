@@ -3,7 +3,9 @@
 #include <cstring>
 
 #include "core/Log.h"
+#include "core/ShutdownReport.h"
 #include "core/TestHooks.h"
+#include "core/Time.h"
 #include "graphics/opengles/GLESBackend.h"
 #include "platform/PlatformWindow.h"
 
@@ -17,10 +19,9 @@ void GL_APIENTRY debugCallback(GLenum source, GLenum type, GLuint id, GLenum sev
     (void)source;
     if (severity == GL_DEBUG_SEVERITY_NOTIFICATION_KHR) return;
     const bool error = type == GL_DEBUG_TYPE_ERROR_KHR || severity == GL_DEBUG_SEVERITY_HIGH_KHR;
-    if (error)
-        PE_LOGE("GLES.debug", "[id %u] %s", id, message);
-    else
-        PE_LOGW("GLES.debug", "[id %u] %s", id, message);
+    // Driver debug output is counted separately from engine errors.
+    log::writeFrom(LogSource::DriverDebug, error ? LogLevel::Error : LogLevel::Warn, "GLES.debug", "[id %u] %s", id,
+                   message);
 }
 }  // namespace
 
@@ -41,6 +42,7 @@ GLESDevice::~GLESDevice() {
         if (idleSurface_ != EGL_NO_SURFACE) eglDestroySurface(display_, idleSurface_);
         eglDestroyContext(display_, context_);
         PE_LOGI(kTag, "EGL context destroyed%s", contextLost_ ? " (was lost)" : "");
+        shutdown::recordDeviceDestroyed("OpenGL ES");
     }
     // Frees the render thread's EGL bookkeeping; the context is no longer
     // current, so this does not affect any other thread.
@@ -187,6 +189,7 @@ bool GLESDevice::attachSurface(PlatformWindow& window) {
 }
 
 bool GLESDevice::createWindowSurface() {
+    const int64_t t0 = nowNs();
     const EGLConfig config = backend_.config();
     if (window_->kind() == WindowKind::Headless) {
         const EGLint pb[] = {EGL_WIDTH, static_cast<EGLint>(requestedExtent_.width), EGL_HEIGHT,
@@ -210,6 +213,7 @@ bool GLESDevice::createWindowSurface() {
     if (!eglSwapInterval(display_, swapInterval_))
         PE_LOGW(kTag, "eglSwapInterval(%d) failed: %s", swapInterval_, eglErrorString(eglGetError()));
     backbuffer_.setExtent(querySurfaceExtent());
+    lastRebuildMs_ = nsToMs(nowNs() - t0);
     return true;
 }
 
@@ -257,8 +261,10 @@ gfx::SurfaceState GLESDevice::surfaceState() const {
     s.format = gfx::TextureFormat::RGBA8_UNORM;
     s.imageCount = 0;  // not exposed by EGL
     s.presentMode = "swapInterval=" + std::to_string(swapInterval_);
-    s.transform = "compositor";
+    s.transform = "n/a (EGL)";
+    s.currentTransform = "handled by compositor";
     s.recreateCount = recreateCount_;
+    s.lastRebuildMs = lastRebuildMs_;
     s.captureSupported = s.attached;
     return s;
 }

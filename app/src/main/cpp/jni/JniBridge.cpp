@@ -13,6 +13,7 @@
 #include <string>
 
 #include "core/Log.h"
+#include "core/ShutdownReport.h"
 #include "diagnostics/Diagnostics.h"
 #include "engine/Engine.h"
 #include "platform/android/AndroidWindow.h"
@@ -179,6 +180,42 @@ JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeCapabil
                                                                                           jlong handle) {
     return toJString(env, guard("nativeCapabilityReport", std::string(),
                                 [&] { return fromHandle(handle)->capabilityReport(); }));
+}
+
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeStatusJson(JNIEnv* env, jclass,
+                                                                                    jlong handle) {
+    return toJString(env, guard("nativeStatusJson", std::string("{}"),
+                                [&] { return fromHandle(handle)->statusJson(); }));
+}
+
+// Static: works without an engine instance (e.g. between two engines).
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeRecentLog(JNIEnv* env, jclass,
+                                                                                   jint maxLines) {
+    return toJString(env, guard("nativeRecentLog", std::string(), [&] {
+        std::string out;
+        for (const auto& line : pe::log::recentLines(static_cast<size_t>(maxLines > 0 ? maxLines : 0))) {
+            out += line;
+            out += '\n';
+        }
+        return out;
+    }));
+}
+
+// Static: bookkeeping of the most recently destroyed graphics device (JSON).
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeLastShutdownReport(JNIEnv* env, jclass) {
+    return toJString(env, guard("nativeLastShutdownReport", std::string("{}"), [&] {
+        const pe::shutdown::Report r = pe::shutdown::last();
+        std::string text = pe::shutdown::describe(r);
+        for (char& c : text)
+            if (c == '"' || c == '\\') c = '\'';
+        return std::string("{\"valid\":") + (r.valid ? "true" : "false") + ",\"backend\":\"" + r.backend +
+               "\",\"clean\":" + (r.clean() ? "true" : "false") +
+               ",\"created\":" + std::to_string(r.resourcesCreated) +
+               ",\"destroyed\":" + std::to_string(r.resourcesDestroyed) +
+               ",\"leaked\":" + std::to_string(r.resourcesLeaked) +
+               ",\"memoryLeaked\":" + std::to_string(r.memoryAllocationsLeaked) +
+               ",\"devices\":" + std::to_string(r.devicesShutDown) + ",\"text\":\"" + text + "\"}";
+    }));
 }
 
 JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeLogReport(JNIEnv*, jclass, jlong handle) {

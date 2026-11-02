@@ -5,7 +5,10 @@ import android.view.Surface
 /**
  * Kotlin facade over the native engine (libpaintengine.so).
  *
- * Threading: call every method from the main (UI) thread. The native side owns
+ * Threading: lifecycle and control methods must be called from the main (UI)
+ * thread. Read-only queries ([statusText], [statusJson], [capabilityReport])
+ * may be called from any thread: they share a lock with [close], so the native
+ * engine can never be destroyed while a query is running. The native side owns
  * its own render thread; every method only posts a command and returns
  * quickly, except [surfaceDestroyed], which blocks until the native side has
  * destroyed its swapchain / EGLSurface and released the ANativeWindow
@@ -61,11 +64,20 @@ class NativeEngine(config: Config) : AutoCloseable {
     fun setRenderMode(mode: RenderMode) = withHandle { nativeSetRenderMode(it, mode.nativeName) }
     fun setDiagnosticsEnabled(enabled: Boolean) = withHandle { nativeSetDiagnosticsEnabled(it, enabled) }
     fun runSelfTest() = withHandle { nativeRunSelfTest(it) }
+    @Synchronized
     fun statusText(): String = handle.let { if (it != 0L) nativeStatusText(it) else "engine not running" }
+
+    /** Machine-readable status (see diagnostics::statusJson). "{}" after [close]. */
+    @Synchronized
+    fun statusJson(): String = handle.let { if (it != 0L) nativeStatusJson(it) else "{}" }
+
+    @Synchronized
     fun capabilityReport(): String = handle.let { if (it != 0L) nativeCapabilityReport(it) else "" }
+
     fun logReport() = withHandle { nativeLogReport(it) }
 
     /** Stops the render thread and frees every GPU resource (blocking). Idempotent. */
+    @Synchronized
     override fun close() {
         val h = handle
         handle = 0L
@@ -102,5 +114,14 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeStatusText(handle: Long): String
         @JvmStatic private external fun nativeCapabilityReport(handle: Long): String
         @JvmStatic private external fun nativeLogReport(handle: Long)
+        @JvmStatic private external fun nativeStatusJson(handle: Long): String
+        @JvmStatic private external fun nativeRecentLog(maxLines: Int): String
+        @JvmStatic private external fun nativeLastShutdownReport(): String
+
+        /** Last [maxLines] native log lines (all sources), works without an engine. */
+        fun recentLog(maxLines: Int): String = if (loadError == null) nativeRecentLog(maxLines) else ""
+
+        /** JSON bookkeeping of the most recently destroyed graphics device. */
+        fun lastShutdownReport(): String = if (loadError == null) nativeLastShutdownReport() else "{}"
     }
 }

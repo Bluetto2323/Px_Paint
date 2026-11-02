@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/Log.h"
+#include "core/Time.h"
 #include "graphics/vulkan/VulkanDevice.h"
 #include "platform/PlatformWindow.h"
 
@@ -52,6 +53,7 @@ void VulkanSwapchain::destroyImageResources() {
 }
 
 VulkanSwapchain::BuildResult VulkanSwapchain::rebuild(gfx::Extent2D requested) {
+    const int64_t t0 = nowNs();
     VkPhysicalDevice pd = device_.physicalDevice();
     VkDevice d = device_.device();
 
@@ -189,11 +191,11 @@ VulkanSwapchain::BuildResult VulkanSwapchain::rebuild(gfx::Extent2D requested) {
 
     dirty_ = false;
     recreateCount_++;
-    PE_LOGI(kTag, "Swapchain #%u: %ux%u %s, %u images, %s, transform %s (current %s), readback %s", recreateCount_,
-            extent.width, extent.height, gfx::toString(format()), imageCount(), presentModeName().c_str(),
-            transformName().c_str(),
-            currentTransform_ == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR ? "IDENTITY" : "ROTATED",
-            transferSrc_ ? "yes" : "no");
+    lastRebuildMs_ = nsToMs(nowNs() - t0);
+    PE_LOGI(kTag, "Swapchain #%u: %ux%u %s, %u images, %s, pre-transform %s (display %s), readback %s, %.2f ms",
+            recreateCount_, extent.width, extent.height, gfx::toString(format()), imageCount(),
+            presentModeName().c_str(), transformName().c_str(), currentTransformName().c_str(),
+            transferSrc_ ? "yes" : "no", lastRebuildMs_);
     return BuildResult::Ok;
 }
 
@@ -225,6 +227,20 @@ std::string VulkanSwapchain::presentModeName() const {
         default: return "other";
     }
 }
+
+namespace {
+std::string transformString(VkSurfaceTransformFlagBitsKHR t) {
+    switch (t) {
+        case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR: return "IDENTITY";
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: return "ROTATE_90";
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: return "ROTATE_180";
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: return "ROTATE_270";
+        default: return "other";
+    }
+}
+}  // namespace
+
+std::string VulkanSwapchain::currentTransformName() const { return transformString(currentTransform_); }
 
 std::string VulkanSwapchain::transformName() const {
     switch (transform_) {

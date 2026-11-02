@@ -46,6 +46,8 @@ public:
     uint32_t recreateCount() const { return recreateCount_; }
     std::string presentModeName() const;
     std::string transformName() const;
+    std::string currentTransformName() const;
+    double lastRebuildMs() const { return lastRebuildMs_; }
     PlatformWindow& window() const { return window_; }
 
 private:
@@ -64,6 +66,7 @@ private:
     bool transferSrc_ = false;
     bool dirty_ = false;
     uint32_t recreateCount_ = 0;
+    double lastRebuildMs_ = 0.0;
     std::vector<VkImage> images_;
     std::vector<VkImageView> views_;
     std::vector<VkFramebuffer> framebuffers_;

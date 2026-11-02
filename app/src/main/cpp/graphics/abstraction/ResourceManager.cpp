@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/Log.h"
+#include "core/ShutdownReport.h"
 
 namespace pe::gfx {
 
@@ -121,6 +122,7 @@ void ResourceManager::shutdown() {
     std::lock_guard<std::mutex> lock(state_->mutex);
     if (!state_->alive) return;
     state_->alive = false;
+    shutdown::recordResources(state_->stats.totalCreated, state_->stats.totalDestroyed, state_->live.size());
     if (!state_->live.empty()) {
         PE_LOGE(kTag, "%zu GPU resource(s) still referenced at device shutdown:", state_->live.size());
         for (const GpuResource* r : state_->live)

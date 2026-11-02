@@ -20,10 +20,11 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugMessenger(VkDebugUtilsMessageSeverityFlagBit
                                               VkDebugUtilsMessageTypeFlagsEXT,
                                               const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
     const char* msg = data && data->pMessage ? data->pMessage : "(null)";
+    // Counted under LogSource::ValidationLayer, separately from engine errors.
     if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-        PE_LOGE("Vulkan.validation", "%s", msg);
+        log::writeFrom(LogSource::ValidationLayer, LogLevel::Error, "Vulkan.validation", "%s", msg);
     else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-        PE_LOGW("Vulkan.validation", "%s", msg);
+        log::writeFrom(LogSource::ValidationLayer, LogLevel::Warn, "Vulkan.validation", "%s", msg);
     return VK_FALSE;
 }
 
@@ -100,7 +101,11 @@ bool VulkanBackend::initialize(const gfx::BackendInitOptions& options, std::stri
             enableLayers.push_back(kValidationLayer);
             validationEnabled_ = true;
         } else {
-            PE_LOGW(kTag, "Validation requested but %s is not installed (package it in jniLibs)", kValidationLayer);
+            // Optional tooling, not an engine problem: informational, counted
+            // under the validation-layer source.
+            log::writeFrom(LogSource::ValidationLayer, LogLevel::Info, "Vulkan.validation",
+                           "Validation requested but %s is not installed (optional; package it in jniLibs)",
+                           kValidationLayer);
         }
         if (contains(instanceExtensions_, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
             enable.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
