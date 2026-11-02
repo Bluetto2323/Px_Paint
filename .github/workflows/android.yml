@@ -35,6 +35,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Unpack uploaded source archive (only when the repo holds just the zip)
+        # Phone-friendly bootstrap: if the repository contains only a source
+        # .zip (uploaded from the GitHub website) instead of the project
+        # tree, unpack it into the workspace. No-op for a normal checkout.
+        run: |
+          set -euo pipefail
+          if [ ! -f settings.gradle.kts ]; then
+            archive=$(find . -maxdepth 1 -name '*.zip' | head -1)
+            if [ -z "$archive" ]; then echo "No Gradle project and no source archive found" >&2; exit 1; fi
+            mkdir -p "$RUNNER_TEMP/src"
+            unzip -q -o "$archive" -d "$RUNNER_TEMP/src"
+            root=$(dirname "$(find "$RUNNER_TEMP/src" -maxdepth 3 -name settings.gradle.kts | head -1)")
+            cp -a "$root"/. .
+            chmod +x gradlew tools/ci/*.sh tools/host_test/*.sh
+            echo "Building sources unpacked from $archive"
+          fi
+
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
 
@@ -112,6 +129,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Unpack uploaded source archive (only when the repo holds just the zip)
+        # Phone-friendly bootstrap: if the repository contains only a source
+        # .zip (uploaded from the GitHub website) instead of the project
+        # tree, unpack it into the workspace. No-op for a normal checkout.
+        run: |
+          set -euo pipefail
+          if [ ! -f settings.gradle.kts ]; then
+            archive=$(find . -maxdepth 1 -name '*.zip' | head -1)
+            if [ -z "$archive" ]; then echo "No Gradle project and no source archive found" >&2; exit 1; fi
+            mkdir -p "$RUNNER_TEMP/src"
+            unzip -q -o "$archive" -d "$RUNNER_TEMP/src"
+            root=$(dirname "$(find "$RUNNER_TEMP/src" -maxdepth 3 -name settings.gradle.kts | head -1)")
+            cp -a "$root"/. .
+            chmod +x gradlew tools/ci/*.sh tools/host_test/*.sh
+            echo "Building sources unpacked from $archive"
+          fi
 
       - name: Install compilers, Khronos headers and Mesa drivers
         run: |
