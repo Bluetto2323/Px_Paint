@@ -1,0 +1,158 @@
+package com.paintengine.pxpaint.ui
+
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
+
+/**
+ * PxPaint's own line icons, drawn on a 24-unit grid with round caps
+ * (no icon font, no bitmap assets, sharp at any interface size).
+ */
+enum class Icon {
+    PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
+    COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS,
+}
+
+class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        this.color = color
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; this.color = color }
+    private val path = Path()
+    private val r = RectF()
+
+    fun setColor(color: Int) {
+        stroke.color = color
+        fill.color = color
+        invalidateSelf()
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        if (b.isEmpty) return
+        val size = minOf(b.width(), b.height()).toFloat()
+        canvas.save()
+        canvas.translate(b.left + (b.width() - size) / 2f, b.top + (b.height() - size) / 2f)
+        canvas.scale(size / 24f, size / 24f)
+        stroke.strokeWidth = strokeUnits
+        path.reset()
+        build(canvas)
+        canvas.restore()
+    }
+
+    private fun line(c: Canvas, x0: Float, y0: Float, x1: Float, y1: Float) = c.drawLine(x0, y0, x1, y1, stroke)
+    private fun circle(c: Canvas, x: Float, y: Float, rad: Float, filled: Boolean = false) =
+        c.drawCircle(x, y, rad, if (filled) fill else stroke)
+
+    private fun poly(c: Canvas, vararg pts: Float, close: Boolean = false) {
+        path.reset()
+        path.moveTo(pts[0], pts[1])
+        var i = 2
+        while (i < pts.size) {
+            path.lineTo(pts[i], pts[i + 1])
+            i += 2
+        }
+        if (close) path.close()
+        c.drawPath(path, stroke)
+    }
+
+    private fun roundRect(c: Canvas, l: Float, t: Float, rr: Float, b: Float, rad: Float) {
+        r.set(l, t, rr, b)
+        c.drawRoundRect(r, rad, rad, stroke)
+    }
+
+    private fun arc(c: Canvas, cx: Float, cy: Float, rad: Float, start: Float, sweep: Float) {
+        r.set(cx - rad, cy - rad, cx + rad, cy + rad)
+        c.drawArc(r, start, sweep, false, stroke)
+    }
+
+    private fun build(c: Canvas) {
+        when (icon) {
+            Icon.PLUS -> { line(c, 12f, 5f, 12f, 19f); line(c, 5f, 12f, 19f, 12f) }
+            Icon.SEARCH -> { circle(c, 10.5f, 10.5f, 6f); line(c, 15f, 15f, 20f, 20f) }
+            Icon.SORT -> { line(c, 5f, 7f, 19f, 7f); line(c, 7.5f, 12f, 16.5f, 12f); line(c, 10f, 17f, 14f, 17f) }
+            Icon.SLIDERS -> {
+                line(c, 4f, 8f, 20f, 8f); line(c, 4f, 16f, 20f, 16f)
+                circle(c, 9f, 8f, 2.4f, true); circle(c, 15f, 16f, 2.4f, true)
+            }
+            Icon.BACK -> poly(c, 15f, 5f, 8f, 12f, 15f, 19f)
+            Icon.CHEVRON_RIGHT -> poly(c, 9f, 5f, 16f, 12f, 9f, 19f)
+            Icon.MORE -> { circle(c, 12f, 5.5f, 1.6f, true); circle(c, 12f, 12f, 1.6f, true); circle(c, 12f, 18.5f, 1.6f, true) }
+            Icon.MARKER -> {
+                // Chisel marker seen at an angle, with a dab under the tip.
+                poly(c, 14.5f, 4.5f, 19.5f, 9.5f, 10.5f, 18.5f, 6.5f, 18.5f, 5.5f, 13.5f, close = true)
+                line(c, 12.5f, 6.5f, 17.5f, 11.5f)
+                line(c, 4f, 21f, 9f, 21f)
+            }
+            Icon.ERASER -> {
+                poly(c, 13f, 4.5f, 20f, 11.5f, 12f, 19.5f, 8f, 19.5f, 4.5f, 16f, close = true)
+                line(c, 8.5f, 9f, 15.5f, 16f)
+                line(c, 12f, 19.5f, 20f, 19.5f)
+            }
+            Icon.MOVE -> {
+                line(c, 12f, 3.5f, 12f, 20.5f); line(c, 3.5f, 12f, 20.5f, 12f)
+                poly(c, 9.5f, 6f, 12f, 3.5f, 14.5f, 6f); poly(c, 9.5f, 18f, 12f, 20.5f, 14.5f, 18f)
+                poly(c, 6f, 9.5f, 3.5f, 12f, 6f, 14.5f); poly(c, 18f, 9.5f, 20.5f, 12f, 18f, 14.5f)
+            }
+            Icon.LAYERS -> {
+                poly(c, 12f, 4f, 20.5f, 8.5f, 12f, 13f, 3.5f, 8.5f, close = true)
+                poly(c, 3.5f, 12.5f, 12f, 17f, 20.5f, 12.5f)
+                poly(c, 3.5f, 16f, 12f, 20.5f, 20.5f, 16f)
+            }
+            Icon.UNDO -> { poly(c, 8.5f, 5f, 4.5f, 9f, 8.5f, 13f); path.reset(); path.moveTo(4.5f, 9f); path.lineTo(14f, 9f); path.cubicTo(17.5f, 9f, 20f, 11.5f, 20f, 14.5f); path.cubicTo(20f, 17.5f, 17.5f, 19.5f, 14f, 19.5f); path.lineTo(9f, 19.5f); c.drawPath(path, stroke) }
+            Icon.REDO -> { poly(c, 15.5f, 5f, 19.5f, 9f, 15.5f, 13f); path.reset(); path.moveTo(19.5f, 9f); path.lineTo(10f, 9f); path.cubicTo(6.5f, 9f, 4f, 11.5f, 4f, 14.5f); path.cubicTo(4f, 17.5f, 6.5f, 19.5f, 10f, 19.5f); path.lineTo(15f, 19.5f); c.drawPath(path, stroke) }
+            Icon.FIT -> {
+                poly(c, 4f, 9f, 4f, 4f, 9f, 4f); poly(c, 15f, 4f, 20f, 4f, 20f, 9f)
+                poly(c, 20f, 15f, 20f, 20f, 15f, 20f); poly(c, 9f, 20f, 4f, 20f, 4f, 15f)
+                roundRect(c, 8f, 8f, 16f, 16f, 1.5f)
+            }
+            Icon.ROTATE -> { arc(c, 12f, 12.5f, 7f, -60f, 300f); poly(c, 15.5f, 3.5f, 15.5f, 6.8f, 19f, 6.8f) }
+            Icon.TRASH -> {
+                line(c, 4.5f, 6.5f, 19.5f, 6.5f); poly(c, 9f, 6.5f, 9.5f, 4f, 14.5f, 4f, 15f, 6.5f)
+                poly(c, 6.5f, 6.5f, 7.5f, 20f, 16.5f, 20f, 17.5f, 6.5f); line(c, 10.5f, 10f, 10.5f, 16.5f); line(c, 13.5f, 10f, 13.5f, 16.5f)
+            }
+            Icon.COPY -> { roundRect(c, 8.5f, 8.5f, 19.5f, 19.5f, 2f); poly(c, 15.5f, 8.5f, 15.5f, 4.5f, 4.5f, 4.5f, 4.5f, 15.5f, 8.5f, 15.5f) }
+            Icon.EDIT -> { poly(c, 15f, 4.5f, 19.5f, 9f, 9f, 19.5f, 4.5f, 19.5f, 4.5f, 15f, close = true); line(c, 12.5f, 7f, 17f, 11.5f) }
+            Icon.INFO -> { circle(c, 12f, 12f, 8.5f); line(c, 12f, 11f, 12f, 16.5f); circle(c, 12f, 7.8f, 1.2f, true) }
+            Icon.CHECK -> poly(c, 5f, 12.5f, 10f, 17.5f, 19f, 7f)
+            Icon.CLOSE -> { line(c, 6f, 6f, 18f, 18f); line(c, 18f, 6f, 6f, 18f) }
+            Icon.SWAP -> { poly(c, 7f, 4f, 4f, 7f, 7f, 10f); line(c, 4f, 7f, 18f, 7f); poly(c, 17f, 14f, 20f, 17f, 17f, 20f); line(c, 20f, 17f, 6f, 17f) }
+            Icon.TARGET -> { circle(c, 12f, 12f, 6.5f); line(c, 12f, 2.5f, 12f, 7f); line(c, 12f, 17f, 12f, 21.5f); line(c, 2.5f, 12f, 7f, 12f); line(c, 17f, 12f, 21.5f, 12f) }
+            Icon.CENTER -> { circle(c, 12f, 12f, 2.2f, true); roundRect(c, 4f, 4f, 20f, 20f, 3f) }
+            Icon.PIXELS -> { roundRect(c, 4f, 4f, 11f, 11f, 1f); roundRect(c, 13f, 4f, 20f, 11f, 1f); roundRect(c, 4f, 13f, 11f, 20f, 1f); roundRect(c, 13f, 13f, 20f, 20f, 1f) }
+            Icon.LOGO -> drawLogo(c)
+        }
+    }
+
+    /** PxPaint mark: a rounded "pixel" tile crossed by a sweeping stroke. */
+    private fun drawLogo(c: Canvas) {
+        roundRect(c, 3.5f, 3.5f, 20.5f, 20.5f, 5f)
+        path.reset()
+        path.moveTo(6.5f, 16.5f)
+        path.cubicTo(9f, 9.5f, 13.5f, 16f, 17.5f, 7f)
+        c.drawPath(path, stroke)
+        circle(c, 17.5f, 7f, 1.6f, true)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        stroke.alpha = alpha
+        fill.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        stroke.colorFilter = colorFilter
+        fill.colorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}

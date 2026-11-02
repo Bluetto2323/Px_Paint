@@ -10,20 +10,37 @@
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@style/Theme.PxPaint">
 
-        <!-- configChanges: rotation / resizing only resize the surface; the
-             activity (and the GPU device) are not recreated. -->
+        <!-- PxPaint (launcher). configChanges: rotation / resizing / theme
+             only resize the surface and rebuild the chrome; the activity
+             and the GPU device are not recreated. -->
         <activity
-            android:name=".app.MainActivity"
+            android:name=".pxpaint.PxPaintActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|density|uiMode|locale|layoutDirection|fontScale"
+            android:windowSoftInputMode="adjustResize"
             android:resizeableActivity="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Block 1 engine diagnostics (DEVICE TEST / REPORT), opened from
+             PxPaint settings. Separate process: the native Vulkan loader
+             state is process-global, so it gets its own engine instance.
+             Exported (no launcher entry) so it can also be started with
+             adb shell am start -n com.paintengine/.app.DiagnosticsActivity -->
+        <activity
+            android:name=".app.DiagnosticsActivity"
+            android:label="@string/diagnostics_name"
+            android:process=":diagnostics"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode"
+            android:resizeableActivity="true" />
     </application>
 </manifest>

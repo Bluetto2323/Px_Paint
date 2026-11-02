@@ -87,6 +87,24 @@ jobs:
       - name: Build debug APK (Kotlin + C++ for arm64-v8a and x86_64)
         run: ./gradlew :app:assembleDebug --stacktrace --warning-mode summary
 
+      - name: PxPaint unit tests (JVM, JUnit 4)
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: API-level lint (NewApi / InlinedApi, minSdk 26)
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      - name: Upload unit test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports-${{ github.run_id }}
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Inspect APK (ABIs, JNI exports, 16 KB alignment, Vulkan via dlopen, signature)
         run: |
           chmod +x tools/ci/inspect_apk.sh
@@ -96,10 +114,10 @@ jobs:
         id: name
         run: |
           short="${GITHUB_SHA::7}"
-          out="PaintEngine-block1-debug-${short}.apk"
+          out="PxPaint-block2-debug-${short}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
-          echo "artifact=PaintEngine-debug-apk-${short}" >> "$GITHUB_OUTPUT"
+          echo "artifact=PxPaint-debug-apk-${short}" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

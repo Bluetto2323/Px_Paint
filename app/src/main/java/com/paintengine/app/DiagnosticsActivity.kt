@@ -34,8 +34,13 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Block 1 host activity: a full-screen engine surface, a diagnostics overlay
- * and on-device validation tools. Not the final UI.
+ * Engine diagnostics (Block 1 validation tools): a full-screen engine surface,
+ * a diagnostics overlay and the on-device validation run. Opened from PxPaint
+ * Settings -> Engine diagnostics.
+ *
+ * Runs in its own process (":diagnostics", see AndroidManifest.xml): the
+ * engine's Vulkan entry points are process-wide, so this activity's engine
+ * must never share a process with PxPaint's own engine.
  *
  * Buttons
  *   MODE        continuous <-> on-demand rendering
@@ -48,7 +53,7 @@ import java.util.Locale
  * Optional launch extras (adb): --es backend gles|vulkan|auto, --ez fallback,
  * --ez validation, --es render continuous|ondemand, --ez diagnostics.
  */
-class MainActivity : Activity(), DeviceValidation.Host {
+class DiagnosticsActivity : Activity(), DeviceValidation.Host {
 
     // Host interface for DeviceValidation (written only on the main thread).
     @Volatile override var engine: NativeEngine? = null
@@ -461,7 +466,7 @@ class MainActivity : Activity(), DeviceValidation.Host {
     }
 
     private companion object {
-        const val TAG = "PE.MainActivity"
+        const val TAG = "PE.Diagnostics"
         const val OVERLAY_PERIOD_MS = 500L
         const val MAX_REPORT_CHARS = 150_000
     }

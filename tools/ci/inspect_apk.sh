@@ -31,8 +31,17 @@ native=$(grep -oE "^native-code:.*" <<<"$badging" || true)
 note "- package \`$pkg\` version \`$ver\`, minSdk $minsdk, targetSdk $target"
 note "- $native"
 [[ "$pkg" == "com.paintengine" ]] || error "unexpected package name '$pkg'"
-grep -q "launchable-activity: name='com.paintengine.app.MainActivity'" <<<"$badging" ||
-  error "launcher activity com.paintengine.app.MainActivity not found"
+grep -q "launchable-activity: name='com.paintengine.pxpaint.PxPaintActivity'" <<<"$badging" ||
+  error "launcher activity com.paintengine.pxpaint.PxPaintActivity not found"
+grep -q "application-label:'PxPaint'" <<<"$badging" || error "application label is not 'PxPaint'"
+# The diagnostics activity must stay in its own process (process-global Vulkan loader state).
+"$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > "$WORK/manifest.txt"
+diag_block="$(grep -B8 -A8 'DiagnosticsActivity' "$WORK/manifest.txt" || true)"
+if grep -q ':diagnostics' <<<"$diag_block"; then
+  note "- DiagnosticsActivity declared in the \`:diagnostics\` process"
+else
+  error "DiagnosticsActivity must run in the :diagnostics process"
+fi
 if grep -q "uses-feature-not-required: name='android.hardware.vulkan.version'" <<<"$badging" ||
    grep -q "uses-feature: name='android.hardware.vulkan.version'.*required='false'" <<<"$badging"; then
   note "- Vulkan declared as optional (devices without Vulkan can install the app)"

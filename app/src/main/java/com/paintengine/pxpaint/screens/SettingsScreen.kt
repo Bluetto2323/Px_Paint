@@ -1,0 +1,188 @@
+package com.paintengine.pxpaint.screens
+
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import com.paintengine.BuildConfig
+import com.paintengine.pxpaint.core.AppSettings
+import com.paintengine.pxpaint.core.BackendChoice
+import com.paintengine.pxpaint.core.DockSide
+import com.paintengine.pxpaint.core.LanguagePref
+import com.paintengine.pxpaint.core.RenderPreference
+import com.paintengine.pxpaint.core.S
+import com.paintengine.pxpaint.core.ThemeMode
+import com.paintengine.pxpaint.core.UiSize
+import com.paintengine.pxpaint.core.tr
+import com.paintengine.pxpaint.ui.Icon
+import com.paintengine.pxpaint.ui.IconButton
+import com.paintengine.pxpaint.ui.IconDrawable
+import com.paintengine.pxpaint.ui.PxTheme
+import com.paintengine.pxpaint.ui.Widgets
+import com.paintengine.pxpaint.ui.markHeading
+import org.json.JSONObject
+
+/**
+ * Settings: appearance, toolbar, gestures, performance, accessibility,
+ * about/diagnostics. Every change goes through [PxHost.updateSettings],
+ * which persists it and re-themes the open screens; this screen is
+ * rebuilt then and restores its scroll position.
+ */
+class SettingsScreen(host: PxHost) : Screen(host) {
+    private var scrollY = 0
+    private var scroll: ScrollView? = null
+
+    override fun createView(): View {
+        val root = FrameLayout(context).apply { setBackgroundColor(theme.bg) }
+        val ins = host.insets
+        val maxW = theme.dp(720)
+
+        val page = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, ins.bottom + theme.dp(32))
+        }
+        val s = host.settings
+        val set: (AppSettings) -> Unit = { n ->
+            scrollY = scroll?.scrollY ?: 0
+            host.updateSettings(n)
+        }
+
+        // --- Appearance
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_APPEARANCE)))
+        page.addView(choice(tr(S.THEME), null, listOf(
+            ThemeMode.DARK to tr(S.THEME_DARK), ThemeMode.LIGHT to tr(S.THEME_LIGHT), ThemeMode.SYSTEM to tr(S.THEME_SYSTEM),
+        ), s.theme) { set(s.copy(theme = it)) })
+        page.addView(choice(tr(S.UI_SIZE), null, listOf(
+            UiSize.COMPACT to "90%", UiSize.DEFAULT to "100%", UiSize.LARGE to "115%", UiSize.EXTRA_LARGE to "130%",
+        ), s.uiSize) { set(s.copy(uiSize = it)) })
+        page.addView(choice(tr(S.LANGUAGE), null, listOf(
+            LanguagePref.SYSTEM to tr(S.LANG_SYSTEM), LanguagePref.ENGLISH to "English", LanguagePref.ITALIAN to "Italiano",
+        ), s.language) { set(s.copy(language = it)) })
+
+        // --- Toolbar
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_TOOLBAR)))
+        page.addView(choice(tr(S.DOCK_SIDE), tr(S.DOCK_SIDE_DESC), listOf(
+            DockSide.AUTO to tr(S.SIDE_AUTO), DockSide.LEFT to tr(S.SIDE_LEFT), DockSide.RIGHT to tr(S.SIDE_RIGHT),
+        ), s.dockSide) { set(s.copy(dockSide = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.TOOL_LABELS), null, s.showToolLabels) { set(s.copy(showToolLabels = it)) })
+
+        // --- Gestures
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_GESTURES)))
+        page.addView(Widgets.switchRow(context, theme, tr(S.FINGER_DRAWING), tr(S.FINGER_DRAWING_DESC), s.fingerDrawing) { set(s.copy(fingerDrawing = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.TWO_FINGER_ROTATE), null, s.twoFingerRotate) { set(s.copy(twoFingerRotate = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.ROTATION_SNAP), null, s.rotationSnap) { set(s.copy(rotationSnap = it)) }.apply {
+            isEnabled = s.twoFingerRotate
+            alpha = if (s.twoFingerRotate) 1f else 0.45f
+        })
+
+        // --- Performance
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_PERFORMANCE)))
+        page.addView(choice(tr(S.RENDERING),
+            if (s.render == RenderPreference.BATTERY) tr(S.RENDER_BATTERY_DESC) else tr(S.RENDER_SMOOTH_DESC),
+            listOf(RenderPreference.BATTERY to tr(S.RENDER_BATTERY), RenderPreference.SMOOTH to tr(S.RENDER_SMOOTH)),
+            s.render) { set(s.copy(render = it)) })
+        page.addView(choice(tr(S.GRAPHICS_ENGINE), "${tr(S.BACKEND_AUTO_DESC)}\n${tr(S.BACKEND_APPLIES_LATER)}", listOf(
+            BackendChoice.AUTO to tr(S.BACKEND_AUTO), BackendChoice.VULKAN to tr(S.BACKEND_VULKAN), BackendChoice.GLES to tr(S.BACKEND_GLES),
+        ), s.backend) { set(s.copy(backend = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.PERF_OVERLAY), tr(S.PERF_OVERLAY_DESC), s.performanceOverlay) { set(s.copy(performanceOverlay = it)) })
+
+        // --- Accessibility
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_ACCESSIBILITY)))
+        page.addView(Widgets.switchRow(context, theme, tr(S.LARGE_TARGETS), null, s.largeTouchTargets) { set(s.copy(largeTouchTargets = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.HIGH_CONTRAST), null, s.highContrast) { set(s.copy(highContrast = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.REDUCE_MOTION), null, s.reduceMotion) { set(s.copy(reduceMotion = it)) })
+
+        // --- About
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_ABOUT)))
+        page.addView(Widgets.row(context, theme, tr(S.VERSION), "PxPaint ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE})", null))
+        page.addView(Widgets.row(context, theme, tr(S.GRAPHICS_IN_USE), graphicsInUse(), null))
+        page.addView(Widgets.row(context, theme, tr(S.ENGINE_DIAGNOSTICS), tr(S.ENGINE_DIAGNOSTICS_DESC),
+            View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {
+                it.layoutParams = LinearLayout.LayoutParams(theme.dp(20), theme.dp(20))
+            }).apply {
+            isClickable = true
+            setOnClickListener { host.openDiagnostics() }
+        })
+        page.addView(Widgets.row(context, theme, tr(S.RESET_TIPS), null, null).apply {
+            isClickable = true
+            setOnClickListener {
+                host.resetTips()
+                host.overlays.message(tr(S.TIPS_RESET_DONE))
+            }
+        })
+
+        // Centre a readable column on wide screens.
+        val sv = ScrollView(context).apply {
+            clipToPadding = false
+            setPadding(ins.left, 0, ins.right, 0)
+            addView(MaxWidth(context, maxW).apply { addView(page) })
+        }
+        scroll = sv
+        val bar = topBar()
+        root.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+        root.addView(sv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+            topMargin = ins.top + theme.touchTarget + theme.dp(16)
+        })
+        sv.post { sv.scrollTo(0, scrollY) }
+        return root
+    }
+
+    private fun topBar(): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setBackgroundColor(theme.bg)
+        setPadding(host.insets.left + theme.dp(4), host.insets.top + theme.dp(8), host.insets.right + theme.dp(8), theme.dp(8))
+        addView(IconButton(context, theme, Icon.BACK, tr(S.ACTION_CLOSE)).apply { setOnClickListener { host.pop() } })
+        addView(theme.text(context, tr(S.SETTINGS), PxTheme.Type.TITLE).apply {
+            setPadding(theme.dp(8), 0, 0, 0)
+            markHeading()
+        })
+    }
+
+    /** Title (+ description) above a single-choice chip row. */
+    private fun <T> choice(title: String, description: String?, options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(theme.pad, theme.dp(10), theme.pad, theme.dp(12))
+            addView(theme.text(context, title, PxTheme.Type.BODY))
+            if (description != null) addView(theme.text(context, description, PxTheme.Type.CAPTION, theme.textSecondary).apply {
+                setPadding(0, theme.dp(3), 0, 0)
+            })
+            addView(Widgets.segmented(context, theme, options, selected) { if (it != selected) onSelect(it) }.apply {
+                setPadding(0, theme.dp(10), 0, 0)
+            })
+        }
+
+    private fun graphicsInUse(): String {
+        val e = host.engineIfStarted ?: return tr(S.NOT_STARTED_YET)
+        val s = runCatching { JSONObject(e.statusJson()) }.getOrNull() ?: return tr(S.NOT_STARTED_YET)
+        val backend = s.optString("backend")
+        if (backend.isEmpty() || backend == "none") return tr(S.NOT_STARTED_YET)
+        return "$backend · ${s.optString("gpu")} · ${s.optString("renderMode")}"
+    }
+}
+
+/** Centres its single child and caps its width at [maxW] px. */
+class MaxWidth(context: android.content.Context, private val maxW: Int) : FrameLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        val childW = minOf(w, maxW)
+        var h = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            c.measure(MeasureSpec.makeMeasureSpec(childW, MeasureSpec.EXACTLY), getChildMeasureSpec(heightMeasureSpec, 0, LayoutParams.WRAP_CONTENT))
+            h = maxOf(h, c.measuredHeight)
+        }
+        setMeasuredDimension(w, resolveSize(h, heightMeasureSpec))
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val w = r - l
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            val x = (w - c.measuredWidth) / 2
+            c.layout(x, 0, x + c.measuredWidth, c.measuredHeight)
+        }
+    }
+}

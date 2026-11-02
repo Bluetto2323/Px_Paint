@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors PxTheme (dark): shown by the window before the first frame. -->
+    <color name="px_bg">#FF0F1012</color>
+    <color name="px_ember">#FFFF7A59</color>
+    <color name="px_ink">#FFEEF0F2</color>
+</resources>
