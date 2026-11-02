@@ -143,6 +143,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     override fun onRemoved() {
+        removed = true
         handler.removeCallbacks(poll)
         handler.removeCallbacks(tick)
         closeCanvas()
@@ -165,7 +166,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val e = host.engine()
         if (e == null) {
             host.overlays.message(tr(S.CANVAS_OPEN_FAILED, "engine"))
-            host.pop()
+            closed = true
+            leave()
             return
         }
         engine = e
@@ -177,7 +179,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (err != null) {
             host.overlays.message(tr(S.CANVAS_OPEN_FAILED, err), long = true)
             closed = true
-            host.pop()
+            leave()
             return
         }
         // If the SurfaceView already has a surface (rebuild), hand it to the engine.
@@ -202,12 +204,19 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     host.overlays.message(tr(S.CANVAS_OPEN_FAILED, it.message ?: "?"), long = true)
                     closed = true
                     e.closeCanvas()
-                    host.pop()
+                    leave()
                 }
             }
         }
         if (!host.tipsShown(TIP_GESTURES)) handler.postDelayed({ showTip() }, 400)
     }
+
+    /** Leaves the workspace after the current callback (never re-enters the host's navigation). */
+    private fun leave() {
+        handler.post { if (removed.not()) host.pop() }
+    }
+
+    private var removed = false
 
     private fun closeCanvas() {
         if (closed) return
@@ -246,10 +255,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (closed) return
         val s = runCatching { JSONObject(e.statusJson()) }.getOrNull() ?: return
         if (s.optBoolean("canvasOpen") && !s.optBoolean("canvasGpuReady") && s.optString("canvasError").isNotEmpty()) {
+            // GPU storage could not be allocated: keep what was painted (the
+            // content mirror is CPU-side), then go back to the gallery.
             host.overlays.message(tr(S.CANVAS_OPEN_FAILED, s.optString("canvasError")), long = true)
-            closed = true
-            e.closeCanvas()
-            host.pop()
+            closeCanvas()
+            leave()
             return
         }
         updateViewport(e.viewport(ViewOp.QUERY))
