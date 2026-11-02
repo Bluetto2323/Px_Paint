@@ -36,6 +36,11 @@ VulkanDevice::~VulkanDevice() {
     }
     if (uploadPool_) vkDestroyCommandPool(device_, uploadPool_, nullptr);
     for (auto& [key, pass] : renderPasses_) vkDestroyRenderPass(device_, pass, nullptr);
+    // After resources_.shutdown(): every texture already returned its set.
+    if (descriptorPool_) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+    if (textureSetLayout_) vkDestroyDescriptorSetLayout(device_, textureSetLayout_, nullptr);
+    if (linearSampler_) vkDestroySampler(device_, linearSampler_, nullptr);
+    if (nearestSampler_) vkDestroySampler(device_, nearestSampler_, nullptr);
     if (pipelineCache_) vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
     if (allocationCount_ != 0) PE_LOGE(kTag, "%u device memory allocation(s) leaked", allocationCount_);
     shutdown::recordMemoryLeaks(allocationCount_);
@@ -111,6 +116,8 @@ bool VulkanDevice::initialize(std::string& error) {
             return false;
         }
     }
+    if (!createTextureBindingObjects(error)) return false;
+
     VkCommandPoolCreateInfo upi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     upi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
     upi.queueFamilyIndex = queueFamily_;
@@ -122,6 +129,136 @@ bool VulkanDevice::initialize(std::string& error) {
     PE_LOGI(kTag, "Device ready: %s (%s), Vulkan %s, driver %s, queue family %u", caps_.deviceName.c_str(),
             caps_.vendorName.c_str(), caps_.apiVersion().c_str(), caps_.driverVersion.c_str(), queueFamily_);
     return true;
+}
+
+// --------------------------------------------------------- texture binding
+bool VulkanDevice::createTextureBindingObjects(std::string& error) {
+    for (int i = 0; i < 2; ++i) {
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        const VkFilter f = i == 0 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        si.magFilter = f;
+        si.minFilter = f;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (!PE_VK_CHECK(vkCreateSampler(device_, &si, nullptr, i == 0 ? &linearSampler_ : &nearestSampler_))) {
+            error = "sampler creation failed";
+            return false;
+        }
+    }
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = 1;
+    li.pBindings = &binding;
+    if (!PE_VK_CHECK(vkCreateDescriptorSetLayout(device_, &li, nullptr, &textureSetLayout_))) {
+        error = "descriptor set layout creation failed";
+        return false;
+    }
+    // One set per sampled texture: 4096 covers a 16384x16384 canvas in 256 px
+    // tiles (4096 tiles) - the largest canvas the storage policy accepts.
+    constexpr uint32_t kMaxTextureSets = 4096 + 64;
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextureSets};
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pi.maxSets = kMaxTextureSets;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    if (!PE_VK_CHECK(vkCreateDescriptorPool(device_, &pi, nullptr, &descriptorPool_))) {
+        error = "descriptor pool creation failed";
+        return false;
+    }
+    return true;
+}
+
+VkDescriptorSet VulkanDevice::allocateTextureSet(VkImageView view, bool linearFilter) {
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = descriptorPool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &textureSetLayout_;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (!PE_VK_CHECK(vkAllocateDescriptorSets(device_, &ai, &set))) return VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii{};
+    ii.sampler = linearFilter ? linearSampler_ : nearestSampler_;
+    ii.imageView = view;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = set;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    return set;
+}
+
+void VulkanDevice::freeTextureSet(VkDescriptorSet set) {
+    if (set && descriptorPool_) vkFreeDescriptorSets(device_, descriptorPool_, 1, &set);
+}
+
+bool VulkanDevice::updateTexture(gfx::TextureResource& texture, uint32_t x, uint32_t y, uint32_t width,
+                                 uint32_t height, const void* rgba) {
+    auto& t = static_cast<VulkanTexture&>(texture);
+    const auto& d = t.desc();
+    if (d.format != gfx::TextureFormat::RGBA8_UNORM || width == 0 || height == 0 || x + width > d.width ||
+        y + height > d.height || !(d.usage & gfx::TextureUsage::Sampled)) {
+        PE_LOGE(kTag, "updateTexture('%s', %u,%u %ux%u): invalid region or texture", d.debugName.c_str(), x, y, width,
+                height);
+        return false;
+    }
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VkBuffer staging = VK_NULL_HANDLE;
+    Allocation alloc;
+    if (!PE_VK_CHECK(vkCreateBuffer(device_, &bci, nullptr, &staging))) return false;
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device_, staging, &req);
+    bool ok = allocate(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, alloc) &&
+              PE_VK_CHECK(vkBindBufferMemory(device_, staging, alloc.memory, 0));
+    if (ok) {
+        std::memcpy(alloc.mapped, rgba, bytes);
+        if (!alloc.coherent) {
+            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+            range.memory = alloc.memory;
+            range.size = VK_WHOLE_SIZE;
+            vkFlushMappedMemoryRanges(device_, 1, &range);
+        }
+        VkImage image = t.image();
+        ok = submitImmediate([&](VkCommandBuffer cmd) {
+            // Earlier frames may still sample this image: the barrier's first
+            // scope covers every command submitted before it on this queue.
+            VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            toDst.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.image = image;
+            toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &toDst);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageOffset = {static_cast<int32_t>(x), static_cast<int32_t>(y), 0};
+            region.imageExtent = {width, height, 1};
+            vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            VkImageMemoryBarrier toRead = toDst;
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &toRead);
+        });
+    }
+    vkDestroyBuffer(device_, staging, nullptr);  // submitImmediate waited for the queue
+    free(alloc);
+    return ok;
 }
 
 // ------------------------------------------------------------------ memory

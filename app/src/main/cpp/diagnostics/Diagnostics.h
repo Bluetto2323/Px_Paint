@@ -19,6 +19,29 @@
 
 namespace pe {
 
+// Canvas engine state (PxPaint, Block 2). Plain fields: no canvas headers here.
+struct CanvasStatus {
+    std::string scene = "diagnostic";  // "diagnostic" (Block 1 triangle) | "canvas"
+    bool open = false;                 // a canvas document exists
+    bool gpuReady = false;             // its GPU storage exists on the current device
+    uint32_t width = 0, height = 0;
+    std::string storage;               // storage plan / reason
+    std::string error;
+    uint32_t tileSize = 0, tilesTotal = 0, tilesAllocated = 0;
+    uint64_t bytesAllocated = 0;
+    uint64_t writes = 0, textureUploads = 0, bytesUploaded = 0;
+    double lastWriteMs = 0.0, maxWriteMs = 0.0;
+    uint64_t journalOps = 0;           // replayable content operations (device recovery)
+    uint32_t restores = 0;             // GPU storage rebuilt from the journal
+    // Last canvas frame
+    uint32_t tilesVisible = 0, piecesDrawn = 0, drawCalls = 0;
+    double zoom = 0.0, rotationDeg = 0.0;
+    SelfTestResult selfTest;           // canvas GPU self-test
+    // Storage limits of the current device (0 = no device yet)
+    uint32_t maxTextureSize = 0;
+    uint64_t memoryBudgetBytes = 0;
+};
+
 struct EngineStatus {
     std::string state = "Created";
     gfx::BackendType backend = gfx::BackendType::None;
@@ -46,6 +69,7 @@ struct EngineStatus {
     uint64_t driverDebugMessages = 0;
     std::vector<std::string> recentProblems;
     bool paused = false;
+    CanvasStatus canvas;
 };
 
 namespace diagnostics {

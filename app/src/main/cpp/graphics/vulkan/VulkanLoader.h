@@ -120,7 +120,20 @@ namespace pe::vk {
     X(vkCmdSetScissor)                   \
     X(vkCmdPipelineBarrier)              \
     X(vkCmdCopyBuffer)                   \
-    X(vkCmdCopyImageToBuffer)
+    X(vkCmdCopyImageToBuffer)           \
+    X(vkCmdCopyBufferToImage)           \
+    X(vkCmdClearColorImage)             \
+    X(vkCmdPushConstants)               \
+    X(vkCmdBindDescriptorSets)          \
+    X(vkCreateSampler)                  \
+    X(vkDestroySampler)                 \
+    X(vkCreateDescriptorSetLayout)      \
+    X(vkDestroyDescriptorSetLayout)     \
+    X(vkCreateDescriptorPool)           \
+    X(vkDestroyDescriptorPool)          \
+    X(vkAllocateDescriptorSets)         \
+    X(vkFreeDescriptorSets)             \
+    X(vkUpdateDescriptorSets)
 
 #define PE_VK_DECLARE(name) extern PFN_##name name;
 PE_VK_DECLARE(vkGetInstanceProcAddr)

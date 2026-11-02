@@ -23,7 +23,10 @@ constexpr int64_t kFailureWindowNs = 60'000'000'000;
 constexpr size_t kMaxRecoveriesPerWindow = 6;
 }  // namespace
 
-Engine::Engine(const EngineConfig& config) : config_(config) { scheduler_.setMode(config.renderMode); }
+Engine::Engine(const EngineConfig& config) : config_(config), sceneMode_(config.scene) {
+    scheduler_.setMode(config.renderMode);
+    canvas_.setMemoryBudget(config.canvasMemoryBudgetBytes);
+}
 
 Engine::~Engine() { shutdown(); }
 
@@ -77,6 +80,8 @@ void Engine::shutdown() {
     queue_.clear();  // tasks refused/unrun: their windows are released here, never used
 }
 
+const char* toString(SceneMode mode) { return mode == SceneMode::Canvas ? "canvas" : "diagnostic"; }
+
 // ------------------------------------------------------------ public (UI)
 void Engine::surfaceCreated(std::unique_ptr<PlatformWindow> window) {
     if (!window) return;
@@ -109,6 +114,10 @@ void Engine::surfaceCreated(std::unique_ptr<PlatformWindow> window) {
 }
 
 void Engine::surfaceChanged(uint32_t width, uint32_t height) {
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        view_.setScreenSize(width, height);  // a fitted canvas is refitted
+    }
     queue_.post([this, width, height] {
         PE_LOGI(kTag, "surfaceChanged: %ux%u", width, height);
         if (window_ && window_->kind() == WindowKind::Headless)
@@ -211,12 +220,163 @@ void Engine::setDiagnosticsEnabled(bool enabled) {
     });
 }
 
+void Engine::setSceneMode(SceneMode mode) {
+    queue_.post([this, mode] {
+        if (sceneMode_ == mode) return;
+        if (sceneMode_ == SceneMode::Canvas) canvas_.abortSelfTest("scene changed");
+        sceneMode_ = mode;
+        PE_LOGI(kTag, "Scene: %s", toString(mode));
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+}
+
+std::string Engine::createCanvas(const CanvasSpec& spec) {
+    const uint32_t maxSide = canvas::StoragePolicy::kMaxCanvasSide;
+    if (spec.width == 0 || spec.height == 0) return "width and height must be at least 1 px";
+    if (spec.width > maxSide || spec.height > maxSide)
+        return "the largest supported side is " + std::to_string(maxSide) + " px";
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        view_.setCanvasSize(spec.width, spec.height);
+        view_.setRotationAt(0.0, {view_.screenWidth() * 0.5, view_.screenHeight() * 0.5});
+        view_.fitToScreen();
+    }
+    queue_.post([this, spec] {
+        canvas_.open(spec);
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return {};
+}
+
+canvas::StoragePlan Engine::checkCanvasSize(uint32_t width, uint32_t height) const {
+    const CanvasStatus c = status().canvas;
+    if (c.maxTextureSize == 0) {
+        canvas::StoragePlan p;
+        p.reason = "graphics device not ready yet";
+        return p;
+    }
+    canvas::StorageLimits l;
+    l.maxTextureSize = c.maxTextureSize;
+    l.memoryBudgetBytes = c.memoryBudgetBytes;
+    return canvas::StoragePolicy::choose(width, height, l);
+}
+
+void Engine::closeCanvas() {
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        view_.setCanvasSize(0, 0);
+    }
+    queue_.post([this] {
+        canvas_.close();
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+}
+
+void Engine::setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool transparentBackground) {
+    queue_.post([this, workspaceArgb, paperArgb, transparentBackground] {
+        canvas_.setWorkspaceColor(workspaceArgb);
+        canvas_.setPaper(paperArgb, transparentBackground);
+        scheduler_.requestFrame();
+    });
+}
+
+void Engine::clearCanvasContent() {
+    queue_.post([this] {
+        canvas_.clearContent();
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+}
+
+bool Engine::stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t argb, canvas::Vec2* canvasPoint) {
+    canvas::Vec2 c;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        if (!view_.valid()) return false;
+        c = view_.toCanvas({screenX, screenY});
+        if (c.x < 0 || c.y < 0 || c.x >= view_.canvasWidth() || c.y >= view_.canvasHeight()) return false;
+    }
+    if (canvasPoint) *canvasPoint = c;
+    sizePx = std::clamp<uint32_t>(sizePx, 1, 512);
+    return queue_.post([this, c, sizePx, argb] {
+        canvas_.stamp(c.x, c.y, sizePx, argb);
+        scheduler_.requestFrame();
+        publishStatus(false);
+    });
+}
+
+void Engine::runCanvasSelfTest() {
+    queue_.post([this] {
+        if (sceneMode_ != SceneMode::Canvas) {
+            PE_LOGW(kTag, "Canvas self-test needs the canvas scene");
+            return;
+        }
+        canvas_.requestSelfTest();
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+}
+
+ViewportInfo Engine::viewportOp(ViewOp op, const double* a, size_t n) {
+    static constexpr size_t kArgs[] = {0, 0, 0, 2, 3, 3, 3, 3, 6};
+    const size_t need = kArgs[static_cast<size_t>(op) < 9 ? static_cast<size_t>(op) : 0];
+    ViewportInfo info;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        if (op != ViewOp::Query && n >= need && view_.valid()) {
+            const uint64_t before = view_.revision();
+            switch (op) {
+                case ViewOp::Query: break;
+                case ViewOp::Fit: view_.fitToScreen(); break;
+                case ViewOp::Center: view_.centerCanvas(); break;
+                case ViewOp::PanBy: view_.panBy(a[0], a[1]); break;
+                case ViewOp::ZoomAt: view_.zoomAt(a[0], {a[1], a[2]}); break;
+                case ViewOp::SetZoomAt: view_.setZoomAt(a[0], {a[1], a[2]}); break;
+                case ViewOp::RotateAt: view_.rotateAt(a[0], {a[1], a[2]}); break;
+                case ViewOp::SetRotationAt: view_.setRotationAt(a[0], {a[1], a[2]}); break;
+                case ViewOp::Gesture: view_.applyGesture({a[0], a[1]}, {a[2], a[3]}, a[4], a[5]); break;
+            }
+            changed = view_.revision() != before;
+        }
+        info.state = view_.state();
+        info.minZoom = view_.valid() ? view_.minZoom() : 0.0;
+        info.maxZoom = canvas::Viewport::kMaxZoom;
+        info.canvasWidth = view_.canvasWidth();
+        info.canvasHeight = view_.canvasHeight();
+        info.screenWidth = view_.screenWidth();
+        info.screenHeight = view_.screenHeight();
+        info.revision = view_.revision();
+    }
+    if (changed) requestRender();
+    return info;
+}
+
+canvas::Vec2 Engine::screenToCanvas(canvas::Vec2 p) const {
+    std::lock_guard<std::mutex> lock(viewMutex_);
+    return view_.valid() ? view_.toCanvas(p) : canvas::Vec2{};
+}
+
+canvas::Vec2 Engine::canvasToScreen(canvas::Vec2 p) const {
+    std::lock_guard<std::mutex> lock(viewMutex_);
+    return view_.valid() ? view_.toScreen(p) : canvas::Vec2{};
+}
+
 void Engine::requestRender() {
     queue_.post([this] { scheduler_.requestFrame(); });
 }
 
 void Engine::runSelfTest() {
     queue_.post([this] {
+        if (sceneMode_ != SceneMode::Diagnostic) {
+            selfTest_.status = SelfTestStatus::Unsupported;
+            selfTest_.detail = "the triangle self-test runs in the diagnostic scene";
+            publishStatus(true);
+            return;
+        }
         selfTestRequested_ = true;
         scheduler_.requestFrame();
     });
@@ -295,7 +455,8 @@ void Engine::teardown() {
 
 bool Engine::canRender() const {
     return selection_ && surfaceAttached_ && !surfaceRevoked_.load() && !paused_ && !renderingDisabled_ &&
-           (scheduler_.wantsFrame() || selection_.device->needsFrame());
+           (scheduler_.wantsFrame() || selection_.device->needsFrame() ||
+            (sceneMode_ == SceneMode::Canvas && canvas_.selfTestActive()));
 }
 
 void Engine::detachAndReleaseWindow() {
@@ -389,6 +550,8 @@ bool Engine::selectDevice(std::vector<gfx::BackendType> excluded) {
 void Engine::destroyDevice() {
     if (!selection_) return;
     scene_.destroy();  // release Refs before the device's ResourceManager shuts down
+    canvas_.releaseGpu();
+    canvasCaptureInFlight_ = false;
     selection_.device->waitIdle();
     selection_.reset();  // device (swapchain/EGLSurface first) then backend
     surfaceAttached_ = false;
@@ -448,7 +611,7 @@ void Engine::onSurfaceAvailable() {
     scheduler_.markAttach(nowNs());
     scheduler_.requestFrame();
     consecutiveOutOfDate_ = 0;
-    if (config_.diagnostics && config_.autoSelfTest) selfTestRequested_ = true;
+    if (config_.diagnostics && config_.autoSelfTest && sceneMode_ == SceneMode::Diagnostic) selfTestRequested_ = true;
 }
 
 void Engine::renderFrame() {
@@ -467,8 +630,21 @@ void Engine::renderFrame() {
     consecutiveOutOfDate_ = 0;
 
     const gfx::TextureFormat fmt = frame.backbuffer->colorFormat();
-    bool sceneOk = scene_.isReadyFor(fmt) || scene_.create(device, fmt);
-    if (sceneOk) {
+    bool sceneOk = false;
+    if (sceneMode_ == SceneMode::Canvas) {
+        canvas::Viewport view;
+        {
+            std::lock_guard<std::mutex> lock(viewMutex_);
+            view = view_;
+        }
+        sceneOk = canvas_.render(device, *frame.context, *frame.backbuffer, view);
+        if (canvas_.selfTestWantsCapture() && !canvasCaptureInFlight_) {
+            if (device.requestCapture())
+                canvasCaptureInFlight_ = true;
+            else
+                canvas_.onSelfTestUnsupported("backbuffer readback not supported by this surface");
+        }
+    } else if ((sceneOk = scene_.isReadyFor(fmt) || scene_.create(device, fmt))) {
         scene_.render(*frame.context, *frame.backbuffer);
     } else {
         // Still close the frame properly (acquired image must be presented).
@@ -479,7 +655,7 @@ void Engine::renderFrame() {
         frame.context->endRenderPass();
     }
 
-    if (selfTestRequested_ && sceneOk) {
+    if (selfTestRequested_ && sceneOk && sceneMode_ == SceneMode::Diagnostic) {
         selfTestRequested_ = false;
         selfTest_.runs++;
         if (device.requestCapture()) {
@@ -507,7 +683,17 @@ void Engine::renderFrame() {
                                      nsToMs(tPresented - tRecorded));
         consecutiveErrors_ = 0;
         consecutiveExceptions_ = 0;
-        state_ = sceneOk ? "Running" : "Error: test scene creation failed";
+        state_ = sceneOk ? "Running"
+                         : sceneMode_ == SceneMode::Canvas ? "Error: canvas pipeline creation failed"
+                                                           : "Error: test scene creation failed";
+        if (canvasCaptureInFlight_) {
+            canvasCaptureInFlight_ = false;
+            gfx::CaptureResult capture;
+            const bool produced = device.takeCapture(capture);
+            canvas_.onSelfTestCapture(produced, capture);
+            scheduler_.requestFrame();  // next step, or redraw the user's canvas
+            publishStatus(true);
+        }
         if (selfTestCaptureInFlight_) {
             selfTestCaptureInFlight_ = false;
             gfx::CaptureResult capture;
@@ -528,6 +714,10 @@ void Engine::renderFrame() {
         logPerfIfDue();
     } else {
         selfTestCaptureInFlight_ = false;
+        if (canvasCaptureInFlight_) {
+            canvasCaptureInFlight_ = false;
+            canvas_.retrySelfTestStep();  // frame not presented: render this step again
+        }
         scheduler_.endFrameSkipped(status);
         handleFrameStatus(status);
     }
@@ -635,6 +825,14 @@ void Engine::publishStatus(bool force) {
     s.driverDebugMessages =
         log::errorCount(LogSource::DriverDebug) + log::warningCount(LogSource::DriverDebug);
     s.recentProblems = log::recentProblems(4);
+    canvas_.fillStatus(s.canvas);
+    s.canvas.scene = toString(sceneMode_);
+    if (selection_) {
+        const auto limits =
+            CanvasController::limitsFor(selection_.device->capabilities(), config_.canvasMemoryBudgetBytes);
+        s.canvas.maxTextureSize = limits.maxTextureSize;
+        s.canvas.memoryBudgetBytes = limits.memoryBudgetBytes;
+    }
     {
         std::lock_guard<std::mutex> lock(statusMutex_);
         status_ = std::move(s);

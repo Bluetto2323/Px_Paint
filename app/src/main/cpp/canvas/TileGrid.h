@@ -66,6 +66,7 @@ const char* toString(StorageMode mode);
 struct StorageLimits {
     uint32_t maxTextureSize = 0;     // GPU limit for one 2D texture
     uint64_t memoryBudgetBytes = 0;  // what the canvas may use on this device
+    bool forceTiled = false;         // tests / self-test: tiles even for a small canvas
 };
 
 struct StoragePlan {

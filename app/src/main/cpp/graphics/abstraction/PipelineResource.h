@@ -31,17 +31,21 @@ struct PipelineDesc {
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;
     BlendMode blend = BlendMode::Opaque;
     TextureFormat colorFormat = TextureFormat::RGBA8_UNORM;  // target format
+    uint32_t constantsSize = 0;   // bytes of per-draw constants (see RenderingContext::setConstants)
+    bool sampledTexture = false;  // one combined texture+sampler at binding 0
     std::string debugName;
 };
 
 class PipelineResource : public GpuResource {
 public:
     TextureFormat colorFormat() const { return colorFormat_; }
+    uint32_t constantsSize() const { return constantsSize_; }
 
 protected:
-    PipelineResource(TextureFormat colorFormat, std::string name)
-        : GpuResource(ResourceKind::Pipeline, std::move(name)), colorFormat_(colorFormat) {}
+    PipelineResource(TextureFormat colorFormat, std::string name, uint32_t constantsSize = 0)
+        : GpuResource(ResourceKind::Pipeline, std::move(name)), colorFormat_(colorFormat), constantsSize_(constantsSize) {}
     TextureFormat colorFormat_;
+    uint32_t constantsSize_ = 0;
 };
 
 }  // namespace pe::gfx

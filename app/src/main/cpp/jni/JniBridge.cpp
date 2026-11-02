@@ -8,6 +8,7 @@
 #include <android/native_window_jni.h>
 #include <jni.h>
 
+#include <algorithm>
 #include <exception>
 #include <memory>
 #include <string>
@@ -70,7 +71,8 @@ JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeCreate(JN
                                                                               jboolean allowFallback,
                                                                               jboolean validation,
                                                                               jstring renderMode,
-                                                                              jboolean diagnostics) {
+                                                                              jboolean diagnostics, jint scene,
+                                                                              jlong canvasBudgetBytes) {
     return guard("nativeCreate", jlong{0}, [&] {
         pe::EngineConfig config;
         config.backend = pe::gfx::backendPreferenceFromString(toStdString(env, backend));
@@ -78,6 +80,8 @@ JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeCreate(JN
         config.enableValidation = validation == JNI_TRUE;
         config.renderMode = renderModeFromString(toStdString(env, renderMode));
         config.diagnostics = diagnostics == JNI_TRUE;
+        config.scene = scene == 1 ? pe::SceneMode::Canvas : pe::SceneMode::Diagnostic;
+        config.canvasMemoryBudgetBytes = canvasBudgetBytes > 0 ? static_cast<uint64_t>(canvasBudgetBytes) : 0;
         auto engine = std::make_unique<pe::Engine>(config);
         engine->start();
         return reinterpret_cast<jlong>(engine.release());
@@ -223,6 +227,134 @@ JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeLogReport(
         pe::Engine* engine = fromHandle(handle);
         pe::diagnostics::logMultiline("Diagnostics", engine->capabilityReport());
         pe::diagnostics::logMultiline("Diagnostics", engine->statusText());
+        return 0;
+    });
+}
+
+// ------------------------------------------------------------------ canvas
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeSetSceneMode(JNIEnv*, jclass, jlong handle,
+                                                                                   jint scene) {
+    guard("nativeSetSceneMode", 0, [&] {
+        fromHandle(handle)->setSceneMode(scene == 1 ? pe::SceneMode::Canvas : pe::SceneMode::Diagnostic);
+        return 0;
+    });
+}
+
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeCreateCanvas(JNIEnv* env, jclass,
+                                                                                      jlong handle, jint width,
+                                                                                      jint height, jint paperArgb,
+                                                                                      jboolean transparent) {
+    return guard("nativeCreateCanvas", static_cast<jstring>(nullptr), [&] {
+        if (width <= 0 || height <= 0) return toJString(env, "width and height must be at least 1 px");
+        pe::CanvasSpec spec;
+        spec.width = static_cast<uint32_t>(width);
+        spec.height = static_cast<uint32_t>(height);
+        spec.paperArgb = static_cast<uint32_t>(paperArgb);
+        spec.transparentBackground = transparent == JNI_TRUE;
+        return toJString(env, fromHandle(handle)->createCanvas(spec));
+    });
+}
+
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeCheckCanvasSize(JNIEnv* env, jclass,
+                                                                                         jlong handle, jint width,
+                                                                                         jint height) {
+    return guard("nativeCheckCanvasSize", static_cast<jstring>(nullptr), [&] {
+        const auto plan = fromHandle(handle)->checkCanvasSize(static_cast<uint32_t>(std::max(0, width)),
+                                                             static_cast<uint32_t>(std::max(0, height)));
+        std::string reason;
+        for (char c : plan.reason) {
+            if (c == '"' || c == '\\') reason += '\\';
+            reason += c;
+        }
+        return toJString(env, std::string("{\"ok\":") + (plan.ok ? "true" : "false") + ",\"tiled\":" +
+                                  (plan.mode == pe::canvas::StorageMode::Tiled ? "true" : "false") +
+                                  ",\"maxBytes\":" + std::to_string(plan.maxAllocatedBytes) + ",\"reason\":\"" +
+                                  reason + "\"}");
+    });
+}
+
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeCloseCanvas(JNIEnv*, jclass, jlong handle) {
+    guard("nativeCloseCanvas", 0, [&] {
+        fromHandle(handle)->closeCanvas();
+        return 0;
+    });
+}
+
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeSetCanvasColors(JNIEnv*, jclass, jlong handle,
+                                                                                      jint workspaceArgb,
+                                                                                      jint paperArgb,
+                                                                                      jboolean transparent) {
+    guard("nativeSetCanvasColors", 0, [&] {
+        fromHandle(handle)->setCanvasColors(static_cast<uint32_t>(workspaceArgb), static_cast<uint32_t>(paperArgb),
+                                            transparent == JNI_TRUE);
+        return 0;
+    });
+}
+
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeClearCanvas(JNIEnv*, jclass, jlong handle) {
+    guard("nativeClearCanvas", 0, [&] {
+        fromHandle(handle)->clearCanvasContent();
+        return 0;
+    });
+}
+
+// Returns {zoom, rotation, centerX, centerY, fitted, minZoom, maxZoom,
+//          canvasW, canvasH, screenW, screenH}.
+JNIEXPORT jdoubleArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeViewportOp(JNIEnv* env, jclass,
+                                                                                         jlong handle, jint op,
+                                                                                         jdoubleArray args) {
+    return guard("nativeViewportOp", static_cast<jdoubleArray>(nullptr), [&] {
+        double a[8] = {};
+        jsize n = args ? std::min<jsize>(env->GetArrayLength(args), 8) : 0;
+        if (n > 0) env->GetDoubleArrayRegion(args, 0, n, a);
+        const int code = op >= 0 && op <= 8 ? op : 0;
+        const auto info = fromHandle(handle)->viewportOp(static_cast<pe::ViewOp>(code), a, static_cast<size_t>(n));
+        const double out[11] = {info.state.zoom,
+                                info.state.rotation,
+                                info.state.center.x,
+                                info.state.center.y,
+                                info.state.fitted ? 1.0 : 0.0,
+                                info.minZoom,
+                                info.maxZoom,
+                                static_cast<double>(info.canvasWidth),
+                                static_cast<double>(info.canvasHeight),
+                                static_cast<double>(info.screenWidth),
+                                static_cast<double>(info.screenHeight)};
+        jdoubleArray result = env->NewDoubleArray(11);
+        if (result) env->SetDoubleArrayRegion(result, 0, 11, out);
+        return result;
+    });
+}
+
+JNIEXPORT jdoubleArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeMapPoint(JNIEnv* env, jclass,
+                                                                                       jlong handle,
+                                                                                       jboolean toCanvas, jdouble x,
+                                                                                       jdouble y) {
+    return guard("nativeMapPoint", static_cast<jdoubleArray>(nullptr), [&] {
+        pe::Engine* e = fromHandle(handle);
+        const pe::canvas::Vec2 p = toCanvas == JNI_TRUE ? e->screenToCanvas({x, y}) : e->canvasToScreen({x, y});
+        const double out[2] = {p.x, p.y};
+        jdoubleArray result = env->NewDoubleArray(2);
+        if (result) env->SetDoubleArrayRegion(result, 0, 2, out);
+        return result;
+    });
+}
+
+JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(JNIEnv*, jclass, jlong handle,
+                                                                                jdouble x, jdouble y, jint size,
+                                                                                jint argb) {
+    return guard("nativeStamp", jboolean{JNI_FALSE}, [&] {
+        return fromHandle(handle)->stampAt(x, y, static_cast<uint32_t>(std::max(1, size)),
+                                           static_cast<uint32_t>(argb), nullptr)
+                   ? jboolean{JNI_TRUE}
+                   : jboolean{JNI_FALSE};
+    });
+}
+
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeRunCanvasSelfTest(JNIEnv*, jclass,
+                                                                                        jlong handle) {
+    guard("nativeRunCanvasSelfTest", 0, [&] {
+        fromHandle(handle)->runCanvasSelfTest();
         return 0;
     });
 }

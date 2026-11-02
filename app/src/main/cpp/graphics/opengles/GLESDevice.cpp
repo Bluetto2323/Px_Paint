@@ -292,6 +292,24 @@ gfx::Ref<gfx::PipelineResource> GLESDevice::createPipeline(const gfx::PipelineDe
     return resources_.track(GLESPipeline::create(desc));
 }
 
+bool GLESDevice::updateTexture(gfx::TextureResource& texture, uint32_t x, uint32_t y, uint32_t width,
+                               uint32_t height, const void* rgba) {
+    const auto& d = texture.desc();
+    if (contextLost_ || d.format != gfx::TextureFormat::RGBA8_UNORM || width == 0 || height == 0 ||
+        x + width > d.width || y + height > d.height) {
+        PE_LOGE(kTag, "updateTexture('%s', %u,%u %ux%u): invalid region or format", d.debugName.c_str(), x, y, width,
+                height);
+        return false;
+    }
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLESTexture&>(texture).handle());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(x), static_cast<GLint>(y), static_cast<GLsizei>(width),
+                    static_cast<GLsizei>(height), GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return drainGLErrors("glTexSubImage2D") == 0;
+}
+
 // ------------------------------------------------------------------- frames
 gfx::FrameStatus GLESDevice::beginFrame(uint64_t serial, gfx::FrameContext& out) {
     if (windowSurface_ == EGL_NO_SURFACE) return gfx::FrameStatus::NoSurface;

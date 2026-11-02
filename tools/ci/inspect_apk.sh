@@ -9,6 +9,9 @@ APK="${1:?usage: inspect_apk.sh <app.apk>}"
 BT="$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION:-35.0.0}"
 READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 EXPECTED_ABIS=(arm64-v8a x86_64)
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Expected JNI exports = native methods declared by the Kotlin facade.
+JNI_EXPECTED=$(grep -c "private external fun native" "$ROOT/app/src/main/java/com/paintengine/engine/NativeEngine.kt")
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail=0
@@ -57,12 +60,12 @@ for abi in "${EXPECTED_ABIS[@]}"; do
   done
   # c++_static: no libc++_shared.so may be required.
   grep -qw "libc++_shared.so" <<<"$needed" && error "$abi: depends on libc++_shared.so (expected c++_static)"
-  # The 17 JNI entry points used by NativeEngine.kt must be exported.
+  # Every JNI entry point declared in NativeEngine.kt must be exported.
   # (Symbols are read into a variable first: `readelf | grep -q` under
   # pipefail fails spuriously when grep exits early and readelf gets SIGPIPE.)
   dynsyms=$("$READELF" -W --dyn-syms "$so")
   jni=$(grep -c " Java_com_paintengine_engine_NativeEngine_" <<<"$dynsyms" || true)
-  [[ "$jni" -eq 17 ]] || error "$abi: expected 17 exported JNI functions, found $jni"
+  [[ "$jni" -eq "$JNI_EXPECTED" ]] || error "$abi: expected $JNI_EXPECTED exported JNI functions, found $jni"
   grep -qE " JNI_OnLoad(@@?[^ ]+)?$" <<<"$dynsyms" || error "$abi: JNI_OnLoad not exported"
   note "  - exports: $jni JNI functions + JNI_OnLoad"
 done

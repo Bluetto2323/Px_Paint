@@ -96,6 +96,19 @@ void GLESRenderingContext::draw(uint32_t vertexCount, uint32_t firstVertex) {
     glDrawArrays(pipeline_->topology(), static_cast<GLint>(firstVertex), static_cast<GLsizei>(vertexCount));
 }
 
+void GLESRenderingContext::setConstants(const void* data, uint32_t size) {
+    if (!pipeline_ || pipeline_->constantsLocation() < 0 || size % 16 != 0 || size > pipeline_->constantsSize()) {
+        PE_LOGE("GLES", "setConstants(%u bytes): no pipeline bound or size invalid", size);
+        return;
+    }
+    glUniform4fv(pipeline_->constantsLocation(), static_cast<GLsizei>(size / 16), static_cast<const GLfloat*>(data));
+}
+
+void GLESRenderingContext::bindTexture(gfx::TextureResource& texture) {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLESTexture&>(texture).handle());
+}
+
 void GLESRenderingContext::pushDebugGroup(const char* name) {
     if (ext_.pushDebugGroup) ext_.pushDebugGroup(GL_DEBUG_SOURCE_APPLICATION_KHR, 0, -1, name);
 }

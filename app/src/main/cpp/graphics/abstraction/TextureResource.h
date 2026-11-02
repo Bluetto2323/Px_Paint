@@ -11,8 +11,10 @@ struct TextureDesc {
     uint32_t mipLevels = 1;
     TextureFormat format = TextureFormat::RGBA8_UNORM;
     uint32_t usage = TextureUsage::Sampled;  // TextureUsage bits
+    bool linearFilter = true;                // sampler filter (clamp-to-edge addressing)
     std::string debugName;
 };
+// Sampled textures start fully transparent (all channels 0), on every backend.
 
 // Block 1 scope: allocation + view only. Uploads, layout transitions and
 // sampling are added together with the systems that need them.

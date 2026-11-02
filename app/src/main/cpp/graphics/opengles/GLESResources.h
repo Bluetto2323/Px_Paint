@@ -66,14 +66,17 @@ public:
     GLenum topology() const { return topology_; }
     gfx::BlendMode blend() const { return blend_; }
     const gfx::VertexLayout& layout() const { return layout_; }
+    GLint constantsLocation() const { return constantsLocation_; }
 
 private:
-    GLESPipeline(gfx::TextureFormat fmt, std::string name) : PipelineResource(fmt, std::move(name)) {}
+    GLESPipeline(gfx::TextureFormat fmt, std::string name, uint32_t constantsSize)
+        : PipelineResource(fmt, std::move(name), constantsSize) {}
     GLuint program_ = 0;
     GLuint vao_ = 0;
     GLenum topology_ = GL_TRIANGLES;
     gfx::BlendMode blend_ = gfx::BlendMode::Opaque;
     gfx::VertexLayout layout_;
+    GLint constantsLocation_ = -1;  // uniform vec4 uPush[N]
 };
 
 // The default framebuffer of the EGL window surface.

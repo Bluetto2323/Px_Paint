@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/Log.h"
+#include "graphics/abstraction/RenderingContext.h"
 
 namespace pe::gles {
 
@@ -111,8 +112,41 @@ std::unique_ptr<GLESTexture> GLESTexture::create(const gfx::TextureDesc& desc) {
     glBindTexture(GL_TEXTURE_2D, t->texture_);
     glTexStorage2D(GL_TEXTURE_2D, static_cast<GLsizei>(desc.mipLevels), f.internalFormat,
                    static_cast<GLsizei>(desc.width), static_cast<GLsizei>(desc.height));
+    if (desc.usage & gfx::TextureUsage::Sampled) {
+        const GLint filter = desc.linearFilter ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
     if (drainGLErrors("glTexStorage2D") != 0) return nullptr;
+    if ((desc.usage & gfx::TextureUsage::Sampled) && !gfx::isDepthFormat(desc.format)) {
+        // Defined initial content (transparent) on every backend: clear via a
+        // temporary framebuffer instead of uploading a zero buffer.
+        GLint previousFbo = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+        GLuint fbo = 0;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->texture_, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            GLboolean mask[4];
+            glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+            const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+            glDisable(GL_SCISSOR_TEST);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColorMask(mask[0], mask[1], mask[2], mask[3]);
+            if (scissor) glEnable(GL_SCISSOR_TEST);
+        } else {
+            PE_LOGW(kTag, "Texture '%s': not clearable through an FBO, content undefined", desc.debugName.c_str());
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+        glDeleteFramebuffers(1, &fbo);
+        if (drainGLErrors("texture initial clear") != 0) return nullptr;
+    }
     uint64_t bytes = static_cast<uint64_t>(desc.width) * desc.height * gfx::bytesPerPixel(desc.format);
     if (desc.mipLevels > 1) bytes = bytes * 4 / 3;
     t->setGpuMemoryBytes(bytes);
@@ -155,7 +189,12 @@ std::unique_ptr<GLESPipeline> GLESPipeline::create(const gfx::PipelineDesc& desc
         PE_LOGE(kTag, "Pipeline '%s': missing shader", desc.debugName.c_str());
         return nullptr;
     }
-    std::unique_ptr<GLESPipeline> p(new GLESPipeline(desc.colorFormat, desc.debugName));
+    if (desc.constantsSize % 16 != 0 || desc.constantsSize > gfx::RenderingContext::kMaxConstantsSize) {
+        PE_LOGE(kTag, "Pipeline '%s': constantsSize %u must be a multiple of 16 and <= %u", desc.debugName.c_str(),
+                desc.constantsSize, gfx::RenderingContext::kMaxConstantsSize);
+        return nullptr;
+    }
+    std::unique_ptr<GLESPipeline> p(new GLESPipeline(desc.colorFormat, desc.debugName, desc.constantsSize));
     p->program_ = glCreateProgram();
     glAttachShader(p->program_, vs->handle());
     glAttachShader(p->program_, fs->handle());
@@ -167,6 +206,26 @@ std::unique_ptr<GLESPipeline> GLESPipeline::create(const gfx::PipelineDesc& desc
     if (!ok) {
         PE_LOGE(kTag, "Pipeline '%s' link failed:\n%s", desc.debugName.c_str(), programLog(p->program_).c_str());
         return nullptr;
+    }
+
+    if (desc.constantsSize > 0) {
+        p->constantsLocation_ = glGetUniformLocation(p->program_, "uPush");
+        if (p->constantsLocation_ < 0) {
+            PE_LOGE(kTag, "Pipeline '%s': shader has no 'uniform vec4 uPush[]'", desc.debugName.c_str());
+            return nullptr;
+        }
+    }
+    if (desc.sampledTexture) {
+        const GLint texLocation = glGetUniformLocation(p->program_, "uTex");
+        if (texLocation < 0) {
+            PE_LOGE(kTag, "Pipeline '%s': shader has no 'uniform sampler2D uTex'", desc.debugName.c_str());
+            return nullptr;
+        }
+        GLint previous = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &previous);
+        glUseProgram(p->program_);
+        glUniform1i(texLocation, 0);  // texture unit 0
+        glUseProgram(static_cast<GLuint>(previous));
     }
 
     glGenVertexArrays(1, &p->vao_);

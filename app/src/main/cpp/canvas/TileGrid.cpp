@@ -59,7 +59,7 @@ StoragePlan StoragePolicy::choose(uint32_t width, uint32_t height, const Storage
         return plan;
     }
     const uint32_t singleMax = std::min(limits.maxTextureSize, kSingleTextureMaxSide);
-    if (width <= singleMax && height <= singleMax) {
+    if (width <= singleMax && height <= singleMax && !limits.forceTiled) {
         plan.mode = StorageMode::SingleTexture;
         plan.maxAllocatedBytes = plan.fullCanvasBytes;
     } else {

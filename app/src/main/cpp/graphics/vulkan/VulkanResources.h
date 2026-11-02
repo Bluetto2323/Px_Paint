@@ -43,12 +43,14 @@ public:
     ~VulkanTexture() override;
     VkImage image() const { return image_; }
     VkImageView view() const { return view_; }
+    VkDescriptorSet descriptorSet() const { return descriptorSet_; }
 
 private:
     VulkanTexture(VulkanDevice& device, const gfx::TextureDesc& desc) : TextureResource(desc), device_(device) {}
     VulkanDevice& device_;
     VkImage image_ = VK_NULL_HANDLE;
     VkImageView view_ = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;  // sampled textures only
     Allocation alloc_;
 };
 
@@ -73,8 +75,8 @@ public:
     VkPipelineLayout layout() const { return layout_; }
 
 private:
-    VulkanPipeline(VulkanDevice& device, gfx::TextureFormat fmt, std::string name)
-        : PipelineResource(fmt, std::move(name)), device_(device) {}
+    VulkanPipeline(VulkanDevice& device, gfx::TextureFormat fmt, std::string name, uint32_t constantsSize)
+        : PipelineResource(fmt, std::move(name), constantsSize), device_(device) {}
     VulkanDevice& device_;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

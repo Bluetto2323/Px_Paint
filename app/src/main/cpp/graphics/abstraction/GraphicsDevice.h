@@ -77,6 +77,12 @@ public:
     virtual Ref<TextureResource> createTexture(const TextureDesc& desc) = 0;
     virtual Ref<ShaderResource> createShader(const ShaderDesc& desc) = 0;
     virtual Ref<PipelineResource> createPipeline(const PipelineDesc& desc) = 0;
+    // Uploads tightly packed RGBA8 pixels into a sub-rectangle of a sampled
+    // RGBA8 texture. Safe inside or outside a frame: the upload is ordered
+    // before any draw recorded afterwards. Blocking (staging + wait) on
+    // Vulkan in this version: meant for occasional partial updates.
+    virtual bool updateTexture(TextureResource& texture, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
+                               const void* rgba) = 0;
     virtual ResourceManager& resources() = 0;
 
     // --- Frames -----------------------------------------------------------

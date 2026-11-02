@@ -22,6 +22,8 @@ public:
     void bindPipeline(gfx::PipelineResource& pipeline) override;
     void bindVertexBuffer(gfx::BufferResource& buffer, uint64_t offset) override;
     void draw(uint32_t vertexCount, uint32_t firstVertex) override;
+    void setConstants(const void* data, uint32_t size) override;
+    void bindTexture(gfx::TextureResource& texture) override;
     void pushDebugGroup(const char* name) override;
     void popDebugGroup() override;
 

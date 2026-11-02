@@ -56,4 +56,7 @@ run lifecycle_vulkan       "$ICD"               vulkan vulkan --no-fallback --su
 run faults_gles            "$ICD"               gles   gles   --no-fallback --suite faults
 run faults_vulkan_only     "$ICD"               vulkan vulkan --no-fallback --suite faults
 run faults_auto_fallback   "$ICD"               auto   vulkan --suite faults
+# PxPaint canvas engine (GPU canvas, tiles, viewport, self-test) on both backends
+run canvas_gles            "$ICD"               gles   gles   --suite canvas
+run canvas_vulkan          "$ICD"               vulkan vulkan --no-fallback --suite canvas
 exit $fail

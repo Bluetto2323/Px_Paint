@@ -34,6 +34,8 @@ public:
     gfx::Ref<gfx::TextureResource> createTexture(const gfx::TextureDesc& desc) override;
     gfx::Ref<gfx::ShaderResource> createShader(const gfx::ShaderDesc& desc) override;
     gfx::Ref<gfx::PipelineResource> createPipeline(const gfx::PipelineDesc& desc) override;
+    bool updateTexture(gfx::TextureResource& texture, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
+                       const void* rgba) override;
     gfx::ResourceManager& resources() override { return resources_; }
 
     gfx::FrameStatus beginFrame(uint64_t serial, gfx::FrameContext& out) override;

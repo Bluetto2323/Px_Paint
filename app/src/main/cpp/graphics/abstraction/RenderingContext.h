@@ -8,6 +8,7 @@
 #include "graphics/abstraction/GraphicsTypes.h"
 #include "graphics/abstraction/PipelineResource.h"
 #include "graphics/abstraction/RenderTarget.h"
+#include "graphics/abstraction/TextureResource.h"
 
 namespace pe::gfx {
 
@@ -38,6 +39,14 @@ public:
     virtual void bindPipeline(PipelineResource& pipeline) = 0;
     virtual void bindVertexBuffer(BufferResource& buffer, uint64_t offset = 0) = 0;
     virtual void draw(uint32_t vertexCount, uint32_t firstVertex = 0) = 0;
+
+    // Per-draw constants for the bound pipeline (PipelineDesc::constantsSize
+    // bytes, a multiple of 16, at most kMaxConstantsSize). Vulkan: push
+    // constants; OpenGL ES: `uniform vec4 uPush[N]`.
+    static constexpr uint32_t kMaxConstantsSize = 128;
+    virtual void setConstants(const void* data, uint32_t size) = 0;
+    // Binds a sampled texture at binding 0 (PipelineDesc::sampledTexture).
+    virtual void bindTexture(TextureResource& texture) = 0;
 
     // Debug markers (no-ops when the driver has no debug-label support).
     virtual void pushDebugGroup(const char* name) = 0;

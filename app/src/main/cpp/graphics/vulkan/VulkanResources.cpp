@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/Log.h"
+#include "graphics/abstraction/RenderingContext.h"
 #include "graphics/vulkan/VulkanDevice.h"
 
 namespace pe::vk {
@@ -139,7 +140,8 @@ std::unique_ptr<VulkanTexture> VulkanTexture::create(VulkanDevice& device, const
     const bool depth = gfx::isDepthFormat(desc.format);
 
     VkImageUsageFlags usage = 0;
-    if (desc.usage & gfx::TextureUsage::Sampled) usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    // Sampled textures are cleared at creation and updated with copies.
+    if (desc.usage & gfx::TextureUsage::Sampled) usage |= VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (desc.usage & gfx::TextureUsage::ColorAttachment)
         usage |= depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (desc.usage & gfx::TextureUsage::TransferSrc) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -177,10 +179,44 @@ std::unique_ptr<VulkanTexture> VulkanTexture::create(VulkanDevice& device, const
                            0, desc.mipLevels, 0, 1};
     if (!PE_VK_CHECK(vkCreateImageView(d, &vi, nullptr, &t->view_))) return nullptr;
     device.setObjectName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(t->image_), desc.debugName.c_str());
+
+    if ((desc.usage & gfx::TextureUsage::Sampled) && !depth) {
+        // Defined initial content (transparent) and the layout every later
+        // update and draw expects: SHADER_READ_ONLY_OPTIMAL.
+        VkImage image = t->image_;
+        const uint32_t mips = desc.mipLevels;
+        const bool cleared = device.submitImmediate([&](VkCommandBuffer cmd) {
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = image;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &b);
+            const VkClearColorValue zero{{0.0f, 0.0f, 0.0f, 0.0f}};
+            vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &b.subresourceRange);
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &b);
+        });
+        if (!cleared) return nullptr;
+        t->descriptorSet_ = device.allocateTextureSet(t->view_, desc.linearFilter);
+        if (!t->descriptorSet_) {
+            PE_LOGE(kTag, "Texture '%s': no descriptor set (pool exhausted?)", desc.debugName.c_str());
+            return nullptr;
+        }
+    }
     return t;
 }
 
 VulkanTexture::~VulkanTexture() {
+    device_.freeTextureSet(descriptorSet_);
     VkDevice d = device_.device();
     if (view_) vkDestroyImageView(d, view_, nullptr);
     if (image_) vkDestroyImage(d, image_, nullptr);
@@ -214,10 +250,26 @@ std::unique_ptr<VulkanPipeline> VulkanPipeline::create(VulkanDevice& device, con
         PE_LOGE(kTag, "Pipeline '%s': missing shader or color format", desc.debugName.c_str());
         return nullptr;
     }
-    std::unique_ptr<VulkanPipeline> p(new VulkanPipeline(device, desc.colorFormat, desc.debugName));
+    if (desc.constantsSize % 16 != 0 || desc.constantsSize > gfx::RenderingContext::kMaxConstantsSize) {
+        PE_LOGE(kTag, "Pipeline '%s': constantsSize %u must be a multiple of 16 and <= %u", desc.debugName.c_str(),
+                desc.constantsSize, gfx::RenderingContext::kMaxConstantsSize);
+        return nullptr;
+    }
+    std::unique_ptr<VulkanPipeline> p(new VulkanPipeline(device, desc.colorFormat, desc.debugName, desc.constantsSize));
     VkDevice d = device.device();
 
+    // 128 bytes of push constants are guaranteed by the spec (maxPushConstantsSize >= 128).
+    VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, desc.constantsSize};
+    VkDescriptorSetLayout setLayout = device.textureSetLayout();
     VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    if (desc.constantsSize > 0) {
+        li.pushConstantRangeCount = 1;
+        li.pPushConstantRanges = &range;
+    }
+    if (desc.sampledTexture) {
+        li.setLayoutCount = 1;
+        li.pSetLayouts = &setLayout;
+    }
     if (!PE_VK_CHECK(vkCreatePipelineLayout(d, &li, nullptr, &p->layout_))) return nullptr;
 
     VkPipelineShaderStageCreateInfo stages[2]{};

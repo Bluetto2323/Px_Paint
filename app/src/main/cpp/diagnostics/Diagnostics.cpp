@@ -164,6 +164,24 @@ std::string statusSummary(const EngineStatus& s) {
     o << "SelfTest  " << toString(s.selfTest.status);
     if (!s.selfTest.detail.empty()) o << " - " << s.selfTest.detail;
     o << "\n";
+    if (s.canvas.scene == "canvas") {
+        const auto& c = s.canvas;
+        if (c.open) {
+            std::snprintf(buf, sizeof(buf), "Canvas    %ux%u %s, %u/%u tiles (%s), zoom %.3f rot %.1f\n", c.width,
+                          c.height, c.gpuReady ? "ready" : "not on GPU", c.tilesAllocated, c.tilesTotal,
+                          mib(c.bytesAllocated).c_str(), c.zoom, c.rotationDeg);
+            o << buf;
+            std::snprintf(buf, sizeof(buf), "Draw      %u visible tiles, %u pieces, %u draw calls\n", c.tilesVisible,
+                          c.piecesDrawn, c.drawCalls);
+            o << buf;
+        } else {
+            o << "Canvas    none open\n";
+        }
+        if (!c.error.empty()) o << "Canvas    error: " << c.error << "\n";
+        o << "CanvasTst " << toString(c.selfTest.status);
+        if (!c.selfTest.detail.empty()) o << " - " << c.selfTest.detail;
+        o << "\n";
+    }
     o << "Engine    " << s.errors << " errors, " << s.warnings << " warnings\n";
     o << "Valid.lyr " << (s.validationLayerActive ? "active" : "not installed (optional)");
     if (s.validationLayerActive || s.validationErrors || s.validationWarnings)
@@ -248,6 +266,35 @@ std::string statusJson(const EngineStatus& s) {
     boolean("validationLayerActive", s.validationLayerActive);
     num("validationErrors", static_cast<double>(s.validationErrors));
     num("validationWarnings", static_cast<double>(s.validationWarnings));
+    const auto& c = s.canvas;
+    str("scene", c.scene);
+    boolean("canvasOpen", c.open);
+    boolean("canvasGpuReady", c.gpuReady);
+    num("canvasWidth", c.width);
+    num("canvasHeight", c.height);
+    str("canvasStorage", c.storage);
+    str("canvasError", c.error);
+    num("canvasTileSize", c.tileSize);
+    num("canvasTilesTotal", c.tilesTotal);
+    num("canvasTilesAllocated", c.tilesAllocated);
+    num("canvasBytesAllocated", static_cast<double>(c.bytesAllocated));
+    num("canvasWrites", static_cast<double>(c.writes));
+    num("canvasTextureUploads", static_cast<double>(c.textureUploads));
+    num("canvasBytesUploaded", static_cast<double>(c.bytesUploaded));
+    num("canvasLastWriteMs", c.lastWriteMs);
+    num("canvasMaxWriteMs", c.maxWriteMs);
+    num("canvasJournalOps", static_cast<double>(c.journalOps));
+    num("canvasRestores", c.restores);
+    num("canvasTilesVisible", c.tilesVisible);
+    num("canvasPiecesDrawn", c.piecesDrawn);
+    num("canvasDrawCalls", c.drawCalls);
+    num("canvasZoom", c.zoom);
+    num("canvasRotationDeg", c.rotationDeg);
+    num("canvasMaxTextureSize", c.maxTextureSize);
+    num("canvasMemoryBudgetBytes", static_cast<double>(c.memoryBudgetBytes));
+    str("canvasSelfTest", toString(c.selfTest.status));
+    num("canvasSelfTestRuns", c.selfTest.runs);
+    str("canvasSelfTestDetail", c.selfTest.detail);
     o << "\"driverDebugMessages\":" << s.driverDebugMessages;
     o << '}';
     return o.str();

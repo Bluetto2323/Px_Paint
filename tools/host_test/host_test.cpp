@@ -8,7 +8,7 @@
 // injected at precise points (see core/TestHooks.h).
 //
 // usage: pe_host_test <auto|vulkan|gles> <vulkan|gles|none> [--no-fallback]
-//                     [--suite basic|lifecycle|faults]
+//                     [--suite basic|lifecycle|faults|canvas]
 //   basic     : selection, self-test, resize, pause/resume, surface loss,
 //               render-mode / diagnostics separation. Expects 0 logged errors.
 //   lifecycle : surfaceDestroyed mid-frame / mid-rebuild, shutdown during a
@@ -16,8 +16,10 @@
 //               Expects 0 logged errors.
 //   faults    : injected render-thread exceptions and device losses,
 //               recovery and backend fallback. Errors are expected here.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -583,12 +585,201 @@ int suiteFaults(const std::string& pref, const std::string& expected, bool noFal
     return 0;
 }
 
+
+// ============================================================== suite: canvas
+pe::CanvasStatus canvasOf(const pe::Engine& e) { return e.status().canvas; }
+
+bool canvasSelfTestPassedAfter(const pe::Engine& e, uint32_t runs, std::chrono::milliseconds t = 30s) {
+    return e.waitForStatus(
+               [&](const EngineStatus& s) {
+                   return s.canvas.selfTest.runs > runs && s.canvas.selfTest.status != pe::SelfTestStatus::Pending &&
+                          s.canvas.selfTest.status != pe::SelfTestStatus::NotRun;
+               },
+               t) &&
+           e.status().canvas.selfTest.status == pe::SelfTestStatus::Passed;
+}
+
+int suiteCanvas(const std::string& pref, const std::string& expected, bool noFallback) {
+    const BackendType want = expected == "vulkan" ? BackendType::Vulkan : BackendType::OpenGLES;
+    const uint64_t errorsAtStart = totalErrors();
+    uint64_t injectedErrors = 0;
+    std::shared_ptr<WindowProbe> probe;
+    {
+        pe::EngineConfig cfg = makeConfig(pref, noFallback, RenderMode::OnDemand);
+        cfg.scene = pe::SceneMode::Canvas;
+        pe::Engine engine(cfg);
+        engine.start();
+        constexpr uint32_t kW = 900, kH = 600;
+        engine.surfaceCreated(trackedWindow(kW, kH, probe));
+        engine.surfaceChanged(kW, kH);
+        check(waitRunning(engine) && engine.status().backend == want, "engine running on expected backend");
+        check(engine.status().selfTest.status == pe::SelfTestStatus::NotRun,
+              "canvas scene: no automatic triangle self-test (would flash on the user's screen)");
+        check(framesStable(engine), "on-demand: idle without a canvas");
+        const uint32_t baseLive = engine.status().resources.totalLive();
+
+        section("C1 canvas creation, validation and dimensions");
+        check(!engine.createCanvas({0, 100}).empty(), "C1: 0 px width rejected");
+        check(!engine.createCanvas({20000, 100}).empty(), "C1: side above 16384 rejected");
+        check(engine.createCanvas({1920, 1080, 0xFFF5F0E6u}).empty(), "C1: 1920x1080 accepted");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.open && s.canvas.gpuReady; }, 10s),
+              "C1: GPU storage created");
+        auto c = canvasOf(engine);
+        std::printf("    storage: %s\n", c.storage.c_str());
+        check(c.width == 1920 && c.height == 1080, "C1: dimensions reported");
+        check(c.tilesTotal == 1 && c.tilesAllocated == 1 && c.bytesAllocated == 1920ull * 1080 * 4,
+              "C1: 1920x1080 uses ONE texture (single-texture strategy), exact size");
+        auto info = engine.viewportOp(pe::ViewOp::Query, nullptr, 0);
+        check(info.state.fitted && info.canvasWidth == 1920 && info.screenWidth == kW, "C1: viewport fitted to the screen");
+        const auto centre = engine.canvasToScreen({960, 540});
+        check(std::abs(centre.x - kW / 2.0) < 1e-6 && std::abs(centre.y - kH / 2.0) < 1e-6,
+              "C1: canvas centre at screen centre");
+        const double fitZoom = std::min((kW - 48.0) / 1920.0, (kH - 48.0) / 1080.0);
+        check(std::abs(info.state.zoom - fitZoom) < 1e-9, "C1: fit zoom keeps the aspect ratio (min of both axes)");
+
+        section("C2 canvas GPU self-test (tiles, seams, partial updates, rotation)");
+        uint32_t runs = canvasOf(engine).selfTest.runs;
+        engine.runCanvasSelfTest();
+        const bool passed = canvasSelfTestPassedAfter(engine, runs);
+        std::printf("    %s\n", canvasOf(engine).selfTest.detail.c_str());
+        check(passed, "C2: canvas self-test PASSED (4 steps, pixel-exact against the CPU model)");
+        check(canvasOf(engine).width == 1920 && framesStable(engine), "C2: user canvas back, idle again");
+
+        section("C3 viewport commands (thread-safe, exact transforms)");
+        const pe::canvas::Vec2 focal{300, 200};
+        const auto before = engine.screenToCanvas(focal);
+        double zargs[] = {2.5, focal.x, focal.y};
+        info = engine.viewportOp(pe::ViewOp::ZoomAt, zargs, 3);
+        const auto after = engine.screenToCanvas(focal);
+        check(std::abs(before.x - after.x) < 1e-6 && std::abs(before.y - after.y) < 1e-6,
+              "C3: zoom keeps the canvas point under the focal point");
+        double rargs[] = {0.7, focal.x, focal.y};
+        engine.viewportOp(pe::ViewOp::RotateAt, rargs, 3);
+        const auto afterRot = engine.screenToCanvas(focal);
+        check(std::abs(before.x - afterRot.x) < 1e-6 && std::abs(before.y - afterRot.y) < 1e-6,
+              "C3: rotation keeps the canvas point under the focal point");
+        double gargs[] = {focal.x, focal.y, focal.x + 40, focal.y - 25, 1.3, -0.2};
+        engine.viewportOp(pe::ViewOp::Gesture, gargs, 6);
+        const auto afterGesture = engine.screenToCanvas({focal.x + 40, focal.y - 25});
+        check(std::abs(before.x - afterGesture.x) < 1e-6 && std::abs(before.y - afterGesture.y) < 1e-6,
+              "C3: two-finger gesture keeps the canvas point under the fingers");
+        const auto rt = engine.canvasToScreen(engine.screenToCanvas({123.25, 456.5}));
+        check(std::abs(rt.x - 123.25) < 1e-9 && std::abs(rt.y - 456.5) < 1e-9, "C3: screen->canvas->screen round trip");
+        check(framesAdvance(engine, 1), "C3: viewport change renders a frame (on-demand)");
+        info = engine.viewportOp(pe::ViewOp::Fit, nullptr, 0);
+        check(info.state.fitted && std::abs(info.state.rotation - (0.7 - 0.2)) < 1e-9,
+              "C3: fit keeps the rotation and refits");
+        double sr[] = {0.0, kW / 2.0, kH / 2.0};
+        engine.viewportOp(pe::ViewOp::SetRotationAt, sr, 3);
+        info = engine.viewportOp(pe::ViewOp::Fit, nullptr, 0);
+        check(std::abs(info.state.zoom - fitZoom) < 1e-9, "C3: reset rotation + fit = initial view");
+
+        section("C4 large canvas: tiles allocated on demand, partial updates");
+        check(engine.createCanvas({8000, 6000}).empty(), "C4: 8000x6000 accepted");
+        check(engine.waitForStatus(
+                  [](const EngineStatus& s) { return s.canvas.width == 8000 && s.canvas.gpuReady; }, 10s),
+              "C4: tiled storage created");
+        c = canvasOf(engine);
+        std::printf("    storage: %s\n", c.storage.c_str());
+        check(c.tileSize == 256 && c.tilesTotal == 32u * 24u, "C4: 32 x 24 tiles of 256 px");
+        check(c.tilesAllocated == 0 && c.bytesAllocated == 0, "C4: no tile allocated before any content");
+        pe::canvas::Vec2 at;
+        check(engine.stampAt(kW / 2.0, kH / 2.0, 40, 0xFFE03030u, &at), "C4: stamp at the screen centre accepted");
+        check(std::abs(at.x - 4000) < 1e-6 && std::abs(at.y - 3000) < 1e-6, "C4: screen centre maps to canvas centre");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.writes >= 1; }, 5s),
+              "C4: stamp written");
+        c = canvasOf(engine);
+        const uint64_t tileBytes = 258ull * 258 * 4;
+        check(c.tilesAllocated == 1 && c.bytesAllocated == tileBytes && c.textureUploads == 1 &&
+                  c.bytesUploaded == 40ull * 40 * 4,
+              "C4: one tile allocated, only 40x40 texels uploaded (partial update)");
+        const auto corner = engine.canvasToScreen({4096, 3072});  // shared by 4 tiles
+        check(engine.stampAt(corner.x, corner.y, 20, 0xFF3060E0u, nullptr), "C4: stamp on a 4-tile corner");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.writes >= 2; }, 5s),
+              "C4: corner stamp written");
+        c = canvasOf(engine);
+        check(c.tilesAllocated == 4 && c.textureUploads == 5,
+              "C4: corner stamp touched exactly 4 tiles (3 new), one upload each");
+        check(!engine.stampAt(2, 2, 10, 0xFF000000u, nullptr), "C4: stamp outside the canvas rejected");
+        std::printf("    tiles %u/%u, %.2f MiB, uploads %llu (%llu bytes), last write %.2f ms, max %.2f ms\n",
+                    c.tilesAllocated, c.tilesTotal, c.bytesAllocated / 1048576.0,
+                    static_cast<unsigned long long>(c.textureUploads), static_cast<unsigned long long>(c.bytesUploaded),
+                    c.lastWriteMs, c.maxWriteMs);
+
+        section("C5 culling: only visible tiles are drawn");
+        check(framesAdvance(engine, 1) || framesStable(engine), "C5: frame rendered");
+        c = canvasOf(engine);
+        check(c.tilesVisible == c.tilesTotal && c.piecesDrawn == 4, "C5: fitted view: all tiles visible, 4 drawn");
+        double z[] = {8.0, 0, 0};
+        const auto tl = engine.canvasToScreen({0, 0});
+        z[1] = tl.x;
+        z[2] = tl.y;
+        engine.viewportOp(pe::ViewOp::SetZoomAt, z, 3);
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.tilesVisible < 30; }, 5s),
+              "C5: zoomed into a corner: few tiles visible");
+        c = canvasOf(engine);
+        std::printf("    zoomed: %u visible tiles of %u, %u pieces drawn, %u draw calls\n", c.tilesVisible,
+                    c.tilesTotal, c.piecesDrawn, c.drawCalls);
+        check(c.piecesDrawn == 0, "C5: content tiles off-screen are culled");
+
+        section("C6 device loss -> content rebuilt from the journal");
+        const uint32_t recoveries = engine.status().deviceRecoveries;
+        const uint64_t errorsBeforeLoss = totalErrors();
+        gHooks.deviceLostShots = 1;
+        engine.requestRender();
+        check(engine.waitForStatus([&](const EngineStatus& s) { return s.deviceRecoveries > recoveries; }, 10s),
+              "C6: device loss handled");
+        check(engine.waitForStatus(
+                  [](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.restores >= 1; }, 10s),
+              "C6: canvas storage recreated");
+        c = canvasOf(engine);
+        check(c.tilesAllocated == 4 && c.journalOps == 2, "C6: same 4 tiles restored from 2 journal operations");
+        injectedErrors = totalErrors() - errorsBeforeLoss;  // "Injected device loss" + "Recovering ..."
+        runs = c.selfTest.runs;
+        engine.runCanvasSelfTest();
+        check(canvasSelfTestPassedAfter(engine, runs), "C6: canvas self-test passes on the recreated device");
+
+        section("C7 maximum canvas and memory budget");
+        const std::string err = engine.createCanvas({16384, 16384});
+        check(err.empty(), "C7: 16384x16384 passes size validation");
+        check(engine.waitForStatus(
+                  [](const EngineStatus& s) { return s.canvas.width == 16384 && (s.canvas.gpuReady || !s.canvas.error.empty()); },
+                  10s),
+              "C7: storage decided for 16384x16384");
+        c = canvasOf(engine);
+        std::printf("    16384x16384: %s%s\n", c.gpuReady ? "ready - " : "rejected - ",
+                    c.gpuReady ? c.storage.c_str() : c.error.c_str());
+        check(c.gpuReady ? (c.tilesTotal == 64u * 64u && c.tilesAllocated == 0) : c.error.find("budget") != std::string::npos,
+              "C7: either tiled with 0 tiles allocated, or rejected with an explicit budget reason");
+
+        section("C8 close canvas -> GPU memory released");
+        engine.clearCanvasContent();
+        engine.closeCanvas();
+        check(engine.waitForStatus([](const EngineStatus& s) { return !s.canvas.open; }, 5s), "C8: canvas closed");
+        check(engine.waitForStatus([&](const EngineStatus& s) { return s.resources.totalLive() <= baseLive; }, 5s),
+              "C8: live GPU resources back to the pre-canvas baseline");
+        std::printf("    live resources: %u (baseline %u)\n", engine.status().resources.totalLive(), baseLive);
+        std::printf("--- overlay text ---\n%s--------------------\n", engine.statusText().c_str());
+        engine.shutdown();
+        const auto report = pe::shutdown::last();
+        std::printf("    last shutdown: %s\n", pe::shutdown::describe(report).c_str());
+        check(report.valid && report.clean() && report.resourcesCreated == report.resourcesDestroyed,
+              "C8: shutdown report: no leaked resources");
+    }
+    gHooks.deviceLostShots = 0;
+    const uint64_t newErrors = totalErrors() - errorsAtStart - injectedErrors;
+    check(injectedErrors <= 2, "canvas suite: the injected device loss logged only its own 2 errors");
+    check(newErrors == 0, "canvas suite: no other engine or validation errors logged");
+    if (newErrors)
+        for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());
+    return 0;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
-                     "usage: %s <auto|vulkan|gles> <vulkan|gles|none> [--no-fallback] [--suite basic|lifecycle|faults]\n",
+                     "usage: %s <auto|vulkan|gles> <vulkan|gles|none> [--no-fallback] [--suite basic|lifecycle|faults|canvas]\n",
                      argv[0]);
         return 2;
     }
@@ -611,6 +802,8 @@ int main(int argc, char** argv) {
         suiteLifecycle(pref, expected, noFallback);
     else if (suite == "faults")
         suiteFaults(pref, expected, noFallback);
+    else if (suite == "canvas")
+        suiteCanvas(pref, expected, noFallback);
     else {
         std::fprintf(stderr, "unknown suite %s\n", suite.c_str());
         return 2;

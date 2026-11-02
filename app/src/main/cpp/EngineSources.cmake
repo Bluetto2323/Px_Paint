@@ -12,6 +12,10 @@ set(PE_ENGINE_SOURCES
     # canvas core (pure math, no GPU)
     ${PE_CPP_DIR}/canvas/Viewport.cpp
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
+    # canvas GPU (backend-neutral graphics API only)
+    ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
+    ${PE_CPP_DIR}/canvas/CanvasRenderer.cpp
+    ${PE_CPP_DIR}/canvas/CanvasSelfTest.cpp
     # graphics abstraction (API independent)
     ${PE_CPP_DIR}/graphics/abstraction/GraphicsTypes.cpp
     ${PE_CPP_DIR}/graphics/abstraction/GraphicsCapabilities.cpp
@@ -37,6 +41,7 @@ set(PE_ENGINE_SOURCES
     # diagnostics + engine
     ${PE_CPP_DIR}/diagnostics/Diagnostics.cpp
     ${PE_CPP_DIR}/engine/TestScene.cpp
+    ${PE_CPP_DIR}/engine/CanvasController.cpp
     ${PE_CPP_DIR}/engine/Engine.cpp
 )
 

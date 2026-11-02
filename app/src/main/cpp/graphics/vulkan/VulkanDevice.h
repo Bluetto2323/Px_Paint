@@ -41,6 +41,8 @@ public:
     gfx::Ref<gfx::TextureResource> createTexture(const gfx::TextureDesc& desc) override;
     gfx::Ref<gfx::ShaderResource> createShader(const gfx::ShaderDesc& desc) override;
     gfx::Ref<gfx::PipelineResource> createPipeline(const gfx::PipelineDesc& desc) override;
+    bool updateTexture(gfx::TextureResource& texture, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
+                       const void* rgba) override;
     gfx::ResourceManager& resources() override { return resources_; }
 
     gfx::FrameStatus beginFrame(uint64_t serial, gfx::FrameContext& out) override;
@@ -67,6 +69,12 @@ public:
     // compatible, so pipelines / framebuffers can be built with any of them.
     VkRenderPass renderPass(VkFormat format, gfx::LoadOp load, VkImageLayout finalLayout);
     void setObjectName(VkObjectType type, uint64_t handle, const char* name);
+
+    // Sampled textures: one combined image+sampler descriptor set each, from
+    // a shared layout/pool (freed with the texture).
+    VkDescriptorSetLayout textureSetLayout() const { return textureSetLayout_; }
+    VkDescriptorSet allocateTextureSet(VkImageView view, bool linearFilter);
+    void freeTextureSet(VkDescriptorSet set);
 
 private:
     struct Frame {
@@ -114,6 +122,11 @@ private:
     VulkanRenderingContext context_;
     VulkanBackbuffer backbuffer_;
     std::map<std::tuple<VkFormat, int, VkImageLayout>, VkRenderPass> renderPasses_;
+    VkSampler linearSampler_ = VK_NULL_HANDLE;
+    VkSampler nearestSampler_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout textureSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    bool createTextureBindingObjects(std::string& error);
 
     // Capture (diagnostics self-test)
     bool captureRequested_ = false;

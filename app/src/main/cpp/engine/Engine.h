@@ -38,6 +38,13 @@
 //   OnDemand   : a frame only after requestRender() / lifecycle events.
 //   Diagnostics: extra checks and logging (self-test, periodic perf log). It
 //                works in either mode and never forces continuous rendering.
+//
+// Scenes
+//   Diagnostic : the Block 1 triangle (backend validation, triangle self-test).
+//   Canvas     : the PxPaint canvas (CanvasController). The viewport is owned
+//                here behind viewMutex_: UI-thread calls change it at once
+//                (so touch mapping is synchronous and exact) and the render
+//                thread copies it once per frame. See docs/ENGINE_API.md.
 #pragma once
 
 #include <atomic>
@@ -49,8 +56,10 @@
 #include <string>
 #include <thread>
 
+#include "canvas/Viewport.h"
 #include "core/TaskQueue.h"
 #include "diagnostics/Diagnostics.h"
+#include "engine/CanvasController.h"
 #include "engine/TestScene.h"
 #include "graphics/BackendSelector.h"
 #include "graphics/abstraction/FrameScheduler.h"
@@ -58,13 +67,42 @@
 
 namespace pe {
 
+enum class SceneMode : uint8_t { Diagnostic, Canvas };
+const char* toString(SceneMode mode);
+
+// Viewport operations (Engine::viewportOp). Arguments in screen pixels / radians.
+enum class ViewOp : uint8_t {
+    Query = 0,          // ()
+    Fit = 1,            // ()
+    Center = 2,         // ()
+    PanBy = 3,          // (dx, dy)
+    ZoomAt = 4,         // (factor, focalX, focalY)
+    SetZoomAt = 5,      // (zoom, focalX, focalY)
+    RotateAt = 6,       // (radians, focalX, focalY)
+    SetRotationAt = 7,  // (radians, focalX, focalY)
+    Gesture = 8,        // (prevX, prevY, newX, newY, scale, radians)
+};
+
+struct ViewportInfo {
+    canvas::ViewportState state;
+    double minZoom = 0.0, maxZoom = 0.0;
+    uint32_t canvasWidth = 0, canvasHeight = 0;
+    uint32_t screenWidth = 0, screenHeight = 0;
+    uint64_t revision = 0;
+};
+
 struct EngineConfig {
     gfx::BackendPreference backend = gfx::BackendPreference::Auto;
     bool allowFallback = true;
     bool enableValidation = false;
     gfx::RenderMode renderMode = gfx::RenderMode::OnDemand;
     bool diagnostics = true;    // periodic perf log + automatic self-test
-    bool autoSelfTest = true;   // (with diagnostics) verify the first frame after each attach
+    bool autoSelfTest = true;   // (with diagnostics, diagnostic scene) verify the first frame after each attach
+    SceneMode scene = SceneMode::Diagnostic;
+    // Canvas pixel budget. 0 = derive from the GPU report (Vulkan heaps) or a
+    // fixed 512 MiB where the API cannot report memory (GLES). The app passes
+    // a value derived from the device's total RAM.
+    uint64_t canvasMemoryBudgetBytes = 0;
 };
 
 class Engine {
@@ -93,9 +131,30 @@ public:
     void setRenderMode(gfx::RenderMode mode);
     void setDiagnosticsEnabled(bool enabled);
 
+    // --- Canvas (any thread except the render thread; never blocks) ---------
+    void setSceneMode(SceneMode mode);
+    // Validates the request now ("" = accepted) and creates the GPU storage
+    // on the render thread (result in status().canvas).
+    std::string createCanvas(const CanvasSpec& spec);
+    // Storage decision for a size on the current device, without creating
+    // anything (New Canvas dialog). Not ok + reason if no device is known yet.
+    canvas::StoragePlan checkCanvasSize(uint32_t width, uint32_t height) const;
+    void closeCanvas();
+    void setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool transparentBackground);
+    void clearCanvasContent();
+    // Diagnostic stamp (no brush engine yet): a square centred on the canvas
+    // point under (screenX, screenY). False if that point is off the canvas.
+    bool stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t argb, canvas::Vec2* canvasPoint);
+    void runCanvasSelfTest();
+
+    // Viewport: applied immediately (thread-safe), drawn at the next frame.
+    ViewportInfo viewportOp(ViewOp op, const double* args, size_t argCount);
+    canvas::Vec2 screenToCanvas(canvas::Vec2 screen) const;
+    canvas::Vec2 canvasToScreen(canvas::Vec2 canvasPoint) const;
+
     // --- Misc --------------------------------------------------------------
     void requestRender();
-    void runSelfTest();
+    void runSelfTest();  // triangle self-test (diagnostic scene)
 
     EngineStatus status() const;
     std::string statusText() const;
@@ -147,6 +206,9 @@ private:
     bool surfaceAttached_ = false;
     bool paused_ = false;
     TestScene scene_;
+    SceneMode sceneMode_ = SceneMode::Diagnostic;  // render-thread copy
+    CanvasController canvas_;
+    bool canvasCaptureInFlight_ = false;
     gfx::FrameScheduler scheduler_;
     std::vector<gfx::BackendType> failedBackends_;
     uint32_t backendFailures_[3] = {0, 0, 0};      // indexed by BackendType, decays over time
@@ -168,6 +230,10 @@ private:
     bool statusDirty_ = false;
     int64_t lastPerfLogNs_ = 0;
     uint64_t lastPerfLogFrames_ = 0;
+
+    // Viewport (any thread, guarded)
+    mutable std::mutex viewMutex_;
+    canvas::Viewport view_;
 
     // Published snapshot
     mutable std::mutex statusMutex_;

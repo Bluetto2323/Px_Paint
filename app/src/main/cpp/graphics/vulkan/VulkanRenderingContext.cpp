@@ -77,6 +77,24 @@ void VulkanRenderingContext::draw(uint32_t vertexCount, uint32_t firstVertex) {
     vkCmdDraw(cmd_, vertexCount, 1, firstVertex, 0);
 }
 
+void VulkanRenderingContext::setConstants(const void* data, uint32_t size) {
+    if (!pipeline_ || size % 16 != 0 || size > pipeline_->constantsSize()) {
+        PE_LOGE("Vulkan", "setConstants(%u bytes): no pipeline bound or size invalid", size);
+        return;
+    }
+    vkCmdPushConstants(cmd_, pipeline_->layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, size,
+                       data);
+}
+
+void VulkanRenderingContext::bindTexture(gfx::TextureResource& texture) {
+    VkDescriptorSet set = static_cast<VulkanTexture&>(texture).descriptorSet();
+    if (!pipeline_ || !set) {
+        PE_LOGE("Vulkan", "bindTexture: no pipeline bound or texture not sampled");
+        return;
+    }
+    vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_->layout(), 0, 1, &set, 0, nullptr);
+}
+
 void VulkanRenderingContext::pushDebugGroup(const char* name) {
     if (!device_.debugLabels() || !vkCmdBeginDebugUtilsLabelEXT) return;
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
