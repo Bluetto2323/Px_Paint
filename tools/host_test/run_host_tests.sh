@@ -38,7 +38,10 @@ fail=0
 run() { local name=$1 icd=$2; shift 2
   if VK_ICD_FILENAMES="$icd" timeout 600 "$BUILD/pe_host_test" "$@" > "$BUILD/$name.log" 2>&1; then
     echo "PASS  $name  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$name.log"))"
-  else echo "FAIL  $name  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$name.log"); see $BUILD/$name.log)"; fail=1; fi; }
+  else echo "FAIL  $name  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$name.log"); see $BUILD/$name.log)"; fail=1
+    # Make failures readable from the CI job log itself.
+    grep -E "\[FAIL\]|state=|attempt |E/" "$BUILD/$name.log" | head -25 | sed 's/^/      | /'
+  fi; }
 # backend selection / fallback matrix
 run basic_gles             "$ICD"               gles   gles   --suite basic
 run basic_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite basic

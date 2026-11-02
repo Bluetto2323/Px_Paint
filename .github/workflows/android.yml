@@ -159,9 +159,16 @@ jobs:
 
       - name: Run basic / lifecycle / faults suites
         env:
-          ICD: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           BUILD: ${{ github.workspace }}/build-host
-        run: tools/host_test/run_host_tests.sh
+        run: |
+          set -euo pipefail
+          # The lavapipe manifest name differs between distro releases
+          # (lvp_icd.json, lvp_icd.x86_64.json): pick whichever exists.
+          ICD=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | head -1)
+          if [ -z "$ICD" ]; then echo "lavapipe ICD not found" >&2; exit 1; fi
+          echo "Vulkan driver manifest: $ICD"
+          export ICD
+          tools/host_test/run_host_tests.sh
 
       - name: Upload host test logs
         if: always()
