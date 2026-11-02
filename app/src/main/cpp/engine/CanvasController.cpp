@@ -76,14 +76,24 @@ void CanvasController::setPaper(uint32_t argb, bool transparentBackground) {
     spec_.transparentBackground = transparentBackground;
 }
 
+canvas::RectI CanvasController::stampRect(double cx, double cy, uint32_t size, uint32_t canvasWidth,
+                                          uint32_t canvasHeight) {
+    const canvas::RectI canvasRect{0, 0, static_cast<int32_t>(canvasWidth), static_cast<int32_t>(canvasHeight)};
+    const int32_t half = static_cast<int32_t>(size / 2);
+    return canvas::RectI{static_cast<int32_t>(std::floor(cx)) - half, static_cast<int32_t>(std::floor(cy)) - half,
+                         static_cast<int32_t>(size), static_cast<int32_t>(size)}
+        .intersect(canvasRect);
+}
+
 bool CanvasController::stamp(double cx, double cy, uint32_t size, uint32_t argb) {
     if (!open_) return false;
-    const canvas::RectI canvasRect{0, 0, static_cast<int32_t>(spec_.width), static_cast<int32_t>(spec_.height)};
-    const int32_t half = static_cast<int32_t>(size / 2);
-    const canvas::RectI r = canvas::RectI{static_cast<int32_t>(std::floor(cx)) - half,
-                                          static_cast<int32_t>(std::floor(cy)) - half, static_cast<int32_t>(size),
-                                          static_cast<int32_t>(size)}
-                                .intersect(canvasRect);
+    return fill(stampRect(cx, cy, size, spec_.width, spec_.height), argb);
+}
+
+bool CanvasController::fill(const canvas::RectI& rect, uint32_t argb) {
+    if (!open_) return false;
+    const canvas::RectI r =
+        rect.intersect({0, 0, static_cast<int32_t>(spec_.width), static_cast<int32_t>(spec_.height)});
     if (r.empty()) return false;
     if (journal_.size() >= kMaxJournalOps) {
         PE_LOGW(kTag, "Content journal full (%zu operations): stamp ignored", journal_.size());

@@ -25,6 +25,15 @@
 
 namespace pe {
 
+// One content write: a rectangle filled (replaced, not blended) with a
+// straight ARGB colour. Block 2 content is a list of these (preview marker /
+// eraser stamps); it is also the persisted project format until raster
+// layers exist (see docs/ENGINE_API.md).
+struct ContentOp {
+    int32_t x = 0, y = 0, w = 0, h = 0;
+    uint32_t argb = 0;
+};
+
 struct CanvasSpec {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -46,8 +55,15 @@ public:
     bool isOpen() const { return open_; }
     void setWorkspaceColor(uint32_t argb);
     void setPaper(uint32_t argb, bool transparentBackground);
+    // Square of `sizePx` centred on a canvas point, clipped to the canvas
+    // (empty if it falls outside). Shared by the UI-side content mirror and
+    // the render thread so both compute exactly the same rectangle.
+    static canvas::RectI stampRect(double canvasX, double canvasY, uint32_t sizePx, uint32_t canvasWidth,
+                                   uint32_t canvasHeight);
     // Diagnostic content write (square stamp centred on a canvas point).
     bool stamp(double canvasX, double canvasY, uint32_t sizePx, uint32_t argb);
+    // Content write of an already clipped rectangle (journal + GPU upload).
+    bool fill(const canvas::RectI& rect, uint32_t argb);
     void clearContent();
 
     // GPU objects are bound to the current device: drop them before it goes.

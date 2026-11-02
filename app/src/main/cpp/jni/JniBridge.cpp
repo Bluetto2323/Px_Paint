@@ -9,9 +9,12 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/Log.h"
 #include "core/ShutdownReport.h"
@@ -349,6 +352,49 @@ JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(
                    ? jboolean{JNI_TRUE}
                    : jboolean{JNI_FALSE};
     });
+}
+
+// Content of the open canvas: 5 ints per op {x, y, w, h, argb}, in write order.
+JNIEXPORT jintArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeGetCanvasContent(JNIEnv* env, jclass,
+                                                                                          jlong handle) {
+    return guard("nativeGetCanvasContent", static_cast<jintArray>(nullptr), [&]() -> jintArray {
+        const auto ops = fromHandle(handle)->canvasContent();
+        const size_t n = ops.size() * 5;
+        if (n > static_cast<size_t>(INT32_MAX)) return nullptr;
+        jintArray out = env->NewIntArray(static_cast<jsize>(n));
+        if (!out) return nullptr;  // OutOfMemoryError pending in Java
+        std::vector<jint> flat;
+        flat.reserve(n);
+        for (const auto& op : ops) {
+            flat.push_back(op.x);
+            flat.push_back(op.y);
+            flat.push_back(op.w);
+            flat.push_back(op.h);
+            flat.push_back(static_cast<jint>(op.argb));
+        }
+        if (n) env->SetIntArrayRegion(out, 0, static_cast<jsize>(n), flat.data());
+        return out;
+    });
+}
+
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeLoadCanvasContent(JNIEnv* env, jclass,
+                                                                                      jlong handle, jintArray data) {
+    return guard("nativeLoadCanvasContent", jint{-1}, [&]() -> jint {
+        const jsize len = data ? env->GetArrayLength(data) : 0;
+        std::vector<jint> flat(static_cast<size_t>(len));
+        if (len) env->GetIntArrayRegion(data, 0, len, flat.data());
+        std::vector<pe::ContentOp> ops;
+        ops.reserve(flat.size() / 5);
+        for (size_t i = 0; i + 4 < flat.size(); i += 5)
+            ops.push_back({flat[i], flat[i + 1], flat[i + 2], flat[i + 3], static_cast<uint32_t>(flat[i + 4])});
+        return static_cast<jint>(fromHandle(handle)->loadCanvasContent(ops));
+    });
+}
+
+JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeCanvasContentRevision(JNIEnv*, jclass,
+                                                                                           jlong handle) {
+    return guard("nativeCanvasContentRevision", jlong{0},
+                 [&] { return static_cast<jlong>(fromHandle(handle)->canvasContentRevision()); });
 }
 
 JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeRunCanvasSelfTest(JNIEnv*, jclass,

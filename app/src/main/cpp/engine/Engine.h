@@ -145,6 +145,14 @@ public:
     // Diagnostic stamp (no brush engine yet): a square centred on the canvas
     // point under (screenX, screenY). False if that point is off the canvas.
     bool stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t argb, canvas::Vec2* canvasPoint);
+    // Content of the open canvas (UI-side mirror of the content journal, in
+    // write order). Used to persist projects and draw gallery thumbnails.
+    std::vector<ContentOp> canvasContent() const;
+    // Increases on every content change (stamp, load, clear, new canvas).
+    uint64_t canvasContentRevision() const;
+    // Replaces the content of the open canvas (call right after createCanvas).
+    // Ops are clipped to the canvas; returns the number of ops kept.
+    size_t loadCanvasContent(const std::vector<ContentOp>& ops);
     void runCanvasSelfTest();
 
     // Viewport: applied immediately (thread-safe), drawn at the next frame.
@@ -234,6 +242,12 @@ private:
     // Viewport (any thread, guarded)
     mutable std::mutex viewMutex_;
     canvas::Viewport view_;
+
+    // UI-side mirror of the canvas content (any thread, guarded). Updated in
+    // the same order as the tasks posted to the render thread.
+    mutable std::mutex contentMutex_;
+    std::vector<ContentOp> contentOps_;
+    uint64_t contentRevision_ = 0;
 
     // Published snapshot
     mutable std::mutex statusMutex_;

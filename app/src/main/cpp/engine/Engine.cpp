@@ -242,6 +242,11 @@ std::string Engine::createCanvas(const CanvasSpec& spec) {
         view_.setRotationAt(0.0, {view_.screenWidth() * 0.5, view_.screenHeight() * 0.5});
         view_.fitToScreen();
     }
+    {
+        std::lock_guard<std::mutex> lock(contentMutex_);
+        contentOps_.clear();
+        contentRevision_++;
+    }
     queue_.post([this, spec] {
         canvas_.open(spec);
         scheduler_.requestFrame();
@@ -268,6 +273,11 @@ void Engine::closeCanvas() {
         std::lock_guard<std::mutex> lock(viewMutex_);
         view_.setCanvasSize(0, 0);
     }
+    {
+        std::lock_guard<std::mutex> lock(contentMutex_);
+        contentOps_.clear();
+        contentRevision_++;
+    }
     queue_.post([this] {
         canvas_.close();
         scheduler_.requestFrame();
@@ -284,6 +294,11 @@ void Engine::setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool tr
 }
 
 void Engine::clearCanvasContent() {
+    {
+        std::lock_guard<std::mutex> lock(contentMutex_);
+        contentOps_.clear();
+        contentRevision_++;
+    }
     queue_.post([this] {
         canvas_.clearContent();
         scheduler_.requestFrame();
@@ -293,19 +308,74 @@ void Engine::clearCanvasContent() {
 
 bool Engine::stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t argb, canvas::Vec2* canvasPoint) {
     canvas::Vec2 c;
+    canvas::RectI rect;
+    sizePx = std::clamp<uint32_t>(sizePx, 1, 512);
     {
         std::lock_guard<std::mutex> lock(viewMutex_);
         if (!view_.valid()) return false;
         c = view_.toCanvas({screenX, screenY});
         if (c.x < 0 || c.y < 0 || c.x >= view_.canvasWidth() || c.y >= view_.canvasHeight()) return false;
+        rect = CanvasController::stampRect(c.x, c.y, sizePx, view_.canvasWidth(), view_.canvasHeight());
     }
     if (canvasPoint) *canvasPoint = c;
-    sizePx = std::clamp<uint32_t>(sizePx, 1, 512);
-    return queue_.post([this, c, sizePx, argb] {
-        canvas_.stamp(c.x, c.y, sizePx, argb);
+    if (rect.empty()) return false;
+    const ContentOp op{rect.x, rect.y, rect.w, rect.h, argb};
+    // The mirror and the posted task are updated under the same lock so the
+    // render thread receives fills in exactly the mirror's order.
+    std::lock_guard<std::mutex> lock(contentMutex_);
+    if (contentOps_.size() >= CanvasController::kMaxJournalOps) {
+        PE_LOGW(kTag, "Canvas content full (%zu operations): stamp ignored", contentOps_.size());
+        return false;
+    }
+    const bool posted = queue_.post([this, rect, argb] {
+        canvas_.fill(rect, argb);
         scheduler_.requestFrame();
         publishStatus(false);
     });
+    if (posted) {
+        contentOps_.push_back(op);
+        contentRevision_++;
+    }
+    return posted;
+}
+
+std::vector<ContentOp> Engine::canvasContent() const {
+    std::lock_guard<std::mutex> lock(contentMutex_);
+    return contentOps_;
+}
+
+uint64_t Engine::canvasContentRevision() const {
+    std::lock_guard<std::mutex> lock(contentMutex_);
+    return contentRevision_;
+}
+
+size_t Engine::loadCanvasContent(const std::vector<ContentOp>& ops) {
+    uint32_t w = 0, h = 0;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        w = view_.canvasWidth();
+        h = view_.canvasHeight();
+    }
+    if (w == 0 || h == 0) return 0;
+    std::vector<ContentOp> kept;
+    kept.reserve(std::min(ops.size(), CanvasController::kMaxJournalOps));
+    for (const auto& op : ops) {
+        if (kept.size() >= CanvasController::kMaxJournalOps) break;
+        const canvas::RectI r = canvas::RectI{op.x, op.y, op.w, op.h}.intersect(
+            {0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)});
+        if (!r.empty()) kept.push_back({r.x, r.y, r.w, r.h, op.argb});
+    }
+    std::lock_guard<std::mutex> lock(contentMutex_);
+    contentOps_ = kept;
+    contentRevision_++;
+    queue_.post([this, kept = std::move(kept)] {
+        canvas_.clearContent();
+        for (const auto& op : kept) canvas_.fill({op.x, op.y, op.w, op.h}, op.argb);
+        PE_LOGI(kTag, "Canvas content loaded: %zu operations", kept.size());
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return contentOps_.size();
 }
 
 void Engine::runCanvasSelfTest() {

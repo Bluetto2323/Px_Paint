@@ -133,6 +133,18 @@ class NativeEngine(config: Config) : AutoCloseable {
     fun canvasToScreen(x: Double, y: Double): DoubleArray =
         handle.let { if (it != 0L) nativeMapPoint(it, false, x, y) ?: doubleArrayOf(0.0, 0.0) else doubleArrayOf(0.0, 0.0) }
 
+    /**
+     * Content of the open canvas as flat ops {x, y, w, h, argb} (5 ints each), in
+     * write order. Thread-safe snapshot; empty array if no canvas is open.
+     */
+    fun canvasContent(): IntArray = handle.let { if (it != 0L) nativeGetCanvasContent(it) ?: IntArray(0) else IntArray(0) }
+
+    /** Replaces the content of the open canvas (call right after [createCanvas]). Returns ops kept. */
+    fun loadCanvasContent(ops: IntArray): Int = handle.let { if (it != 0L) nativeLoadCanvasContent(it, ops) else 0 }
+
+    /** Changes on every content change (stamp, load, clear, new canvas): cheap "is it dirty?" check. */
+    fun canvasContentRevision(): Long = handle.let { if (it != 0L) nativeCanvasContentRevision(it) else 0L }
+
     /** Diagnostic square stamp under a screen point (no brush engine yet). False if off the canvas. */
     fun stamp(x: Double, y: Double, sizePx: Int, argb: Int): Boolean =
         handle.let { it != 0L && nativeStamp(it, x, y, sizePx, argb) }
@@ -202,6 +214,9 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeMapPoint(handle: Long, toCanvas: Boolean, x: Double, y: Double): DoubleArray?
         @JvmStatic private external fun nativeStamp(handle: Long, x: Double, y: Double, size: Int, argb: Int): Boolean
         @JvmStatic private external fun nativeRunCanvasSelfTest(handle: Long)
+        @JvmStatic private external fun nativeGetCanvasContent(handle: Long): IntArray?
+        @JvmStatic private external fun nativeLoadCanvasContent(handle: Long, ops: IntArray): Int
+        @JvmStatic private external fun nativeCanvasContentRevision(handle: Long): Long
 
         /** Last [maxLines] native log lines (all sources), works without an engine. */
         fun recentLog(maxLines: Int): String = if (loadError == null) nativeRecentLog(maxLines) else ""

@@ -739,6 +739,35 @@ int suiteCanvas(const std::string& pref, const std::string& expected, bool noFal
         engine.runCanvasSelfTest();
         check(canvasSelfTestPassedAfter(engine, runs), "C6: canvas self-test passes on the recreated device");
 
+        section("C6b content export / reload (project persistence)");
+        {
+            const auto ops = engine.canvasContent();
+            check(ops.size() == 2, "C6b: content mirror holds the 2 stamps, in order");
+            const bool exact = ops.size() == 2 && ops[0].x == 3980 && ops[0].y == 2980 && ops[0].w == 40 &&
+                               ops[0].h == 40 && ops[0].argb == 0xFFE03030u && ops[1].w == 20 && ops[1].h == 20 &&
+                               ops[1].argb == 0xFF3060E0u;
+            check(exact, "C6b: exported rectangles/colours match the stamps exactly");
+            const uint64_t rev0 = engine.canvasContentRevision();
+            // Reopen the same canvas and reload: storage must end up identical.
+            check(engine.createCanvas({8000, 6000}).empty(), "C6b: canvas re-created");
+            std::vector<pe::ContentOp> withJunk = ops;
+            withJunk.push_back({-100, -100, 50, 50, 0xFF00FF00u});   // fully outside: dropped
+            withJunk.push_back({7990, 5990, 40, 40, 0xFF00FF00u});   // clipped to 10x10
+            const size_t kept = engine.loadCanvasContent(withJunk);
+            check(kept == 3, "C6b: load keeps in-canvas ops (outside dropped, edge clipped)");
+            check(engine.canvasContentRevision() > rev0, "C6b: content revision advanced");
+            check(engine.waitForStatus(
+                      [](const EngineStatus& s) { return s.canvas.width == 8000 && s.canvas.gpuReady && s.canvas.journalOps == 3; },
+                      10s),
+                  "C6b: reloaded content applied on the render thread (3 journal ops)");
+            c = canvasOf(engine);
+            check(c.tilesAllocated == 5, "C6b: same 4 tiles + the clipped edge tile allocated after reload");
+            const auto back = engine.canvasContent();
+            check(back.size() == 3 && back[2].w == 10 && back[2].h == 10, "C6b: clipped op stored clipped");
+            engine.clearCanvasContent();
+            check(engine.canvasContent().empty(), "C6b: clear empties the content mirror");
+        }
+
         section("C7 maximum canvas and memory budget");
         const std::string err = engine.createCanvas({16384, 16384});
         check(err.empty(), "C7: 16384x16384 passes size validation");
