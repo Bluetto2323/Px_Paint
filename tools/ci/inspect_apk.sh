@@ -58,9 +58,13 @@ for abi in "${EXPECTED_ABIS[@]}"; do
   # c++_static: no libc++_shared.so may be required.
   grep -qw "libc++_shared.so" <<<"$needed" && error "$abi: depends on libc++_shared.so (expected c++_static)"
   # The 14 JNI entry points used by NativeEngine.kt must be exported.
-  jni=$("$READELF" -W --dyn-syms "$so" | grep -c " Java_com_paintengine_engine_NativeEngine_" || true)
+  # (Symbols are read into a variable first: `readelf | grep -q` under
+  # pipefail fails spuriously when grep exits early and readelf gets SIGPIPE.)
+  dynsyms=$("$READELF" -W --dyn-syms "$so")
+  jni=$(grep -c " Java_com_paintengine_engine_NativeEngine_" <<<"$dynsyms" || true)
   [[ "$jni" -eq 14 ]] || error "$abi: expected 14 exported JNI functions, found $jni"
-  "$READELF" -W --dyn-syms "$so" | grep -q " JNI_OnLoad$" || error "$abi: JNI_OnLoad not exported"
+  grep -qE " JNI_OnLoad(@@?[^ ]+)?$" <<<"$dynsyms" || error "$abi: JNI_OnLoad not exported"
+  note "  - exports: $jni JNI functions + JNI_OnLoad"
 done
 extra=$(find "$WORK/lib" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tr '\n' ' ')
 note "- ABIs in APK: $extra"
