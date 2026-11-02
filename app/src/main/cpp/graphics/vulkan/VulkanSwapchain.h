@@ -48,6 +48,12 @@ public:
     std::string transformName() const;
     std::string currentTransformName() const;
     double lastRebuildMs() const { return lastRebuildMs_; }
+    // Re-queries the surface: the extent the presentation engine reports now
+    // (0x0 if it leaves the size to the application) and the current transform.
+    bool queryCurrent(gfx::Extent2D& extent, VkSurfaceTransformFlagBitsKHR& transform) const;
+    // True if `desired` (window size from surfaceChanged) is what the
+    // swapchain has, allowing for a 90/270 degree display transform.
+    bool matches(gfx::Extent2D desired) const;
     PlatformWindow& window() const { return window_; }
 
 private:

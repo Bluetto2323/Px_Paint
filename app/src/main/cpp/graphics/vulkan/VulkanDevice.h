@@ -35,6 +35,7 @@ public:
     void detachSurface() override;
     void notifySurfaceResized(gfx::Extent2D extent) override;
     gfx::SurfaceState surfaceState() const override;
+    bool needsFrame() const override;
 
     gfx::Ref<gfx::BufferResource> createBuffer(const gfx::BufferDesc& desc, const void* data) override;
     gfx::Ref<gfx::TextureResource> createTexture(const gfx::TextureDesc& desc) override;
@@ -102,6 +103,10 @@ private:
     uint32_t frameIndex_ = 0;
     uint64_t completedSerial_ = 0;
     uint64_t recordingSerial_ = 0;
+    // KI-1: window size from surfaceChanged, chased until the swapchain has it.
+    gfx::Extent2D desiredExtent_;
+    uint32_t resizeChaseFrames_ = 0;
+    void chaseResize();
     bool inFrame_ = false;
     uint32_t imageIndex_ = 0;
 

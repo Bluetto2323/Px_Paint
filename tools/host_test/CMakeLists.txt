@@ -23,3 +23,12 @@ if(PE_SANITIZE)
   target_compile_options(pe_host_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
   target_link_options(pe_host_test PRIVATE -fsanitize=address,undefined)
 endif()
+
+# Pure-CPU canvas core tests (viewport math, tiles, storage policy).
+add_executable(pe_canvas_test canvas_test.cpp ${PE_CANVAS_CORE_SOURCES})
+target_include_directories(pe_canvas_test PRIVATE ${PE_CPP_DIR})
+target_compile_options(pe_canvas_test PRIVATE ${PE_WARNING_FLAGS} -Werror)
+if(PE_SANITIZE)
+  target_compile_options(pe_canvas_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+  target_link_options(pe_canvas_test PRIVATE -fsanitize=address,undefined)
+endif()

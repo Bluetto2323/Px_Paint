@@ -199,6 +199,21 @@ VulkanSwapchain::BuildResult VulkanSwapchain::rebuild(gfx::Extent2D requested) {
     return BuildResult::Ok;
 }
 
+bool VulkanSwapchain::queryCurrent(gfx::Extent2D& extent, VkSurfaceTransformFlagBitsKHR& transform) const {
+    VkSurfaceCapabilitiesKHR caps{};
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device_.physicalDevice(), surface_, &caps) != VK_SUCCESS) return false;
+    extent = caps.currentExtent.width == 0xFFFFFFFFu ? gfx::Extent2D{} : gfx::Extent2D{caps.currentExtent.width, caps.currentExtent.height};
+    transform = caps.currentTransform;
+    return true;
+}
+
+bool VulkanSwapchain::matches(gfx::Extent2D desired) const {
+    if (desired.empty() || extent_ == desired) return true;
+    const bool quarterTurn = currentTransform_ == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
+                             currentTransform_ == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
+    return quarterTurn && extent_.width == desired.height && extent_.height == desired.width;
+}
+
 VkResult VulkanSwapchain::acquire(VkSemaphore signal, uint32_t& imageIndex) {
     // Bounded wait: a stuck compositor must not hold the render thread, which
     // must stay responsive to surfaceDestroyed. With FIFO and minImageCount+1

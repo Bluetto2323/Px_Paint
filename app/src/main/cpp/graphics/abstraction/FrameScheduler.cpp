@@ -42,9 +42,9 @@ uint64_t FrameScheduler::beginFrame(int64_t now) {
     return ++serial_;
 }
 
-void FrameScheduler::endFramePresented(int64_t now) {
+void FrameScheduler::endFramePresented(int64_t now, double waitMs, double recordMs, double submitMs) {
     frameRequested_ = false;
-    const double cpuMs = nsToMs(now - frameStartNs_);
+    const double cpuMs = recordMs + submitMs;
     stats_.framesPresented++;
     stats_.lastCpuMs = cpuMs;
 
@@ -57,8 +57,11 @@ void FrameScheduler::endFramePresented(int64_t now) {
         stats_.warmupFramesLeft--;
     } else {
         stats_.steadyFrames++;
-        stats_.steadyAvgCpuMs =
-            stats_.steadyFrames == 1 ? cpuMs : stats_.steadyAvgCpuMs * 0.95 + cpuMs * 0.05;
+        auto ema = [&](double& avg, double v) { avg = stats_.steadyFrames == 1 ? v : avg * 0.95 + v * 0.05; };
+        ema(stats_.steadyAvgCpuMs, cpuMs);
+        ema(stats_.steadyAvgRecordMs, recordMs);
+        ema(stats_.steadyAvgSubmitMs, submitMs);
+        ema(stats_.steadyAvgWaitMs, waitMs);
         steadyWindow_.push_back({now, cpuMs});
         while (!steadyWindow_.empty() && now - steadyWindow_.front().timeNs > kSteadyWindowNs)
             steadyWindow_.pop_front();

@@ -42,11 +42,16 @@ struct FrameStats {
     double firstFrameMs = 0.0;      // last attach -> first present (0 = none yet)
     uint32_t warmupFramesLeft = 0;
 
-    // Steady state (warm-up excluded)
+    // Steady state (warm-up excluded). "CPU work" = scene recording + submit
+    // + present call. The wait for the GPU / vsync (fence + acquire) is
+    // reported separately: it is display pacing, not CPU cost (KI-2).
     uint64_t steadyFrames = 0;
-    double lastCpuMs = 0.0;
-    double steadyAvgCpuMs = 0.0;    // exponential moving average
-    double steadyMaxCpuMs = 0.0;    // max over the last ~2 s of steady frames
+    double lastCpuMs = 0.0;         // last frame's CPU work
+    double steadyAvgCpuMs = 0.0;    // CPU work, exponential moving average
+    double steadyMaxCpuMs = 0.0;    // CPU work, max over the last ~2 s
+    double steadyAvgRecordMs = 0.0;
+    double steadyAvgSubmitMs = 0.0;
+    double steadyAvgWaitMs = 0.0;   // fence wait + image acquire
 
     // Continuous-mode rate (valid only when rateValid)
     bool rateValid = false;
@@ -73,7 +78,9 @@ public:
 
     // Monotonically increasing frame serial (starts at 1).
     uint64_t beginFrame(int64_t nowNs);
-    void endFramePresented(int64_t nowNs);
+    // waitMs: beginFrame (fence + acquire); recordMs: scene recording;
+    // submitMs: endFrame (submit + present call).
+    void endFramePresented(int64_t nowNs, double waitMs, double recordMs, double submitMs);
     void endFrameSkipped(FrameStatus reason);
 
     uint64_t currentSerial() const { return serial_; }

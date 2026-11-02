@@ -67,6 +67,10 @@ public:
     virtual void detachSurface() = 0;  // waits for GPU work on the surface
     virtual void notifySurfaceResized(Extent2D newExtent) = 0;
     virtual SurfaceState surfaceState() const = 0;
+    // True while the device must keep producing frames on its own, e.g. a
+    // surface resize is still being chased (see KI-1). Lets an on-demand
+    // engine finish internal work without user input.
+    virtual bool needsFrame() const { return false; }
 
     // --- Resources ----------------------------------------------------------
     virtual Ref<BufferResource> createBuffer(const BufferDesc& desc, const void* initialData) = 0;

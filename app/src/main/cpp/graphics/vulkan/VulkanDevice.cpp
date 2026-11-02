@@ -269,7 +269,9 @@ bool VulkanDevice::attachSurface(PlatformWindow& window) {
         swapchain_.reset();
         return false;
     }
-    const auto result = swapchain_->rebuild({window.width(), window.height()});
+    desiredExtent_ = {window.width(), window.height()};
+    resizeChaseFrames_ = 0;
+    const auto result = swapchain_->rebuild(desiredExtent_);
     if (result == VulkanSwapchain::BuildResult::Failed || result == VulkanSwapchain::BuildResult::SurfaceLost) {
         swapchain_.reset();
         return false;
@@ -300,9 +302,46 @@ void VulkanDevice::detachSurface() {
     PE_LOGI(kTag, "Surface detached");
 }
 
+namespace {
+constexpr uint32_t kResizeChaseFrames = 120;  // ~2 s at 60 Hz
+}
+
 void VulkanDevice::notifySurfaceResized(gfx::Extent2D extent) {
+    desiredExtent_ = extent;
     if (!swapchain_) return;
-    if (extent != swapchain_->extent()) swapchain_->markDirty();
+    if (!swapchain_->matches(extent)) {
+        swapchain_->markDirty();
+        resizeChaseFrames_ = kResizeChaseFrames;
+    }
+}
+
+bool VulkanDevice::needsFrame() const {
+    return swapchain_ && resizeChaseFrames_ > 0 && !swapchain_->matches(desiredExtent_);
+}
+
+void VulkanDevice::chaseResize() {
+    // KI-1: right after surfaceChanged the surface may still report the old
+    // size, so the rebuild can produce a stale swapchain. Keep re-querying
+    // until the reported size changes, then rebuild (bounded).
+    if (resizeChaseFrames_ == 0 || !swapchain_ || swapchain_->dirty()) return;
+    if (swapchain_->matches(desiredExtent_)) {
+        resizeChaseFrames_ = 0;
+        return;
+    }
+    gfx::Extent2D current;
+    VkSurfaceTransformFlagBitsKHR transform{};
+    if (swapchain_->queryCurrent(current, transform) && !current.empty() && current != swapchain_->extent()) {
+        PE_LOGI(kTag, "Surface now reports %ux%u (swapchain %ux%u, window %ux%u): rebuilding", current.width,
+                current.height, swapchain_->extent().width, swapchain_->extent().height, desiredExtent_.width,
+                desiredExtent_.height);
+        swapchain_->markDirty();
+        return;
+    }
+    if (--resizeChaseFrames_ == 0) {
+        PE_LOGW(kTag, "Swapchain %ux%u still differs from the window size %ux%u (surface reports %ux%u): giving up",
+                swapchain_->extent().width, swapchain_->extent().height, desiredExtent_.width,
+                desiredExtent_.height, current.width, current.height);
+    }
 }
 
 gfx::SurfaceState VulkanDevice::surfaceState() const {
@@ -401,6 +440,7 @@ gfx::FrameStatus VulkanDevice::beginFrame(uint64_t serial, gfx::FrameContext& ou
         if (!recycleFrameSync(frames_[frameIndex_])) return gfx::FrameStatus::Error;
     }
 
+    chaseResize();
     if (swapchain_->dirty() || !swapchain_->valid()) {
         // Every in-flight frame may reference swapchain images, views,
         // framebuffers or semaphores: wait before touching them.
@@ -408,8 +448,11 @@ gfx::FrameStatus VulkanDevice::beginFrame(uint64_t serial, gfx::FrameContext& ou
         if (idle == VK_ERROR_DEVICE_LOST) return statusFromResult(idle, "vkDeviceWaitIdle (rebuild)");
         (void)PE_TEST_HOOK("surface.rebuild");  // timing hook only
         PlatformWindow& w = swapchain_->window();
-        switch (swapchain_->rebuild({w.width(), w.height()})) {
-            case VulkanSwapchain::BuildResult::Ok: break;
+        const gfx::Extent2D want = desiredExtent_.empty() ? gfx::Extent2D{w.width(), w.height()} : desiredExtent_;
+        switch (swapchain_->rebuild(want)) {
+            case VulkanSwapchain::BuildResult::Ok:
+                if (!swapchain_->matches(want) && resizeChaseFrames_ == 0) resizeChaseFrames_ = kResizeChaseFrames;
+                break;
             case VulkanSwapchain::BuildResult::ZeroExtent:
                 swapchain_->markDirty();
                 return gfx::FrameStatus::SurfaceOutOfDate;
@@ -508,9 +551,17 @@ gfx::FrameStatus VulkanDevice::endFrame() {
     }
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
     if (r == VK_SUBOPTIMAL_KHR) {
-        // Android returns SUBOPTIMAL while preTransform != currentTransform
-        // (rotated device). Rebuilding would not change that, so only size
-        // changes (handled via notifySurfaceResized) trigger a rebuild.
+        // Android returns SUBOPTIMAL both for a size change and while
+        // preTransform != currentTransform (rotation, no pre-rotation). Only a
+        // size difference warrants a rebuild; a transform-only mismatch would
+        // otherwise rebuild every frame.
+        gfx::Extent2D current;
+        VkSurfaceTransformFlagBitsKHR transform{};
+        if (swapchain_->queryCurrent(current, transform) && !current.empty() && current != swapchain_->extent()) {
+            PE_LOGI(kTag, "Present SUBOPTIMAL: surface %ux%u vs swapchain %ux%u -> rebuild", current.width,
+                    current.height, swapchain_->extent().width, swapchain_->extent().height);
+            swapchain_->markDirty();
+        }
         return gfx::FrameStatus::Ok;
     }
     // OUT_OF_DATE / SURFACE_LOST from present: the submit happened and the

@@ -295,7 +295,7 @@ void Engine::teardown() {
 
 bool Engine::canRender() const {
     return selection_ && surfaceAttached_ && !surfaceRevoked_.load() && !paused_ && !renderingDisabled_ &&
-           scheduler_.wantsFrame();
+           (scheduler_.wantsFrame() || selection_.device->needsFrame());
 }
 
 void Engine::detachAndReleaseWindow() {
@@ -453,9 +453,11 @@ void Engine::onSurfaceAvailable() {
 
 void Engine::renderFrame() {
     gfx::GraphicsDevice& device = *selection_.device;
-    const uint64_t serial = scheduler_.beginFrame(nowNs());
+    const int64_t tBegin = nowNs();
+    const uint64_t serial = scheduler_.beginFrame(tBegin);
     gfx::FrameContext frame;
     gfx::FrameStatus status = device.beginFrame(serial, frame);
+    const int64_t tAcquired = nowNs();  // fence wait + image acquire (GPU / vsync)
     if (status != gfx::FrameStatus::Ok) {
         scheduler_.endFrameSkipped(status);
         handleFrameStatus(status);
@@ -493,13 +495,16 @@ void Engine::renderFrame() {
     (void)PE_TEST_HOOK("engine.frame.recorded");  // timing hook only
     if (PE_TEST_HOOK("engine.frame.throw")) throw std::runtime_error("injected render-thread exception");
 
+    const int64_t tRecorded = nowNs();
     status = device.endFrame();
+    const int64_t tPresented = nowNs();
     if (status == gfx::FrameStatus::Ok && PE_TEST_HOOK("engine.frame.device_lost")) {
         PE_LOGE(kTag, "Injected device loss (test hook)");
         status = gfx::FrameStatus::DeviceLost;
     }
     if (status == gfx::FrameStatus::Ok) {
-        scheduler_.endFramePresented(nowNs());
+        scheduler_.endFramePresented(tPresented, nsToMs(tAcquired - tBegin), nsToMs(tRecorded - tAcquired),
+                                     nsToMs(tPresented - tRecorded));
         consecutiveErrors_ = 0;
         consecutiveExceptions_ = 0;
         state_ = sceneOk ? "Running" : "Error: test scene creation failed";
@@ -572,8 +577,11 @@ void Engine::logPerfIfDue() {
         std::snprintf(rate, sizeof(rate), "%.1f fps", st.fps);
     else
         std::snprintf(rate, sizeof(rate), "rate n/a (%s)", gfx::toString(scheduler_.mode()));
-    PE_LOGI("Perf", "%s: %llu frames rendered in %.1fs, steady cpu avg %.2f ms / max %.2f ms, total rendered %llu, skipped %llu",
-            rate, static_cast<unsigned long long>(rendered), seconds, st.steadyAvgCpuMs, st.steadyMaxCpuMs,
+    PE_LOGI("Perf",
+            "%s: %llu frames in %.1fs | CPU work avg %.2f ms (record %.2f, submit/present %.2f), max %.2f | "
+            "wait GPU/vsync avg %.2f ms | total rendered %llu, skipped %llu",
+            rate, static_cast<unsigned long long>(rendered), seconds, st.steadyAvgCpuMs, st.steadyAvgRecordMs,
+            st.steadyAvgSubmitMs, st.steadyMaxCpuMs, st.steadyAvgWaitMs,
             static_cast<unsigned long long>(st.framesPresented), static_cast<unsigned long long>(st.framesSkipped));
     lastPerfLogNs_ = now;
     lastPerfLogFrames_ = st.framesPresented;

@@ -9,6 +9,9 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/core/TaskQueue.cpp
     ${PE_CPP_DIR}/core/TestHooks.cpp        # empty unless PE_ENABLE_TEST_HOOKS
     ${PE_CPP_DIR}/core/ShutdownReport.cpp
+    # canvas core (pure math, no GPU)
+    ${PE_CPP_DIR}/canvas/Viewport.cpp
+    ${PE_CPP_DIR}/canvas/TileGrid.cpp
     # graphics abstraction (API independent)
     ${PE_CPP_DIR}/graphics/abstraction/GraphicsTypes.cpp
     ${PE_CPP_DIR}/graphics/abstraction/GraphicsCapabilities.cpp
@@ -35,6 +38,11 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/diagnostics/Diagnostics.cpp
     ${PE_CPP_DIR}/engine/TestScene.cpp
     ${PE_CPP_DIR}/engine/Engine.cpp
+)
+
+set(PE_CANVAS_CORE_SOURCES
+    ${PE_CPP_DIR}/canvas/Viewport.cpp
+    ${PE_CPP_DIR}/canvas/TileGrid.cpp
 )
 
 set(PE_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter)

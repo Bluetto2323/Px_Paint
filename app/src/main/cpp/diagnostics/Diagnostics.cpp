@@ -142,10 +142,12 @@ std::string statusSummary(const EngineStatus& s) {
     }
     o << "\n";
     if (f.steadyFrames) {
-        std::snprintf(buf, sizeof(buf), "CPU/frame steady avg %.2f ms, max(2s) %.2f ms, last %.2f ms\n",
-                      f.steadyAvgCpuMs, f.steadyMaxCpuMs, f.lastCpuMs);
+        std::snprintf(buf, sizeof(buf), "CPU work  avg %.2f ms (record %.2f + submit/present %.2f), max(2s) %.2f\n",
+                      f.steadyAvgCpuMs, f.steadyAvgRecordMs, f.steadyAvgSubmitMs, f.steadyMaxCpuMs);
+        o << buf;
+        std::snprintf(buf, sizeof(buf), "GPU/vsync wait avg %.2f ms (display pacing, not CPU cost)\n", f.steadyAvgWaitMs);
     } else {
-        std::snprintf(buf, sizeof(buf), "CPU/frame warming up (last %.2f ms)\n", f.lastCpuMs);
+        std::snprintf(buf, sizeof(buf), "CPU work  warming up (last %.2f ms)\n", f.lastCpuMs);
     }
     o << buf;
     if (s.renderMode == gfx::RenderMode::OnDemand) {
@@ -230,6 +232,9 @@ std::string statusJson(const EngineStatus& s) {
     num("steadyFrames", static_cast<double>(f.steadyFrames));
     num("steadyAvgCpuMs", f.steadyAvgCpuMs);
     num("steadyMaxCpuMs", f.steadyMaxCpuMs);
+    num("steadyAvgRecordMs", f.steadyAvgRecordMs);
+    num("steadyAvgSubmitMs", f.steadyAvgSubmitMs);
+    num("steadyAvgWaitMs", f.steadyAvgWaitMs);
     boolean("rateValid", f.rateValid);
     num("fps", f.fps);
     num("liveResources", s.resources.totalLive());
