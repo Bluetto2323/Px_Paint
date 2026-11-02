@@ -73,3 +73,32 @@ confused with the display refresh interval.
 The compositor rotates the image in landscape (extra composition pass).
 Visual orientation after rotation must be checked by eye; the pixel
 self-test reads the swapchain image, not the screen.
+
+## KI-4 — Canvas content is a list of rectangle fills, capped at 100 000 operations
+
+Block 2 stores what you paint as the engine's content journal (each marker /
+eraser dab is one rectangle fill, replace semantics), which is also what
+PxPaint saves (`content.pxops`) and reloads. This is the reserved minimal
+content model until the brush engine and layers arrive:
+
+* when the journal reaches 100 000 operations further dabs are ignored and
+  PxPaint shows a one-time message (no data is lost, nothing is overwritten);
+* opacity, soft brushes, smudge, layers and undo are **not** implemented
+  (UI entries are present but disabled / marked "coming later").
+
+## KI-5 — PxPaint UI has no automated on-device tests
+
+There is no Android device or emulator in CI. What is automated:
+JVM unit tests of the pure-Kotlin core (settings, canvas size rules, storage,
+search/sort, adaptive layout decisions, gesture math, formatting) and the
+engine host suites (`canvas` on Mesa GLES and lavapipe Vulkan). Screen
+rendering, touch handling, insets and the real Mali-G68 driver are verified
+only by the manual A33 procedure in `docs/DEVICE_VALIDATION.md`.
+
+## KI-6 — Diagnostics run a second GPU device while open
+
+`DiagnosticsActivity` runs in its own process (`:diagnostics`) because the
+native Vulkan loader state is process-global. While it is open, PxPaint's
+engine (if a canvas was opened) still holds its own device in the main
+process. Both are released normally; this only matters for memory use while
+diagnostics are on screen.

@@ -1,16 +1,34 @@
-# Paint Engine — Blocco 1
+# PxPaint — Blocco 2 (sul motore Paint Engine del Blocco 1)
 
-Motore grafico nativo Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
-Il Blocco 1 contiene solo le fondamenta: selezione backend, rilevamento hardware,
-ciclo di vita, diagnostica e una scena di prova (triangolo colorato). Nessun
-pennello, livello o strumento di disegno.
+App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
+
+* **Blocco 1**: il motore — selezione backend, rilevamento hardware, ciclo di
+  vita, diagnostica, scena di prova (triangolo). Ora vive in
+  `DiagnosticsActivity` (processo `:diagnostics`), aperta da
+  *Impostazioni → Diagnostica del motore*.
+* **Blocco 2**: l'app **PxPaint** — galleria progetti, nuova tela, area di
+  lavoro con tela GPU (zoom/pan/rotazione esatti, texture singola o a tile
+  secondo hardware e memoria), impostazioni, layout adattivi. Il pennello è
+  un marcatore rettangolare di prova: motore pennelli, livelli, sfumino e
+  undo completi sono fuori scope (interfacce riservate, vedi
+  `docs/ENGINE_API.md`).
+
+L'interfaccia parla col motore **solo** attraverso `NativeEngine`
+(documentata in `docs/ENGINE_API.md`).
 
 ## Struttura
 
 ```
 app/src/main/
   java/com/paintengine/
-    app/MainActivity.kt            Activity, overlay diagnostico, pulsanti
+    pxpaint/PxPaintActivity.kt     launcher: pila di schermate, motore unico, impostazioni
+    pxpaint/core/                  Kotlin puro (test JUnit): impostazioni, regole
+                                   dimensioni tela, archivio progetti, ricerca,
+                                   layout adattivi, gesti, testi IT/EN
+    pxpaint/ui/                    tema, icone vettoriali in codice, widget,
+                                   selettore colore, overlay, miniature
+    pxpaint/screens/               galleria, nuova tela, area di lavoro, impostazioni
+    app/DiagnosticsActivity.kt     diagnostica Blocco 1 (processo :diagnostics)
     engine/NativeEngine.kt         facciata JNI (nessuna chiamata GPU in Kotlin)
     engine/EngineSurfaceView.kt    SurfaceView -> eventi del ciclo di vita
   cpp/
@@ -24,7 +42,9 @@ app/src/main/
     graphics/vulkan/               loader dinamico, device, swapchain, risorse
     graphics/opengles/             EGL + GLES 3.0 (3.1/3.2 rilevati a runtime)
     diagnostics/                   report GPU, stato live, auto-test
-    engine/                        Engine (render thread), TestScene
+    engine/                        Engine (render thread), TestScene, CanvasController
+    canvas/                        Viewport, TileGrid, StoragePolicy, CanvasSurface,
+                                   CanvasRenderer, CanvasSelfTest
     jni/                           JniBridge
     shaders/                       sorgenti GLSL + header SPIR-V generato
 tools/
@@ -74,21 +94,23 @@ mano da *Actions → Android build → Run workflow*) e:
 1. installa sul runner Android SDK 35, build-tools 35.0.0, NDK 27.2.12479018 e
    CMake 3.22.1 ufficiali;
 2. esegue `./gradlew :app:assembleDebug` (Kotlin + C++ per `arm64-v8a` e
-   `x86_64`);
-3. verifica l'APK (`tools/ci/inspect_apk.sh`): ABI presenti, 14 funzioni JNI
+   `x86_64`), poi i test unitari JVM (`testDebugUnitTest`) e il lint dei
+   livelli API (`NewApi`/`InlinedApi`, minSdk 26);
+3. verifica l'APK (`tools/ci/inspect_apk.sh`): ABI presenti, tutte le funzioni JNI di `NativeEngine.kt`
    esportate, allineamento 16 KB, `libvulkan.so` **non** collegata (dlopen),
-   Vulkan dichiarato opzionale, firma valida;
-4. pubblica l'APK come artifact `PaintEngine-debug-apk-<commit>` (30 giorni);
+   Vulkan dichiarato opzionale, firma valida, launcher `PxPaintActivity`,
+   diagnostica nel processo `:diagnostics`;
+4. pubblica l'APK come artifact `PxPaint-debug-apk-<commit>` (30 giorni);
 5. in un job separato esegue i test host del motore su Mesa (GLES) e
-   lavapipe (Vulkan software).
+   lavapipe (Vulkan software), inclusa la suite `canvas` su entrambi.
 
 Installare dal telefono:
 
 1. Apri il repository nel browser (il sito, non l'app GitHub: l'app non
    scarica gli artifact) → **Actions** → ultima esecuzione verde di
-   *Android build* → sezione **Artifacts** → `PaintEngine-debug-apk-…`.
+   *Android build* → sezione **Artifacts** → `PxPaint-debug-apk-…`.
 2. Si scarica uno **.zip**: aprilo con *File* / *I miei file* di Samsung ed
-   estrai `PaintEngine-block1-debug-….apk`.
+   estrai `PxPaint-block2-debug-….apk`.
 3. Tocca l'APK. La prima volta Android chiede di consentire l'installazione
    da quell'app (*Impostazioni → Installa app sconosciute*): consentila solo
    per *I miei file* / il browser usato.
@@ -119,23 +141,27 @@ Da riga di comando:
 ```bash
 ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.paintengine/.app.MainActivity
+adb shell am start -n com.paintengine/.pxpaint.PxPaintActivity      # PxPaint
+adb shell am start -n com.paintengine/.app.DiagnosticsActivity      # diagnostica Blocco 1
 adb logcat -s 'PE.*'          # tutti i log del motore
 ```
 
-Forzare un backend / disattivare il fallback / scegliere le modalità:
+Forzare un backend / disattivare il fallback / scegliere le modalità (solo
+diagnostica; in PxPaint si sceglie da *Impostazioni → Prestazioni*):
 
 ```bash
-adb shell am start -S -n com.paintengine/.app.MainActivity --es backend vulkan --ez fallback false
-adb shell am start -S -n com.paintengine/.app.MainActivity --es backend gles
-adb shell am start -S -n com.paintengine/.app.MainActivity --es render continuous   # default: ondemand
-adb shell am start -S -n com.paintengine/.app.MainActivity --ez diagnostics false
+adb shell am start -S -n com.paintengine/.app.DiagnosticsActivity --es backend vulkan --ez fallback false
+adb shell am start -S -n com.paintengine/.app.DiagnosticsActivity --es backend gles
+adb shell am start -S -n com.paintengine/.app.DiagnosticsActivity --es render continuous   # default: ondemand
+adb shell am start -S -n com.paintengine/.app.DiagnosticsActivity --ez diagnostics false
 ```
 
 Pulsanti: **MODE** (continuo ↔ on-demand), **DIAG** (diagnostica on/off,
 non cambia la modalità), **SELF-TEST**, **LOG** (report completo in logcat).
 
-### Cosa verificare sul dispositivo
+### Cosa verificare sul dispositivo (diagnostica Blocco 1)
+
+Per PxPaint (Blocco 2) vedi `docs/DEVICE_VALIDATION.md`.
 
 | Test | Come | Atteso |
 |---|---|---|
@@ -180,5 +206,5 @@ Linux ed esegue il ciclo di vita completo su una finestra headless:
 OpenGL ES su Mesa llvmpipe, Vulkan su SwiftShader. La build di test abilita
 `PE_ENABLE_TEST_HOOKS` (`core/TestHooks.h`) per allargare finestre temporali e
 iniettare guasti; nella build Android gli hook non esistono.
-Suite: `basic`, `lifecycle`, `faults`. Vedi
+Suite: `basic`, `lifecycle`, `faults`, `canvas`. Vedi
 `tools/host_test/run_host_tests.sh` (`--asan` per AddressSanitizer+UBSan).
