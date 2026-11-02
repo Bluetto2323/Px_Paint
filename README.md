@@ -1,0 +1,184 @@
+# Paint Engine — Blocco 1
+
+Motore grafico nativo Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
+Il Blocco 1 contiene solo le fondamenta: selezione backend, rilevamento hardware,
+ciclo di vita, diagnostica e una scena di prova (triangolo colorato). Nessun
+pennello, livello o strumento di disegno.
+
+## Struttura
+
+```
+app/src/main/
+  java/com/paintengine/
+    app/MainActivity.kt            Activity, overlay diagnostico, pulsanti
+    engine/NativeEngine.kt         facciata JNI (nessuna chiamata GPU in Kotlin)
+    engine/EngineSurfaceView.kt    SurfaceView -> eventi del ciclo di vita
+  cpp/
+    core/                          log, coda comandi thread-safe, tempo
+    platform/                      PlatformWindow (Android / headless)
+    graphics/abstraction/          API indipendente dal backend
+      GraphicsBackend, GraphicsDevice, GraphicsCapabilities, RenderingContext,
+      RenderTarget, Texture/Buffer/Shader/PipelineResource, ResourceManager,
+      FrameScheduler
+    graphics/BackendSelector.*     UNICO punto di scelta backend + fallback
+    graphics/vulkan/               loader dinamico, device, swapchain, risorse
+    graphics/opengles/             EGL + GLES 3.0 (3.1/3.2 rilevati a runtime)
+    diagnostics/                   report GPU, stato live, auto-test
+    engine/                        Engine (render thread), TestScene
+    jni/                           JniBridge
+    shaders/                       sorgenti GLSL + header SPIR-V generato
+tools/
+  compile_shaders.sh               rigenera shaders/generated/TriangleShaders.h
+  host_test/                       verifica del motore su Linux (headless)
+```
+
+## Regole architetturali
+
+* **Un solo thread GPU.** Il motore ha un render thread nativo che possiede
+  tutte le risorse grafiche. JNI/Kotlin inviano solo comandi.
+* **`surfaceDestroyed` è sincrono e senza timeout**: il thread UI revoca la
+  superficie (nessun nuovo frame), il render thread termina l'eventuale frame
+  in corso, distrugge swapchain/EGLSurface, *poi* rilascia l'`ANativeWindow`
+  e segnala il completamento (anche in caso di eccezione). Se il render thread
+  termina, il suo teardown esegue lo stesso rilascio ordinato. Un watchdog
+  registra un avviso ogni secondo di attesa ma non abbandona mai l'attesa.
+  Il render thread non aspetta mai il thread UI: nessun deadlock possibile.
+  Dettagli in `docs/BLOCK1_REVIEW.md`.
+* **Il device sopravvive alla perdita della superficie**: in background si
+  distrugge solo la swapchain; shader, buffer e pipeline restano validi.
+* **Distruzione differita**: una risorsa rilasciata viene distrutta solo quando
+  la GPU ha completato il frame che poteva usarla. Allo shutdown il
+  `ResourceManager` segnala ogni leak.
+* **Nessuna assunzione sull'hardware**: Vulkan è caricato con `dlopen`; si
+  richiede 1.1 solo se il loader lo supporta; estensioni e funzionalità sono
+  usate solo dopo verifica. Nessuna funzionalità opzionale è abilitata finché
+  non serve.
+* **Selezione backend** (`BackendSelector`): Vulkan → OpenGL ES. Un candidato è
+  accettato solo se supera inizializzazione, creazione device, requisiti minimi
+  verificati e creazione reale della swapchain/superficie. Device lost,
+  context lost, errori ripetuti o eccezioni del render thread → ricreazione
+  del device (le risorse della scena vengono ricreate). Due fallimenti dello
+  stesso backend entro 60 s lo escludono **solo se resta un'alternativa**;
+  più di 6 recuperi in 60 s, o 3 eccezioni consecutive, disattivano la
+  grafica in modo pulito (l'app resta viva e il ciclo di vita funziona).
+* **Modalità di rendering e diagnostica sono indipendenti**:
+  `continuous` (un frame per vsync) oppure `on-demand` (default: un frame solo
+  su richiesta/eventi); la diagnostica (log prestazioni periodico, auto-test
+  pixel) funziona in entrambe e non forza mai il rendering continuo.
+
+## Build automatica (GitHub Actions) e installazione dal telefono
+
+La workflow `.github/workflows/android.yml` parte a ogni push su `main` (o a
+mano da *Actions → Android build → Run workflow*) e:
+
+1. installa sul runner Android SDK 35, build-tools 35.0.0, NDK 27.2.12479018 e
+   CMake 3.22.1 ufficiali;
+2. esegue `./gradlew :app:assembleDebug` (Kotlin + C++ per `arm64-v8a` e
+   `x86_64`);
+3. verifica l'APK (`tools/ci/inspect_apk.sh`): ABI presenti, 14 funzioni JNI
+   esportate, allineamento 16 KB, `libvulkan.so` **non** collegata (dlopen),
+   Vulkan dichiarato opzionale, firma valida;
+4. pubblica l'APK come artifact `PaintEngine-debug-apk-<commit>` (30 giorni);
+5. in un job separato esegue i test host del motore su Mesa (GLES) e
+   lavapipe (Vulkan software).
+
+Installare dal telefono:
+
+1. Apri il repository nel browser (il sito, non l'app GitHub: l'app non
+   scarica gli artifact) → **Actions** → ultima esecuzione verde di
+   *Android build* → sezione **Artifacts** → `PaintEngine-debug-apk-…`.
+2. Si scarica uno **.zip**: aprilo con *File* / *I miei file* di Samsung ed
+   estrai `PaintEngine-block1-debug-….apk`.
+3. Tocca l'APK. La prima volta Android chiede di consentire l'installazione
+   da quell'app (*Impostazioni → Installa app sconosciute*): consentila solo
+   per *I miei file* / il browser usato.
+4. Play Protect può avvisare che l'app non è nota: *Installa comunque*.
+5. Ogni esecuzione CI firma con una chiave debug nuova: per installare una
+   build più recente sopra una vecchia **disinstalla prima** la precedente
+   (altrimenti "app non installata", firma diversa).
+
+Leggere i log senza PC: il pulsante **LOG** scrive il report in logcat, che
+dal telefono richiede un PC o un'app con permesso `READ_LOGS`; l'overlay
+mostra comunque stato, backend, GPU, versione API, driver, superficie, tempi
+frame, auto-test ed errori recenti — fai uno screenshot dell'overlay.
+
+## Compilare e installare sul Samsung Galaxy A33 5G
+
+Requisiti: Android Studio (Ladybug o successivo), SDK Platform 35,
+**NDK 27.2.12479018** e **CMake 3.22.1** (SDK Manager → SDK Tools →
+"Show Package Details"). Se hai un NDK diverso, cambia `ndkVersion` in
+`app/build.gradle.kts`.
+
+1. Apri la cartella `PaintEngine` in Android Studio e attendi il Gradle sync.
+2. Sul telefono: *Impostazioni → Info sul telefono → Informazioni software*,
+   tocca 7 volte *Numero build*; poi *Opzioni sviluppatore → Debug USB* attivo.
+3. Collega il telefono via USB, accetta l'autorizzazione, premi **Run**.
+
+Da riga di comando:
+
+```bash
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.paintengine/.app.MainActivity
+adb logcat -s 'PE.*'          # tutti i log del motore
+```
+
+Forzare un backend / disattivare il fallback / scegliere le modalità:
+
+```bash
+adb shell am start -S -n com.paintengine/.app.MainActivity --es backend vulkan --ez fallback false
+adb shell am start -S -n com.paintengine/.app.MainActivity --es backend gles
+adb shell am start -S -n com.paintengine/.app.MainActivity --es render continuous   # default: ondemand
+adb shell am start -S -n com.paintengine/.app.MainActivity --ez diagnostics false
+```
+
+Pulsanti: **MODE** (continuo ↔ on-demand), **DIAG** (diagnostica on/off,
+non cambia la modalità), **SELF-TEST**, **LOG** (report completo in logcat).
+
+### Cosa verificare sul dispositivo
+
+| Test | Come | Atteso |
+|---|---|---|
+| Avvio + backend | apri l'app | overlay `State Running`, `Backend Vulkan`, GPU `Mali-G68` |
+| Triangolo | guarda lo schermo | triangolo rosso (alto) / verde (sx) / blu (dx) su grigio scuro |
+| Auto-test pixel | riga `SelfTest` | `PASSED - 8/8 probes match` |
+| Report GPU | pulsante LOG REPORT, `adb logcat -s PE.Diagnostics` | estensioni, limiti, formati, subgroup size 16 |
+| Ridimensionamento | ruota il telefono / split-screen | `Surface` cambia dimensione, `rebuilt` aumenta, triangolo corretto |
+| Pausa/ripresa | tasto Home e rientra | `Frames` fermo in background, riparte al rientro, auto-test di nuovo PASSED |
+| Rilascio superficie | Home, poi `adb logcat -s PE.SurfaceView` | `surfaceDestroyed: native surface released in N ms` (N tipicamente < 50) |
+| Modalità | MODE con DIAG attivo | on-demand: `Frames` fermo; continuous: ~60/90/120 fps secondo il display |
+| Perdita superficie | blocca/sblocca lo schermo | nessun crash, rendering riprende |
+| Fallback GLES | `--es backend gles` | `Backend OpenGL ES`, auto-test PASSED |
+| Leak | chiudi l'app (Back) | logcat: `Shutdown clean: created=N destroyed=N` |
+
+Nota: con dispositivo ruotato e backend Vulkan il compositore ruota l'immagine
+(pre-rotazione non ancora implementata); il driver può riportare
+`SUBOPTIMAL`, che è gestito senza ricreazioni continue.
+
+### Validation layer Vulkan (opzionale)
+
+Nelle build debug il motore chiede `VK_LAYER_KHRONOS_validation`. Se non è
+presente registra solo un avviso. Per attivarlo, scarica
+`android-binaries-*.zip` dalle release di
+[KhronosGroup/Vulkan-ValidationLayers](https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases)
+e copia `arm64-v8a/libVkLayer_khronos_validation.so` in
+`app/src/main/jniLibs/arm64-v8a/`.
+
+## Shader
+
+Gli shader Vulkan sono precompilati in SPIR-V 1.0 dentro
+`shaders/generated/TriangleShaders.h`. Dopo una modifica:
+
+```bash
+tools/compile_shaders.sh /percorso/glslangValidator
+```
+
+## Verifica su host (senza dispositivo)
+
+`tools/host_test` compila **gli stessi sorgenti del motore** (senza JNI) per
+Linux ed esegue il ciclo di vita completo su una finestra headless:
+OpenGL ES su Mesa llvmpipe, Vulkan su SwiftShader. La build di test abilita
+`PE_ENABLE_TEST_HOOKS` (`core/TestHooks.h`) per allargare finestre temporali e
+iniettare guasti; nella build Android gli hook non esistono.
+Suite: `basic`, `lifecycle`, `faults`. Vedi
+`tools/host_test/run_host_tests.sh` (`--asan` per AddressSanitizer+UBSan).

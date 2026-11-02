@@ -1,0 +1,139 @@
+# Builds the debug APK with the official Android SDK + NDK and publishes it as
+# a downloadable workflow artifact. A second, independent job runs the
+# engine's host test suites (same C++ sources) on Mesa GLES + lavapipe Vulkan.
+#
+# No secrets are used: the debug APK is signed with the debug key that the
+# Android Gradle Plugin generates on the runner.
+name: Android build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: "17"
+  COMPILE_SDK: "35"
+  BUILD_TOOLS_VERSION: "35.0.0"
+  NDK_VERSION: "27.2.12479018"   # must match app/build.gradle.kts
+  CMAKE_VERSION: "3.22.1"        # must match app/build.gradle.kts
+
+jobs:
+  apk:
+    name: Debug APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Install Android SDK packages (platform, build-tools, NDK, CMake)
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install \
+            "platforms;android-${COMPILE_SDK}" \
+            "build-tools;${BUILD_TOOLS_VERSION}" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;${CMAKE_VERSION}" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Toolchain versions
+        run: |
+          java -version 2>&1 | head -1
+          ./gradlew --version | grep -E "Gradle|Kotlin|JVM"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version | head -1
+          "$ANDROID_HOME/cmake/${CMAKE_VERSION}/bin/cmake" --version | head -1
+          grep Pkg.Revision "$ANDROID_NDK_HOME/source.properties"
+
+      - name: Build debug APK (Kotlin + C++ for arm64-v8a and x86_64)
+        run: ./gradlew :app:assembleDebug --stacktrace --warning-mode all
+
+      - name: Inspect APK (ABIs, JNI exports, 16 KB alignment, Vulkan via dlopen, signature)
+        run: |
+          chmod +x tools/ci/inspect_apk.sh
+          tools/ci/inspect_apk.sh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Name the APK after the commit
+        id: name
+        run: |
+          short="${GITHUB_SHA::7}"
+          out="PaintEngine-block1-debug-${short}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+          echo "artifact=PaintEngine-debug-apk-${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.artifact }}
+          path: ${{ steps.name.outputs.file }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports-${{ github.run_id }}
+          path: |
+            app/build/reports/
+            app/.cxx/**/*.log
+            app/.cxx/**/CMakeOutput.log
+            app/.cxx/**/CMakeError.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  host-tests:
+    name: Engine host tests (Mesa GLES + lavapipe Vulkan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compilers, Khronos headers and Mesa drivers
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            cmake ninja-build clang \
+            libvulkan-dev libegl-dev libgles-dev \
+            libegl-mesa0 libgles2 mesa-vulkan-drivers > /dev/null
+          ls /usr/share/vulkan/icd.d/
+
+      - name: Run basic / lifecycle / faults suites
+        env:
+          ICD: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          BUILD: ${{ github.workspace }}/build-host
+        run: tools/host_test/run_host_tests.sh
+
+      - name: Upload host test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-test-logs-${{ github.run_id }}
+          path: build-host/*.log
+          if-no-files-found: ignore
+          retention-days: 7
