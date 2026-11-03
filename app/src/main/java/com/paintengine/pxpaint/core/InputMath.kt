@@ -10,13 +10,14 @@ import kotlin.math.roundToLong
 data class P(val x: Double, val y: Double)
 
 /**
- * Reusable buffer of stroke samples (x, y, tMs triples) handed to the
- * engine once per touch event: all historical samples of the MotionEvent in
- * chronological order, then the current one. It grows by doubling and is
+ * Reusable buffer of stroke samples handed to the engine once per touch
+ * event: all historical samples of the MotionEvent in chronological order,
+ * then the current one. [STRIDE] floats per sample: x, y, tMs, pressure,
+ * tilt, orientation (NaN = axis not reported). It grows by doubling and is
  * reused, so the per-event path does not allocate once warmed up.
  */
 class SampleBuffer(initialCapacity: Int = 64) {
-    var data = FloatArray(maxOf(1, initialCapacity) * 3)
+    var data = FloatArray(maxOf(1, initialCapacity) * STRIDE)
         private set
     var count = 0
         private set
@@ -25,13 +26,23 @@ class SampleBuffer(initialCapacity: Int = 64) {
         count = 0
     }
 
-    fun add(x: Float, y: Float, tMs: Float) {
-        if ((count + 1) * 3 > data.size) data = data.copyOf(data.size * 2)
-        val i = count * 3
+    fun add(x: Float, y: Float, tMs: Float, pressure: Float = Float.NaN, tilt: Float = Float.NaN, orientation: Float = Float.NaN) {
+        if ((count + 1) * STRIDE > data.size) data = data.copyOf(data.size * 2)
+        val i = count * STRIDE
         data[i] = x
         data[i + 1] = y
         data[i + 2] = tMs
+        data[i + 3] = pressure
+        data[i + 4] = tilt
+        data[i + 5] = orientation
         count++
+    }
+
+    /** The first sample as its own array (stroke begin). */
+    fun first(): FloatArray = data.copyOfRange(0, STRIDE)
+
+    companion object {
+        const val STRIDE = 6   // NativeEngine.SAMPLE_FLOATS
     }
 }
 

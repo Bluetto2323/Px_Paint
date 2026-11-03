@@ -32,7 +32,11 @@ data class AppSettings(
     // Gestures
     val twoFingerRotate: Boolean = true,
     val rotationSnap: Boolean = true,
-    val fingerDrawing: Boolean = true,
+    val fingerMode: FingerMode = FingerMode.DRAW,
+    // Stylus & pressure (Block 4): device calibration, shared by every brush.
+    val pressureCurve: PressureCurve = PressureCurve.LINEAR,
+    val pressureSensitivity: Float = 0f,   // -1 (needs force) .. +1 (light touch)
+    val pressureSmoothing: Float = 0.35f,  // 0 = raw .. 1 = strongest
     // Performance
     val render: RenderPreference = RenderPreference.BATTERY,
     val backend: BackendChoice = BackendChoice.AUTO,
@@ -50,7 +54,10 @@ data class AppSettings(
         K_TOOL_LABELS to showToolLabels.toString(),
         K_ROTATE to twoFingerRotate.toString(),
         K_SNAP to rotationSnap.toString(),
-        K_FINGER to fingerDrawing.toString(),
+        K_FINGER_MODE to fingerMode.name,
+        K_PRESSURE_CURVE to pressureCurve.encode(),
+        K_PRESSURE_SENSITIVITY to pressureSensitivity.toString(),
+        K_PRESSURE_SMOOTHING to pressureSmoothing.toString(),
         K_RENDER to render.name,
         K_BACKEND to backend.name,
         K_OVERLAY to performanceOverlay.toString(),
@@ -68,7 +75,12 @@ data class AppSettings(
         const val K_TOOL_LABELS = "tool_labels"
         const val K_ROTATE = "two_finger_rotate"
         const val K_SNAP = "rotation_snap"
+        /** Block 2/3 boolean ("paint with a finger"); read only to migrate to [K_FINGER_MODE]. */
         const val K_FINGER = "finger_drawing"
+        const val K_FINGER_MODE = "finger_mode"
+        const val K_PRESSURE_CURVE = "pressure_curve"
+        const val K_PRESSURE_SENSITIVITY = "pressure_sensitivity"
+        const val K_PRESSURE_SMOOTHING = "pressure_smoothing"
         const val K_RENDER = "render"
         const val K_BACKEND = "backend"
         const val K_OVERLAY = "performance_overlay"
@@ -86,7 +98,14 @@ data class AppSettings(
                 showToolLabels = boolOr(map[K_TOOL_LABELS], d.showToolLabels),
                 twoFingerRotate = boolOr(map[K_ROTATE], d.twoFingerRotate),
                 rotationSnap = boolOr(map[K_SNAP], d.rotationSnap),
-                fingerDrawing = boolOr(map[K_FINGER], d.fingerDrawing),
+                fingerMode = enumValues<FingerMode>().firstOrNull { it.name == map[K_FINGER_MODE] }
+                    ?: when (map[K_FINGER]) {
+                        "false" -> FingerMode.PAN
+                        else -> d.fingerMode
+                    },
+                pressureCurve = PressureCurve.decode(map[K_PRESSURE_CURVE]) ?: d.pressureCurve,
+                pressureSensitivity = floatIn(map[K_PRESSURE_SENSITIVITY], -1f, 1f, d.pressureSensitivity),
+                pressureSmoothing = floatIn(map[K_PRESSURE_SMOOTHING], 0f, 1f, d.pressureSmoothing),
                 render = enumOr(map[K_RENDER], d.render),
                 backend = enumOr(map[K_BACKEND], d.backend),
                 performanceOverlay = boolOr(map[K_OVERLAY], d.performanceOverlay),
@@ -98,6 +117,9 @@ data class AppSettings(
 
         private inline fun <reified E : Enum<E>> enumOr(value: String?, default: E): E =
             enumValues<E>().firstOrNull { it.name == value } ?: default
+
+        private fun floatIn(value: String?, lo: Float, hi: Float, default: Float): Float =
+            value?.toFloatOrNull()?.takeIf { it.isFinite() }?.coerceIn(lo, hi) ?: default
 
         private fun boolOr(value: String?, default: Boolean): Boolean = when (value) {
             "true" -> true

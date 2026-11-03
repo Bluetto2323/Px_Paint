@@ -12,6 +12,22 @@ class BrushStateTest {
     }
 
     @Test
+    fun dynamicsRoundTripAndBlockThreeValuesStillLoad() {
+        val s = BrushState(marker = ToolBrush(30f, 0.8f, 0.1f, pressureSize = false, minSize = 0.4f, pressureOpacity = true,
+            minOpacity = 0.6f, tilt = true))
+        assertEquals(s, BrushState.decode(s.encode()))
+        // Block 3 stored "size;opacity;spacing": dynamics get their defaults.
+        val old = BrushState.decode(mapOf("marker" to "12.0;0.5;0.08"))
+        assertEquals(12f, old.marker.size, 0f)
+        assertEquals(true, old.marker.pressureSize)
+        assertEquals(false, old.marker.tilt)
+        val clamped = BrushState.decode(mapOf("marker" to "12;1;0.08;true;-3;true;9;maybe"))
+        assertEquals(BrushState.MIN_PRESSURE_FRACTION, clamped.marker.minSize, 0f)
+        assertEquals(1f, clamped.marker.minOpacity, 0f)
+        assertEquals(false, clamped.marker.tilt)
+    }
+
+    @Test
     fun invalidValuesFallBackOrClamp() {
         val d = BrushState()
         val s = BrushState.decode(mapOf("marker" to "9999;7;0", "eraser" to "x;y;z", "color" to "nope", "recent" to "1,a,3"))

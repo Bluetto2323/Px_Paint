@@ -4,12 +4,28 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.roundToInt
 
-/** Size / opacity / spacing of one tool. Size is the diameter in CANVAS pixels. */
-data class ToolBrush(val size: Float, val opacity: Float, val spacing: Float) {
-    fun sanitized() = ToolBrush(
+/**
+ * Size / opacity / spacing of one tool, plus its stylus dynamics. [size] is
+ * the diameter in CANVAS pixels - the maximum size when pressure controls
+ * size; [minSize] is the size at zero pressure as a fraction of it.
+ * Dynamics only act on stylus strokes (fingers have no reliable pressure).
+ */
+data class ToolBrush(
+    val size: Float,
+    val opacity: Float,
+    val spacing: Float,
+    val pressureSize: Boolean = true,
+    val minSize: Float = 0.25f,
+    val pressureOpacity: Boolean = false,
+    val minOpacity: Float = 0.3f,
+    val tilt: Boolean = false,
+) {
+    fun sanitized() = copy(
         size = size.takeIf { it.isFinite() }?.coerceIn(BrushState.MIN_SIZE, BrushState.MAX_SIZE) ?: 24f,
         opacity = opacity.takeIf { it.isFinite() }?.coerceIn(BrushState.MIN_OPACITY, 1f) ?: 1f,
         spacing = spacing.takeIf { it.isFinite() }?.coerceIn(BrushState.MIN_SPACING, BrushState.MAX_SPACING) ?: BrushState.DEFAULT_SPACING,
+        minSize = minSize.takeIf { it.isFinite() }?.coerceIn(BrushState.MIN_PRESSURE_FRACTION, 1f) ?: 0.25f,
+        minOpacity = minOpacity.takeIf { it.isFinite() }?.coerceIn(BrushState.MIN_PRESSURE_FRACTION, 1f) ?: 0.3f,
     )
 }
 
@@ -42,6 +58,8 @@ data class BrushState(
         /** Continuous stroke (the engine also keeps big brushes' edges straight). */
         const val DEFAULT_SPACING = 0.08f
         const val MAX_RECENT = 8
+        /** Lowest minimum size / opacity the UI offers (the engine floors are lower). */
+        const val MIN_PRESSURE_FRACTION = 0.05f
 
         fun decode(map: Map<String, String>): BrushState {
             val d = BrushState()
@@ -53,12 +71,23 @@ data class BrushState(
             )
         }
 
-        private fun enc(t: ToolBrush) = "${t.size};${t.opacity};${t.spacing}"
+        private fun enc(t: ToolBrush) =
+            "${t.size};${t.opacity};${t.spacing};${t.pressureSize};${t.minSize};${t.pressureOpacity};${t.minOpacity};${t.tilt}"
+
         private fun dec(v: String?): ToolBrush? {
             val p = v?.split(';') ?: return null
-            if (p.size != 3) return null
-            val nums = p.map { it.toFloatOrNull() ?: return null }
-            return ToolBrush(nums[0], nums[1], nums[2]).sanitized()
+            if (p.size != 3 && p.size != 8) return null   // 3 fields: Block 3
+            val nums = p.take(3).map { it.toFloatOrNull() ?: return null }
+            val base = ToolBrush(nums[0], nums[1], nums[2])
+            if (p.size == 3) return base.sanitized()
+            fun bool(s: String) = when (s) { "true" -> true; "false" -> false; else -> null }
+            return base.copy(
+                pressureSize = bool(p[3]) ?: base.pressureSize,
+                minSize = p[4].toFloatOrNull() ?: base.minSize,
+                pressureOpacity = bool(p[5]) ?: base.pressureOpacity,
+                minOpacity = p[6].toFloatOrNull() ?: base.minOpacity,
+                tilt = bool(p[7]) ?: base.tilt,
+            ).sanitized()
         }
 
         // Slider mappings: size is logarithmic (fine control of small brushes).

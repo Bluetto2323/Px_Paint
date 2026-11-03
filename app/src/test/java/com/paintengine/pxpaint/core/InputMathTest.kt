@@ -14,13 +14,17 @@ class InputMathTest {
     @Test
     fun sampleBufferKeepsEverySampleInOrderAndIsReused() {
         val b = SampleBuffer(2)
-        for (i in 0 until 100) b.add(i.toFloat(), -i.toFloat(), i * 4f)
+        for (i in 0 until 100) b.add(i.toFloat(), -i.toFloat(), i * 4f, if (i % 2 == 0) i / 100f else Float.NaN)
         assertEquals(100, b.count)
         for (i in 0 until 100) {
-            assertEquals(i.toDouble(), b.data[i * 3].toDouble(), 0.0)
-            assertEquals(-i.toDouble(), b.data[i * 3 + 1].toDouble(), 0.0)
-            assertEquals(i * 4.0, b.data[i * 3 + 2].toDouble(), 0.0)
+            val o = i * SampleBuffer.STRIDE
+            assertEquals(i.toDouble(), b.data[o].toDouble(), 0.0)
+            assertEquals(-i.toDouble(), b.data[o + 1].toDouble(), 0.0)
+            assertEquals(i * 4.0, b.data[o + 2].toDouble(), 0.0)
+            if (i % 2 == 0) assertEquals(i / 100.0, b.data[o + 3].toDouble(), 1e-6) else assertTrue(b.data[o + 3].isNaN())
+            assertTrue("tilt / orientation absent stay NaN", b.data[o + 4].isNaN() && b.data[o + 5].isNaN())
         }
+        assertEquals(6, b.first().size)
         val grown = b.data
         b.clear()
         b.add(1f, 2f, 3f)
