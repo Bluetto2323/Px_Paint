@@ -74,24 +74,46 @@ The compositor rotates the image in landscape (extra composition pass).
 Visual orientation after rotation must be checked by eye; the pixel
 self-test reads the swapchain image, not the screen.
 
-## KI-4 — Canvas content is a list of rectangle fills, capped at 100 000 operations
+## KI-4 — Brush engine scope and limits (Block 3)
 
-Block 2 stores what you paint as the engine's content journal (each marker /
-eraser dab is one rectangle fill, replace semantics), which is also what
-PxPaint saves (`content.pxops`) and reloads. This is the reserved minimal
-content model until the brush engine and layers arrive:
+Block 2's rectangle "preview marker" (and its 100 000-operation cap) is gone:
+the canvas is now a raster painted by the brush engine. What is deliberately
+not there yet, or bounded:
 
-* when the journal reaches 100 000 operations further dabs are ignored and
-  PxPaint shows a one-time message (no data is lost, nothing is overwritten);
-* opacity, soft brushes, smudge, layers and undo are **not** implemented
-  (UI entries are present but disabled / marked "coming later").
+* **No pressure, tilt or velocity dynamics** (Block 4). Samples carry their
+  time already.
+* **One layer, no undo/redo.** The UI entry points stay disabled.
+* **Memory:** the canvas exists twice, CPU raster (source of truth) + GPU
+  copy, both only where painted. The canvas budget counts both, so the
+  largest square canvas a device accepts is about 1/sqrt(2) of what Block 2
+  accepted: with the A33's 1.5 GiB budget, up to 14 080 x 14 080 instead of
+  16 384 x 16 384 (the New Canvas sheet explains the limit).
+* **Stroke working memory:** while a stroke is drawn, every tile it touches
+  holds a copy of its previous pixels plus two 16-bit masks (512 KiB per
+  tile). A very long stroke with a huge brush on a huge canvas can touch
+  hundreds of tiles (~50 MiB per 100 tiles). Up to 48 tiles are kept pooled
+  between strokes.
+* **Blending is in sRGB space** with 8-bit premultiplied storage, like most
+  painting apps. Very transparent paint loses colour precision
+  (un-premultiplying at alpha a can be off by up to 255 / (2a)).
+* **CPU rasterisation:** dabs are rasterised and composited on the CPU
+  (render thread, optimised code) and only the changed rectangles are
+  uploaded. Measured on desktop CPUs (`pe_brush_test` B15) a 300 px brush
+  costs about 1 ms per frame of fast drawing; on the A33 it must be measured
+  (performance overlay, `docs/DEVICE_VALIDATION.md`).
+* **Block 2 projects** are imported (rectangles rasterised) and saved in the
+  new tile format at the first save; their old `content.pxops` file is kept
+  but no longer read.
 
 ## KI-5 — PxPaint UI has no automated on-device tests
 
 There is no Android device or emulator in CI. What is automated:
-JVM unit tests of the pure-Kotlin core (settings, canvas size rules, storage,
-search/sort, adaptive layout decisions, gesture math, formatting) and the
-engine host suites (`canvas` on Mesa GLES and lavapipe Vulkan). Screen
+JVM unit tests of the pure-Kotlin core (settings, brush settings, canvas
+size rules, tile storage format, project store, search/sort, adaptive layout
+decisions, gesture/stroke-gate math, formatting), the CPU brush engine suite
+(`pe_brush_test`) and the engine host suites (`canvas`, `brush`, `perf` on
+Mesa GLES and lavapipe Vulkan). Those GPUs are **software** renderers: host
+timings say nothing about the Mali-G68. Screen
 rendering, touch handling, insets and the real Mali-G68 driver are verified
 only by the manual A33 procedure in `docs/DEVICE_VALIDATION.md`.
 
@@ -102,3 +124,10 @@ native Vulkan loader state is process-global. While it is open, PxPaint's
 engine (if a canvas was opened) still holds its own device in the main
 process. Both are released normally; this only matters for memory use while
 diagnostics are on screen.
+
+## KI-7 — Block 3 latency/performance on the device is unmeasured
+
+The engine now reports input-to-present latency and brush CPU time
+(performance overlay, `inputLatency*` / `brush*Ms` status fields). Host runs
+on software GPUs only show the pipeline works and nothing is lost; the real
+numbers must come from the A33 (Block 3 checklist).

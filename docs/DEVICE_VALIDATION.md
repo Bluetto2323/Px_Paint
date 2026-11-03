@@ -144,3 +144,97 @@ Annota per ogni passo **OK / KO + cosa hai visto**; fai screenshot dei KO.
 1. Il REPORT della diagnostica (passo 1).
 2. La tabella OK/KO dei passi 2–5 con eventuali screenshot.
 3. Per qualsiasi crash: il passo esatto e cosa era aperto.
+
+---
+
+# Blocco 3 — Brush engine: checklist sul Galaxy A33
+
+Installa `PxPaint-block3-debug-….apk` (disinstalla prima la build
+precedente: firma debug diversa, vedi nota in fondo). Prima di iniziare:
+*Impostazioni → Indicatore delle prestazioni* **attivo**: mostra latenza
+input→schermo, tempo del pennello per frame e campioni ricevuti/elaborati.
+
+Per ogni passo annota **OK / KO** e, dove indicato, i numeri dell'indicatore.
+
+### 0. Verifica preliminare
+
+1. ⚙ → *Diagnostica del motore* → **DEVICE TEST** → **REPORT** (sezione D
+   decide KI-1).
+2. Nuova tela A4, bianca. Menu ⋯ → *Verifica il rendering della tela*:
+   "Rendering della tela verificato ✓".
+
+### 1. Disegno veloce continuo
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1.1 | Scarabocchi molto veloci (cerchi, zig-zag) per 10 s, pennello 24 px | linea continua, nessun buco, nessuna sequenza di cerchi visibili, curve morbide senza spigoli |
+| 1.2 | Guarda la punta mentre disegni | la linea arriva sotto il dito senza "rincorrerlo" |
+| 1.3 | Indicatore: `samples` | i due numeri (elaborati/ricevuti) uguali a riposo |
+| 1.4 | Indicatore: `latency` | annota media e massimo (ms) |
+| 1.5 | Solleva il dito di colpo alla fine di un tratto veloce | il tratto finisce esattamente dove hai sollevato il dito |
+
+### 2. Disegno lento e dettagliato
+
+| # | Azione | Atteso |
+|---|---|---|
+| 2.1 | Linea lentissima (5 s per 10 cm), pennello 4 px | spessore costante, bordi lisci, nessun "seghettato" |
+| 2.2 | Tocchi singoli (tap) | punto rotondo per ogni tap |
+| 2.3 | Scrittura a mano (firma) | leggibile, nessun punto mancante tra le lettere |
+
+### 3. Tratti sovrapposti e opacità
+
+| # | Azione | Atteso |
+|---|---|---|
+| 3.1 | Opacità 40 %, un solo tratto che si incrocia più volte (spirale) | tono uniforme, **nessun scurimento** dove il tratto si sovrappone a se stesso |
+| 3.2 | Secondo tratto 40 % sopra il primo | dove si incrociano due tratti diversi il colore è più scuro (normale) |
+| 3.3 | 20 tratti uno sull'altro allo 30 % | il colore si satura gradualmente, senza cambiare tinta |
+| 3.4 | Tela trasparente, bianco al 50 % | nessun bordo scuro attorno al tratto |
+
+### 4. Dimensioni del pennello
+
+| # | Azione | Atteso |
+|---|---|---|
+| 4.1 | 1 px, linee lente e veloci | linea sottile continua, non puntinata |
+| 4.2 | 500 px (massimo), tratti veloci | bordo dritto e liscio (nessuna ondulazione), tempo pennello nell'indicatore: annota il massimo |
+| 4.3 | Spaziatura 100 % con pennello 60 px | si vedono i singoli tocchi (comportamento voluto) |
+| 4.4 | Spaziatura di nuovo bassa (8 %) | tratto continuo |
+
+### 5. Tela ingrandita e ruotata
+
+| # | Azione | Atteso |
+|---|---|---|
+| 5.1 | Zoom 400 %, disegna | lo spessore sulla tela è quello impostato (sullo schermo 4× più grande), bordi antialias |
+| 5.2 | Zoom 25 %, disegna | stesso spessore relativo alla tela, nessun buco |
+| 5.3 | Ruota la tela di ~37°, disegna una linea dritta | la linea segue esattamente il dito |
+| 5.4 | Disegna a cavallo dei bordi dei tile (tela 4096², zoom 800 %, tratto lungo) | nessuna giunzione o riga visibile |
+
+### 6. Gesti e annullamento del tratto
+
+| # | Azione | Atteso |
+|---|---|---|
+| 6.1 | Appoggia un dito e subito il secondo (pizzica) | nessun segno lasciato sulla tela |
+| 6.2 | Disegna un tratto lungo, poi senza sollevare aggiungi un secondo dito | il tratto resta, poi la tela si muove/ingrandisce |
+| 6.3 | Disegna e intanto arriva una notifica / premi Home | il tratto disegnato fino a quel punto resta |
+
+### 7. Sessione lunga e salvataggio
+
+| # | Azione | Atteso |
+|---|---|---|
+| 7.1 | 10 minuti di disegno continuo su A4 con pennelli diversi | nessun rallentamento progressivo, nessun crash; annota latenza media/massimo alla fine |
+| 7.2 | Indietro alla galleria | miniatura uguale al disegno |
+| 7.3 | Chiudi l'app dalle recenti, riapri il progetto | disegno identico (anche le parti trasparenti e semitrasparenti) |
+| 7.4 | (Progetti del Blocco 2) | non verificabile sul telefono: disinstallare per installare una nuova build CI cancella i progetti. L'import dei vecchi progetti è coperto dai test automatici (C6b, `TileContentTest`) |
+| 7.5 | Gomma 100 % e 50 % | cancella del tutto / a metà, senza aloni |
+| 7.6 | Impostazioni → Motore grafico **OpenGL ES**, riavvia, ripeti 1.1, 3.1, 5.3 | stesso risultato visivo; annota la latenza |
+
+### Cosa mandare
+
+1. REPORT della diagnostica.
+2. Tabella OK/KO dei passi 1–7.
+3. I numeri dell'indicatore: latenza (media/massimo) con Vulkan e con OpenGL
+   ES, tempo massimo del pennello con 24 px e 500 px.
+4. Screenshot di qualsiasi difetto (buchi, ondulazioni, scurimenti, giunzioni).
+
+Nota: disinstallare l'app cancella i suoi progetti (memoria privata
+dell'app). Ogni build CI è firmata con una chiave debug diversa, quindi va
+sempre disinstallata la precedente.

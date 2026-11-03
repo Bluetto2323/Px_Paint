@@ -1,4 +1,4 @@
-# PxPaint — Blocco 2 (sul motore Paint Engine del Blocco 1)
+# PxPaint — Blocco 3 (brush engine) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -8,10 +8,17 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   *Impostazioni → Diagnostica del motore*.
 * **Blocco 2**: l'app **PxPaint** — galleria progetti, nuova tela, area di
   lavoro con tela GPU (zoom/pan/rotazione esatti, texture singola o a tile
-  secondo hardware e memoria), impostazioni, layout adattivi. Il pennello è
-  un marcatore rettangolare di prova: motore pennelli, livelli, sfumino e
-  undo completi sono fuori scope (interfacce riservate, vedi
-  `docs/ENGINE_API.md`).
+  secondo hardware e memoria), impostazioni, layout adattivi.
+* **Blocco 3**: **brush engine** nativo (`app/src/main/cpp/brush/`):
+  tratti continui (spline Catmull-Rom centripeta attraverso ogni campione),
+  tocchi rotondi antialias a spaziatura costante, opacità esatta (maschera
+  di copertura per tratto, niente scurimenti nelle sovrapposizioni),
+  gomma, annullamento del tratto. La tela è un raster CPU a tile
+  (fonte di verità) copiato sulla GPU solo nelle regioni modificate; su
+  Vulkan gli upload sono registrati nel frame (nessun submit+attesa).
+  Salvataggio a tile compressi (`content.pxtiles`), import dei progetti del
+  Blocco 2. Pressione/stilo, livelli e undo sono fuori scope (Blocco 4+).
+  Dettagli: `docs/ENGINE_API.md`, `docs/BLOCK3_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).
@@ -42,9 +49,13 @@ app/src/main/
     graphics/vulkan/               loader dinamico, device, swapchain, risorse
     graphics/opengles/             EGL + GLES 3.0 (3.1/3.2 rilevati a runtime)
     diagnostics/                   report GPU, stato live, auto-test
-    engine/                        Engine (render thread), TestScene, CanvasController
-    canvas/                        Viewport, TileGrid, StoragePolicy, CanvasSurface,
-                                   CanvasRenderer, CanvasSelfTest
+    brush/                         brush engine: StrokePath (spline + spaziatura),
+                                   StrokeCompositor (dab antialias, maschera, base),
+                                   BrushEngine (coda input, ciclo di vita del tratto)
+    engine/                        Engine (render thread), TestScene, CanvasController,
+                                   CanvasDocument (raster + pennello, thread-safe)
+    canvas/                        Viewport, TileGrid, StoragePolicy, RasterStore,
+                                   CanvasSurface, CanvasRenderer, CanvasSelfTest
     jni/                           JniBridge
     shaders/                       sorgenti GLSL + header SPIR-V generato
 tools/
@@ -102,7 +113,9 @@ mano da *Actions → Android build → Run workflow*) e:
    diagnostica nel processo `:diagnostics`;
 4. pubblica l'APK come artifact `PxPaint-debug-apk-<commit>` (30 giorni);
 5. in un job separato esegue i test host del motore su Mesa (GLES) e
-   lavapipe (Vulkan software), inclusa la suite `canvas` su entrambi.
+   lavapipe (Vulkan software): test CPU `pe_canvas_test` e `pe_brush_test`,
+   poi le suite `basic`, `lifecycle`, `faults`, `canvas`, `brush` e `perf`
+   su entrambi i backend.
 
 Installare dal telefono:
 
@@ -110,7 +123,7 @@ Installare dal telefono:
    scarica gli artifact) → **Actions** → ultima esecuzione verde di
    *Android build* → sezione **Artifacts** → `PxPaint-debug-apk-…`.
 2. Si scarica uno **.zip**: aprilo con *File* / *I miei file* di Samsung ed
-   estrai `PxPaint-block2-debug-….apk`.
+   estrai `PxPaint-block3-debug-….apk`.
 3. Tocca l'APK. La prima volta Android chiede di consentire l'installazione
    da quell'app (*Impostazioni → Installa app sconosciute*): consentila solo
    per *I miei file* / il browser usato.
@@ -161,7 +174,7 @@ non cambia la modalità), **SELF-TEST**, **LOG** (report completo in logcat).
 
 ### Cosa verificare sul dispositivo (diagnostica Blocco 1)
 
-Per PxPaint (Blocco 2) vedi `docs/DEVICE_VALIDATION.md`.
+Per PxPaint (Blocchi 2 e 3) vedi `docs/DEVICE_VALIDATION.md`.
 
 | Test | Come | Atteso |
 |---|---|---|
@@ -206,5 +219,6 @@ Linux ed esegue il ciclo di vita completo su una finestra headless:
 OpenGL ES su Mesa llvmpipe, Vulkan su SwiftShader. La build di test abilita
 `PE_ENABLE_TEST_HOOKS` (`core/TestHooks.h`) per allargare finestre temporali e
 iniettare guasti; nella build Android gli hook non esistono.
-Suite: `basic`, `lifecycle`, `faults`, `canvas`. Vedi
+Suite: `basic`, `lifecycle`, `faults`, `canvas`, `brush`, `perf`; più i
+test CPU `pe_canvas_test` e `pe_brush_test`. Vedi
 `tools/host_test/run_host_tests.sh` (`--asan` per AddressSanitizer+UBSan).
