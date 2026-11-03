@@ -29,12 +29,16 @@ import com.paintengine.pxpaint.core.ToolKind
 import com.paintengine.pxpaint.core.TouchRouter
 import com.paintengine.pxpaint.input.StylusInput
 import com.paintengine.pxpaint.core.TileContent
-import com.paintengine.pxpaint.core.ToolBrush
+import com.paintengine.pxpaint.core.BrushEncoding
+import com.paintengine.pxpaint.core.BrushParams
+import com.paintengine.pxpaint.core.BrushTool
 import com.paintengine.pxpaint.core.TwoFinger
 import com.paintengine.pxpaint.core.WorkspaceSpec
 import com.paintengine.pxpaint.core.tr
 import com.paintengine.pxpaint.ui.CheckerDrawable
+import com.paintengine.pxpaint.ui.BrushPreviewView
 import com.paintengine.pxpaint.ui.ColorPicker
+import com.paintengine.pxpaint.ui.MaxHeight
 import com.paintengine.pxpaint.ui.Icon
 import com.paintengine.pxpaint.ui.IconButton
 import com.paintengine.pxpaint.ui.IconDrawable
@@ -70,12 +74,12 @@ import kotlin.math.roundToInt
  */
 class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host) {
     enum class Tool(val icon: Icon, val label: S, val desc: S) {
-        MARKER(Icon.MARKER, S.TOOL_MARKER, S.TOOL_MARKER_DESC),
+        MARKER(Icon.BRUSH, S.TOOL_MARKER, S.TOOL_MARKER_DESC),
         ERASER(Icon.ERASER, S.TOOL_ERASER, S.TOOL_ERASER_DESC),
         MOVE(Icon.MOVE, S.TOOL_MOVE, S.TOOL_MOVE_DESC),
     }
 
-    private enum class Panel { NONE, TOOL, COLOR, LAYERS }
+    private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY }
 
     private val handler = Handler(Looper.getMainLooper())
     private var engine: NativeEngine? = null
@@ -113,6 +117,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var prevB = P(0.0, 0.0)
     private var panLast = P(0.0, 0.0)
     private val router = TouchRouter(RouterActions())
+    /** Debug-only scripted state (DebugDemo), run once the canvas is loaded. */
+    var demo: DebugDemo.Script? = null
 
 
     private val poll = object : Runnable {
@@ -148,7 +154,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     override fun onShown() {
         if (!opened) openCanvas()
-        else if (!closed) engine?.setCanvasColors(theme.workspace, meta.paperArgb, meta.transparentBackground)
+        else if (!closed) {
+            engine?.setCanvasColors(theme.workspace, meta.paperArgb, meta.transparentBackground)
+            buildChrome()   // back from the brush editor: brush rows / panels show the current brush
+        }
         handler.removeCallbacks(poll)
         handler.post(poll)
     }
@@ -218,6 +227,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     savedRevision = e.canvasContentRevision()
                     lastAutosave = SystemClock.uptimeMillis()
                     loaded = true
+                    demo?.let { d -> handler.postDelayed({ runDemo(d) }, 600) }
                 }.onFailure {
                     // Never overwrite damaged content with an empty canvas.
                     host.overlays.message(tr(S.CANVAS_OPEN_FAILED, it.message ?: "?"), long = true)
@@ -231,6 +241,47 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private class OpenFailure(message: String) : Exception(message)
+
+    /** DebugDemo: one stroke per built-in preset (finger-like samples), then the requested panel. */
+    private fun runDemo(d: DebugDemo.Script) {
+        demo = null
+        val e = engine ?: return
+        val sv = surfaceView ?: return
+        val w = sv.width.toFloat()
+        val h = sv.height.toFloat()
+        val presets = host.brushes.all().filter { it.builtIn }
+        val colors = intArrayOf(0xFF1F2A44.toInt(), 0xFF8C2F39.toInt(), 0xFF2E6F57.toInt(), 0xFF3B4C8C.toInt())
+        for ((i, p) in presets.withIndex()) {
+            val col = i % 2
+            val row = i / 2
+            val x0 = w * (0.08f + col * 0.47f)
+            val y = h * (0.16f + row * 0.075f)
+            val size = minOf(p.params.size, h * 0.045f)
+            val brush = NativeEngine.Brush(
+                BrushEncoding.params(p.params, size = size, pressureSmoothing = 0f), BrushEncoding.flags(p.params, false),
+                colors[i % colors.size], null,
+            )
+            val n = 40
+            val pts = FloatArray(n * NativeEngine.SAMPLE_FLOATS) { Float.NaN }
+            for (k in 0 until n) {
+                val t = k / (n - 1f)
+                pts[k * 6] = x0 + w * 0.38f * t
+                pts[k * 6 + 1] = y + h * 0.012f * kotlin.math.sin(t * 6.283f)
+                pts[k * 6 + 2] = k * 8f
+            }
+            e.strokeBegin(pts.copyOfRange(0, 6), brush)
+            e.strokeSamples(pts.copyOfRange(6, pts.size), n - 1)
+            e.strokeEnd()
+        }
+        when (d.panel) {
+            "workspace" -> setPanel(Panel.TOOL)
+            "library" -> {
+                d.filter?.let { libraryState.filter = it }
+                setPanel(Panel.LIBRARY)
+            }
+            "editor" -> host.push(BrushEditorScreen(host, BrushTool.PAINT))
+        }
+    }
 
     /** Leaves the workspace after the current callback (never re-enters the host's navigation). */
     private fun leave() {
@@ -394,17 +445,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             samples.clear()
             // The first sample: this pointer's current state (no history before the stroke).
             if (!StylusInput.append(e, pointerId, kind, strokeT0, samples, includeHistory = false)) return
-            val t = toolBrush(if (eraser) Tool.ERASER else tool)
-            val st = host.settings
+            // The selected library preset of the tool, with its quick size / opacity.
+            val p = host.brushes.effective(if (eraser) BrushTool.ERASER else BrushTool.PAINT)
             engine.strokeBegin(
                 samples.first(),
                 NativeEngine.Brush(
-                    diameter = t.size, opacity = t.opacity, argb = if (eraser) 0xFF000000.toInt() else color,
-                    spacing = t.spacing, erase = eraser,
-                    pressureSize = t.pressureSize, minSizeFraction = t.minSize,
-                    pressureOpacity = t.pressureOpacity, minOpacityFraction = t.minOpacity,
-                    tiltShape = t.tilt, tiltStrength = 1f,
-                    pressureSmoothing = st.pressureSmoothing, pressureCurve = host.pressureTable(),
+                    BrushEncoding.params(p, pressureSmoothing = host.settings.pressureSmoothing),
+                    BrushEncoding.flags(p, eraser),
+                    if (eraser) 0xFF000000.toInt() else color,
+                    host.pressureTable(),
                 ),
             )
         }
@@ -468,12 +517,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
     }
 
-    private fun toolBrush(t: Tool): ToolBrush = if (t == Tool.ERASER) host.brush.eraser else host.brush.marker
+    private fun brushTool(t: Tool): BrushTool = if (t == Tool.ERASER) BrushTool.ERASER else BrushTool.PAINT
 
-    private fun setToolBrush(t: Tool, b: ToolBrush) {
-        val s = host.brush
-        host.updateBrush(if (t == Tool.ERASER) s.copy(eraser = b.sanitized()) else s.copy(marker = b.sanitized()))
+    /** Changes the selected preset of [t] (a built-in keeps it as a resettable customisation). */
+    private fun updatePreset(t: Tool, change: (BrushParams) -> BrushParams) {
+        val lib = host.brushes
+        val bt = brushTool(t)
+        host.updateBrushes(lib.update(lib.selectedId(bt), change(lib.selectedPreset(bt).params)))
     }
+
+    private val libraryState = BrushLibraryPanel.State()
 
     // --------------------------------------------------------------- chrome
     private fun buildChrome() {
@@ -598,6 +651,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         for (t in Tool.entries) {
             val b = IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null)
             b.setOnClickListener { selectTool(t) }
+            if (t != Tool.MOVE) b.setOnLongClickListener {
+                // Long press: straight to the brush library of that tool.
+                if (tool != t) selectTool(t)
+                setPanel(Panel.LIBRARY)
+                refreshDock()
+                true
+            }
             toolButtons[t] = b
             box.addView(b)
         }
@@ -646,7 +706,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private fun togglePanel(p: Panel) = setPanel(if (panel == p) Panel.NONE else p)
 
     private fun setPanel(p: Panel) {
+        val leftLibrary = panel == Panel.LIBRARY && p != Panel.LIBRARY
         panel = p
+        if (leftLibrary && spec?.sidePanelDocked == true) {
+            buildChrome()
+            return
+        }
         panelView?.let { chrome?.removeView(it) }
         panelView = null
         if (p != Panel.NONE) showPanel(p)
@@ -656,11 +721,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val c = chrome ?: return
         panelView?.let { c.removeView(it) }
         val s = spec ?: return
-        if (p == Panel.TOOL && tool == Tool.MOVE) return
+        if ((p == Panel.TOOL || p == Panel.LIBRARY) && tool == Tool.MOVE) return
         val content = when (p) {
             Panel.TOOL -> toolSettings()
             Panel.COLOR -> colorPicker()
             Panel.LAYERS -> layersPanel()
+            Panel.LIBRARY -> libraryPanel()
             Panel.NONE -> return
         }
         val card = column(context, theme, horizontalPadding = false) {
@@ -671,7 +737,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             addView(content)
         }
         val ins = host.insets
-        val width = minOf(theme.dp(320), c.width - theme.dp(24)).coerceAtLeast(theme.dp(240))
+        val width = minOf(theme.dp(if (p == Panel.LIBRARY) 360 else 320), c.width - theme.dp(24)).coerceAtLeast(theme.dp(240))
         val lp = when (s.dock) {
             DockPlacement.BOTTOM -> FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
                 bottomMargin = ins.bottom + theme.dp(14) + theme.touchTarget + theme.dp(if (s.toolLabels) 40 else 24)
@@ -684,27 +750,66 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             }
         }
         val scroll = android.widget.ScrollView(context).apply { addView(card) }
-        panelView = scroll
-        c.addView(scroll, lp)
+        // Never taller than the space between the top bar and the dock.
+        val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 8 else 16)
+        val reserved = ins.top + barH + theme.dp(24) + (if (s.dock == DockPlacement.BOTTOM) lp.bottomMargin else ins.bottom + theme.dp(16))
+        val capped = MaxHeight(context, (c.height - reserved).coerceAtLeast(theme.dp(240))).apply { addView(scroll) }
+        if (s.dock != DockPlacement.BOTTOM) lp.topMargin = ins.top + barH + theme.dp(12)
+        panelView = capped
+        c.addView(capped, lp)
     }
 
     private fun toolSettings(): View = column(context, theme, horizontalPadding = false) {
         val t = if (tool == Tool.MOVE) Tool.MARKER else tool
+        val bt = brushTool(t)
         addView(theme.text(context, tr(t.label), PxTheme.Type.HEADLINE))
-        addView(theme.text(context, tr(t.desc), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(6)) })
-        val b = toolBrush(t)
+        addView(theme.text(context, tr(t.desc), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(8)) })
+        // The tool's brush: live preview + name; opens the library.
+        val preset = host.brushes.selectedPreset(bt)
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = theme.touchTarget + theme.dp(8)
+            setPadding(theme.dp(6), theme.dp(4), theme.dp(4), theme.dp(4))
+            background = theme.pressable(theme.rounded(theme.surface, theme.radiusS, theme.outline), theme.radiusS)
+            isClickable = true
+            contentDescription = "${tr(S.CHANGE_BRUSH)}: ${preset.displayName()}"
+            setOnClickListener { setPanel(Panel.LIBRARY) }
+            addView(BrushPreviewView(context, theme, host.previews, false) { host.pressureTable() }.also { it.show(preset.params) },
+                LinearLayout.LayoutParams(theme.dp(104), theme.dp(40)))
+            addView(column(context, theme, horizontalPadding = false) {
+                setPadding(theme.dp(10), 0, 0, 0)
+                addView(theme.text(context, preset.displayName(), PxTheme.Type.LABEL, lines = 1))
+                addView(theme.text(context, tr(S.CHANGE_BRUSH), PxTheme.Type.CAPTION, theme.accent, lines = 1))
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) },
+                LinearLayout.LayoutParams(theme.dp(18), theme.dp(18)))
+        })
+        val b = host.brushes.effective(bt)
         val percent = { f: Float -> "${(f * 100).roundToInt()}%" }
         addView(sliderRow(tr(S.SIZE), BrushState.sizeToSlider(b.size), { BrushState.sizeLabel(BrushState.sliderToSize(it)) }) {
-            setToolBrush(t, toolBrush(t).copy(size = BrushState.sliderToSize(it)))
+            host.updateBrushes(host.brushes.setLive(bt, size = BrushState.sliderToSize(it)))
         })
         addView(sliderRow(tr(S.OPACITY), b.opacity, { percent(BrushState.sliderToOpacity(it)) }) {
-            setToolBrush(t, toolBrush(t).copy(opacity = BrushState.sliderToOpacity(it)))
+            host.updateBrushes(host.brushes.setLive(bt, opacity = BrushState.sliderToOpacity(it)))
         })
-        addView(sliderRow(tr(S.SPACING), BrushState.spacingToSlider(b.spacing), { percent(BrushState.sliderToSpacing(it)) }) {
-            setToolBrush(t, toolBrush(t).copy(spacing = BrushState.sliderToSpacing(it)))
+        addView(Widgets.row(context, theme, tr(S.EDIT_BRUSH), null,
+            View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {
+                it.layoutParams = LinearLayout.LayoutParams(theme.dp(18), theme.dp(18))
+            }).apply {
+            setPadding(0, paddingTop, 0, paddingBottom)
+            isClickable = true
+            setOnClickListener { host.push(BrushEditorScreen(host, bt)) }
         })
-        addView(theme.text(context, tr(S.SPACING_HINT), PxTheme.Type.CAPTION, theme.textTertiary).apply { setPadding(0, theme.dp(4), 0, 0) })
         addView(stylusSettings(t))
+    }
+
+    private fun libraryPanel(): View {
+        val t = if (tool == Tool.MOVE) Tool.MARKER else tool
+        val panel = BrushLibraryPanel(host, brushTool(t), libraryState,
+            onEdit = { bt -> host.push(BrushEditorScreen(host, bt)) },
+            onChanged = { showPanel(Panel.LIBRARY) })
+        return panel.view()
     }
 
     /** Pressure / tilt dynamics of the tool (stylus strokes only). */
@@ -715,25 +820,25 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val m = host.stylus
         addView(theme.text(context, if (m.pressureAvailable) tr(S.PRESSURE_STYLUS_READY) else tr(S.NO_PRESSURE_STYLUS),
             PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(4)) })
-        val b = toolBrush(t)
+        val b = host.brushes.effective(brushTool(t))
         val percent = { f: Float -> "${(f * 100).roundToInt()}%" }
         fun fraction(v: Float) = (BrushState.MIN_PRESSURE_FRACTION + v * (1f - BrushState.MIN_PRESSURE_FRACTION)).let { (it * 100).roundToInt() / 100f }
         fun slider(f: Float) = ((f - BrushState.MIN_PRESSURE_FRACTION) / (1f - BrushState.MIN_PRESSURE_FRACTION)).coerceIn(0f, 1f)
         addView(compactSwitch(tr(S.PRESSURE_SIZE), null, b.pressureSize, true) {
-            setToolBrush(t, toolBrush(t).copy(pressureSize = it))
+            updatePreset(t) { p -> p.copy(pressureSize = it) }
         })
         addView(sliderRow(tr(S.MIN_SIZE), slider(b.minSize), { percent(fraction(it)) }) {
-            setToolBrush(t, toolBrush(t).copy(minSize = fraction(it)))
+            updatePreset(t) { p -> p.copy(minSize = fraction(it)) }
         })
         addView(compactSwitch(tr(S.PRESSURE_OPACITY), null, b.pressureOpacity, true) {
-            setToolBrush(t, toolBrush(t).copy(pressureOpacity = it))
+            updatePreset(t) { p -> p.copy(pressureOpacity = it) }
         })
         addView(sliderRow(tr(S.MIN_OPACITY), slider(b.minOpacity), { percent(fraction(it)) }) {
-            setToolBrush(t, toolBrush(t).copy(minOpacity = fraction(it)))
+            updatePreset(t) { p -> p.copy(minOpacity = fraction(it)) }
         })
         val tilt = m.tiltAvailable
         addView(compactSwitch(tr(S.TILT_SHAPE), if (tilt) null else tr(S.TILT_UNAVAILABLE), b.tilt && tilt, tilt) {
-            setToolBrush(t, toolBrush(t).copy(tilt = it))
+            updatePreset(t) { p -> p.copy(tilt = it) }
         })
         addView(Widgets.row(context, theme, tr(S.PRESSURE_SETTINGS), null,
             View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {

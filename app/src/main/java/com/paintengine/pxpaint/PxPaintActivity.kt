@@ -19,6 +19,8 @@ import android.widget.FrameLayout
 import com.paintengine.app.DiagnosticsActivity
 import com.paintengine.engine.NativeEngine
 import com.paintengine.pxpaint.core.AppSettings
+import com.paintengine.pxpaint.core.BrushLibrary
+import com.paintengine.pxpaint.core.BrushPresetFormat
 import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.CanvasSizeRules
 import com.paintengine.pxpaint.core.PressureCurve
@@ -28,9 +30,11 @@ import com.paintengine.pxpaint.core.ProjectStore
 import com.paintengine.pxpaint.core.RenderPreference
 import com.paintengine.pxpaint.core.S
 import com.paintengine.pxpaint.core.ThemeMode
+import com.paintengine.pxpaint.screens.DebugDemo
 import com.paintengine.pxpaint.screens.GalleryScreen
 import com.paintengine.pxpaint.screens.PxHost
 import com.paintengine.pxpaint.screens.Screen
+import com.paintengine.pxpaint.ui.BrushPreviews
 import com.paintengine.pxpaint.ui.OverlayHost
 import com.paintengine.pxpaint.ui.PxTheme
 import java.io.File
@@ -62,6 +66,14 @@ class PxPaintActivity : Activity(), PxHost {
         private set
     override lateinit var stylus: StylusMonitor
         private set
+    override lateinit var brushes: BrushLibrary
+        private set
+    override val previews = BrushPreviews()
+    private var brushesDirty = false
+    private val saveBrushes = Runnable {
+        brushesDirty = false
+        BrushLibraryStore.saveAsync(this, brushes, io)
+    }
     private var tableKey: Pair<PressureCurve, Float>? = null
     private var table = FloatArray(0)
     override lateinit var overlays: OverlayHost
@@ -97,6 +109,7 @@ class PxPaintActivity : Activity(), PxHost {
         super.onCreate(savedInstanceState)
         settings = SettingsStore.load(this)
         brush = SettingsStore.loadBrush(this)
+        brushes = BrushLibraryStore.load(this)
         stylus = StylusMonitor(this)
         store = ProjectStore(File(filesDir, "projects"))
         readConfiguration(resources.configuration)
@@ -119,6 +132,7 @@ class PxPaintActivity : Activity(), PxHost {
         }
         setContentView(root)
         push(GalleryScreen(this))
+        DebugDemo.from(intent)?.let { DebugDemo.start(this, it) }
     }
 
     override fun onResume() {
@@ -129,6 +143,10 @@ class PxPaintActivity : Activity(), PxHost {
     }
 
     override fun onPause() {
+        if (brushesDirty) {
+            handler.removeCallbacks(saveBrushes)
+            saveBrushes.run()
+        }
         resumed = false
         top()?.onPause()
         engine?.pause()
@@ -139,6 +157,10 @@ class PxPaintActivity : Activity(), PxHost {
         // Screens close their canvas (queueing the last save) first; the disk
         // work finishes (it reads the engine) before the engine goes.
         for (s in stack.asReversed()) runCatching { s.onRemoved() }
+        if (brushesDirty) {
+            handler.removeCallbacks(saveBrushes)
+            saveBrushes.run()
+        }
         stack.clear()
         views.clear()
         io.shutdown()
@@ -146,6 +168,7 @@ class PxPaintActivity : Activity(), PxHost {
         engine?.close()
         engine = null
         stylus.close()
+        previews.close()
         super.onDestroy()
     }
 
@@ -286,6 +309,15 @@ class PxPaintActivity : Activity(), PxHost {
         SettingsStore.saveBrush(this, state)
     }
 
+    override fun updateBrushes(library: BrushLibrary) {
+        if (library == brushes) return
+        brushes = library
+        brushesDirty = true
+        // Debounced: sliders send many small changes.
+        handler.removeCallbacks(saveBrushes)
+        handler.postDelayed(saveBrushes, 400)
+    }
+
     override fun tipsShown(id: String): Boolean = tipPrefs().getBoolean(id, false)
     override fun markTipShown(id: String) { tipPrefs().edit().putBoolean(id, true).apply() }
     override fun resetTips() { tipPrefs().edit().clear().apply() }
@@ -423,5 +455,53 @@ object SettingsStore {
         for ((k, v) in settings.encode()) e.putString(k, v)
         e.putString("version", AppSettings.VERSION.toString())
         e.apply()
+    }
+}
+
+/**
+ * Brush library on disk: filesDir/brushes/library.pxb (BrushLibrary.encode),
+ * written atomically (temp file + rename) on the io thread. Built-in presets
+ * come from assets/brushes/builtin.pxb. First start with Block 5: migrated
+ * from the Block 3/4 brush settings (BrushLibrary.migrate).
+ */
+object BrushLibraryStore {
+    private const val TAG = "PxPaint"
+
+    fun builtIns(context: Context): List<com.paintengine.pxpaint.core.BrushPreset> =
+        runCatching { context.assets.open("brushes/builtin.pxb").bufferedReader().use { BrushPresetFormat.parsePresets(it.readText()) } }
+            .onFailure { Log.e(TAG, "Built-in brushes unreadable", it) }
+            .getOrDefault(emptyList())
+
+    private fun file(context: Context) = File(File(context.filesDir, "brushes"), "library.pxb")
+
+    fun load(context: Context): BrushLibrary {
+        val builtIns = builtIns(context)
+        val f = file(context)
+        if (f.exists()) {
+            runCatching { BrushLibrary.decode(f.readText(), builtIns) }.getOrNull()?.let { return it }
+            Log.w(TAG, "Brush library unreadable, keeping a copy and starting fresh")
+            runCatching { f.copyTo(File(f.parentFile, "library.damaged.pxb"), overwrite = true) }
+        }
+        val prefs = context.getSharedPreferences("pxpaint.brush", Context.MODE_PRIVATE)
+        val legacy = if (prefs.contains("marker")) SettingsStore.loadBrush(context) else null
+        return BrushLibrary.migrate(builtIns, legacy)
+    }
+
+    fun saveAsync(context: Context, library: BrushLibrary, io: ExecutorService) {
+        val text = library.encode()
+        val f = file(context)
+        runCatching {
+            io.execute {
+                runCatching {
+                    f.parentFile?.mkdirs()
+                    val tmp = File(f.parentFile, "library.pxb.tmp")
+                    tmp.writeText(text)
+                    if (!tmp.renameTo(f)) {
+                        f.delete()
+                        tmp.renameTo(f)
+                    }
+                }.onFailure { Log.e(TAG, "Brush library not saved", it) }
+            }
+        }
     }
 }

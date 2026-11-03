@@ -381,3 +381,14 @@ class PxSlider(context: Context, private val theme: PxTheme, description: String
 fun View.markHeading() {
     if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
 }
+
+/** Wraps one child and limits its height (floating panels scroll inside it). */
+class MaxHeight(context: Context, private val maxH: Int) : FrameLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val spec = when (MeasureSpec.getMode(heightMeasureSpec)) {
+            MeasureSpec.UNSPECIFIED -> MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST)
+            else -> MeasureSpec.makeMeasureSpec(minOf(maxH, MeasureSpec.getSize(heightMeasureSpec)), MeasureSpec.AT_MOST)
+        }
+        super.onMeasure(widthMeasureSpec, spec)
+    }
+}

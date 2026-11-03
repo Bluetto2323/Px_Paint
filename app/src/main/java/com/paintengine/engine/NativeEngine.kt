@@ -149,24 +149,14 @@ class NativeEngine(config: Config) : AutoCloseable {
 
     // --- Brush strokes (UI thread; never block, processed at the next frame) -
     /**
-     * Brush of one stroke. [diameter] in CANVAS pixels (the maximum size when
-     * pressure controls size), [opacity] 0..1, [argb] straight colour,
-     * [spacing] = dab distance / diameter. Pressure / tilt dynamics act only
-     * on strokes whose samples carry those axes (stylus); finger strokes are
-     * drawn at full size and opacity. [pressureCurve]: response table of
-     * [PRESSURE_CURVE_SIZE] values (0..1, monotonic), null = linear.
+     * Brush of one stroke, already encoded for the engine: [params] = 21
+     * floats, [flags] = bit set (layout: docs/ENGINE_API.md, built by
+     * pxpaint.core.BrushEncoding). Diameter in CANVAS pixels, [argb] straight
+     * colour, [pressureCurve] = response table of [PRESSURE_CURVE_SIZE]
+     * values (0..1, monotonic) or null (linear). Pressure / tilt dynamics act
+     * only on strokes whose samples carry those axes (stylus).
      */
-    class Brush(
-        val diameter: Float, val opacity: Float, val argb: Int, val spacing: Float, val erase: Boolean,
-        val pressureSize: Boolean = false, val minSizeFraction: Float = 0.2f,
-        val pressureOpacity: Boolean = false, val minOpacityFraction: Float = 0.2f,
-        val tiltShape: Boolean = false, val tiltStrength: Float = 1f,
-        val pressureSmoothing: Float = 0.35f, val pressureCurve: FloatArray? = null,
-    ) {
-        internal fun params() = floatArrayOf(diameter, opacity, spacing, minSizeFraction, minOpacityFraction, tiltStrength, pressureSmoothing)
-        internal fun flags() = (if (erase) 1 else 0) or (if (pressureSize) 2 else 0) or
-            (if (pressureOpacity) 4 else 0) or (if (tiltShape) 8 else 0)
-    }
+    class Brush(val params: FloatArray, val flags: Int, val argb: Int, val pressureCurve: FloatArray? = null)
 
     /**
      * Starts a stroke. [sample] holds [SAMPLE_FLOATS] floats: x, y (SCREEN
@@ -174,7 +164,7 @@ class NativeEngine(config: Config) : AutoCloseable {
      * tilt (rad), orientation (rad, screen space); NaN = axis not reported.
      */
     fun strokeBegin(sample: FloatArray, brush: Brush) =
-        withHandle { nativeStrokeBegin(it, sample, brush.params(), brush.argb, brush.flags(), brush.pressureCurve) }
+        withHandle { nativeStrokeBegin(it, sample, brush.params, brush.argb, brush.flags, brush.pressureCurve) }
 
     /** [samples]: [count] samples of [SAMPLE_FLOATS] floats each (see [strokeBegin]), oldest first. */
     fun strokeSamples(samples: FloatArray, count: Int) = withHandle { nativeStrokeSamples(it, samples, count) }
@@ -283,6 +273,21 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeCanvasThumbnail(handle: Long, maxSide: Int): IntArray?
         @JvmStatic private external fun nativeLoadCanvasContent(handle: Long, ops: IntArray): Int
         @JvmStatic private external fun nativeCanvasContentRevision(handle: Long): Long
+
+        /**
+         * Renders brush preview strokes with the engine's real brush code on
+         * the calling thread (no engine instance needed; CPU only). [strokes]:
+         * [n, then per stroke: count, diameter (<= 0: brush), opacity (< 0:
+         * brush), count samples of [SAMPLE_FLOATS] floats in preview pixels].
+         * Returns width * height opaque ARGB (strokes over [backgroundArgb]).
+         */
+        fun renderBrushPreview(brush: Brush, width: Int, height: Int, strokes: FloatArray, backgroundArgb: Int): IntArray? =
+            if (loadError == null) nativeRenderBrushPreview(brush.params, brush.argb, brush.flags, brush.pressureCurve, width, height, strokes, backgroundArgb)
+            else null
+
+        @JvmStatic private external fun nativeRenderBrushPreview(
+            params: FloatArray, argb: Int, flags: Int, curve: FloatArray?, width: Int, height: Int, strokes: FloatArray, background: Int,
+        ): IntArray?
 
         /** Last [maxLines] native log lines (all sources), works without an engine. */
         fun recentLog(maxLines: Int): String = if (loadError == null) nativeRecentLog(maxLines) else ""

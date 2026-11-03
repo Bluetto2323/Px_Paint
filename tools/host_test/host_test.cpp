@@ -35,6 +35,7 @@
 #include "core/Time.h"
 #include "diagnostics/Diagnostics.h"
 #include "engine/Engine.h"
+#include "PresetFile.h"
 #include "platform/PlatformWindow.h"
 
 using namespace std::chrono_literals;
@@ -1201,6 +1202,74 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
             for (int y = 530; y <= 590; ++y) h += c10.grey(450, y) < 128;  // stays inside the canvas
             std::printf("    tilted dab on screen (view rotated 90 deg): %d x %d px\n", w, h);
             check(w > 40 && std::abs(h - 20) <= 2, "S10: tilt ellipse follows the stylus direction on screen, view rotated");
+        }
+
+        section("S11 brush library presets on the GPU (Block 5): display == CPU raster, all 12 presets");
+        {
+            bool header = false;
+            const auto presets = pxtest::loadPresets(PE_BRUSH_ASSET, &header);
+            check(header && presets.size() == 12, "S11: shipped preset file read (12 presets)");
+            check(engine.createCanvas({1200, 800, kPaper}).empty(), "S11: canvas");
+            engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.rasterTiles == 0; }, 10s);
+            double one[] = {1.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetZoomAt, one, 3);
+            double r0[] = {0.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetRotationAt, r0, 3);
+            // 4 columns x 3 rows of short S-strokes, one per preset, 30 px.
+            struct Box { int x0, y0, x1, y1; };
+            std::vector<Box> boxes;
+            for (size_t i = 0; i < presets.size(); ++i) {
+                const int col = static_cast<int>(i % 4), row = static_cast<int>(i / 4);
+                const double cx = 30 + col * 215, cy = 70 + row * 170;
+                std::vector<pe::canvas::Vec2> pts;
+                for (int k = 0; k < 40; ++k) {
+                    const double t = k / 39.0;
+                    pts.push_back({cx + 25 + 140 * t, cy + 30 * std::sin(t * 2 * pe::canvas::kPi)});
+                }
+                pe::brush::BrushSettings b = presets[i].s;
+                b.diameter = 30;
+                b.argb = 0xFF203060u;
+                screenStroke(engine, b, pts, 4);
+                boxes.push_back({static_cast<int>(cx), static_cast<int>(cy - 60), static_cast<int>(cx + 200), static_cast<int>(cy + 60)});
+            }
+            check(brushIdle(engine), "S11: all preset strokes processed");
+            Cap c11;
+            if (capture(engine, c11)) {
+                bool inked = true, match = true;
+                double worstRel = 0;
+                for (size_t i = 0; i < boxes.size(); ++i) {
+                    const Box& bx = boxes[i];
+                    double gpu = 0, cpu = 0;
+                    for (int y = bx.y0; y <= bx.y1; ++y)
+                        for (int x = bx.x0; x <= bx.x1; ++x) {
+                            gpu += 255 - c11.at(x, y)[2];  // blue channel: ink is dark on white
+                            const pe::canvas::Vec2 cp = engine.screenToCanvas({x + 0.5, y + 0.5});
+                            const auto px = engine.document().pixel(static_cast<int32_t>(std::floor(cp.x)), static_cast<int32_t>(std::floor(cp.y)));
+                            cpu += 255 - (px.b + 255.0 * (1.0 - px.a / 255.0));
+                        }
+                    const double rel = std::abs(gpu - cpu) / std::max(1.0, cpu);
+                    worstRel = std::max(worstRel, rel);
+                    inked &= cpu > 255.0 * 300;
+                    if (rel > 0.02) {
+                        match = false;
+                        std::printf("    %s: GPU ink %.0f vs CPU %.0f\n", presets[i].id.c_str(), gpu, cpu);
+                    }
+                }
+                std::printf("    12 preset strokes: worst GPU/CPU ink difference %.3f %%\n", worstRel * 100);
+                check(inked, "S11: every preset stroke is on the canvas");
+                check(match, "S11: displayed ink == CPU raster ink (<= 2 %) for every preset (textures, buildup, wet edge, stamps)");
+                // Texture survives the upload: the chalk stroke is speckled on screen.
+                const Box& ch = boxes[9];
+                int light = 0, dark = 0;
+                for (int y = ch.y0; y <= ch.y1; ++y)
+                    for (int x = ch.x0; x <= ch.x1; ++x) {
+                        const int g = c11.grey(x, y);
+                        light += g > 200 && g < 250;
+                        dark += g < 120;
+                    }
+                check(presets[9].id == "builtin.chalk" && light > 200 && dark > 200,
+                      "S11: chalk grain visible on screen (light and dark pixels inside the stroke)");
+            }
         }
 
         section("S9 close -> resources released");

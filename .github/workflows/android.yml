@@ -114,7 +114,7 @@ jobs:
         id: name
         run: |
           short="${GITHUB_SHA::7}"
-          out="PxPaint-block4-debug-${short}.apk"
+          out="PxPaint-block5-debug-${short}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
           echo "artifact=PxPaint-debug-apk-${short}" >> "$GITHUB_OUTPUT"
@@ -196,3 +196,62 @@ jobs:
           path: build-host/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  ui-screenshots:
+    # Emulator screenshots of the Block 5 UI (debug-only demo route). Not a
+    # device test: emulator, SwiftShader rendering, no stylus. Published as an
+    # artifact and on the "ci-screenshots" branch (one orphan commit, force-
+    # pushed) so they can be viewed without downloading artifacts.
+    name: UI screenshots (emulator)
+    needs: apk
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download the APK built by this run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PxPaint-debug-apk-*
+          merge-multiple: true
+          path: apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Screenshots on an Android 14 emulator (x86_64, Pixel 6 profile)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash tools/ci/ui_screenshots.sh "$(ls apk/*.apk | head -1)" screenshots
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots-${{ github.run_id }}
+          path: screenshots
+          retention-days: 30
+
+      - name: Publish to the ci-screenshots branch
+        run: |
+          set -euo pipefail
+          cd screenshots
+          git init -q
+          git checkout -q -b ci-screenshots
+          echo "Emulator screenshots for ${GITHUB_SHA} (run ${GITHUB_RUN_ID})" > README.txt
+          git add .
+          git -c user.name="github-actions" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -q -m "UI screenshots for ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screenshots

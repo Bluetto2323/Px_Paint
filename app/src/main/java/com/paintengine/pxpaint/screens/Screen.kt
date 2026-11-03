@@ -44,9 +44,14 @@ interface PxHost {
     val stylus: com.paintengine.pxpaint.input.StylusMonitor
     /** Engine pressure response table for the current settings (cached). */
     fun pressureTable(): FloatArray
-    /** Brush setup (sizes, opacities, spacing, colour), persisted across sessions. */
+    /** Colour and recent colours, persisted across sessions. */
     val brush: BrushState
     fun updateBrush(state: BrushState)
+    /** Brush library (presets, favourites, recents, per-tool selection), persisted. */
+    val brushes: com.paintengine.pxpaint.core.BrushLibrary
+    fun updateBrushes(library: com.paintengine.pxpaint.core.BrushLibrary)
+    /** Shared brush preview renderer + cache. */
+    val previews: com.paintengine.pxpaint.ui.BrushPreviews
     fun openDiagnostics()
     fun tipsShown(id: String): Boolean
     fun markTipShown(id: String)

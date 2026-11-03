@@ -14,7 +14,7 @@ import android.graphics.drawable.Drawable
  */
 enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
-    COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS,
+    COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -128,6 +128,27 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
             Icon.CENTER -> { circle(c, 12f, 12f, 2.2f, true); roundRect(c, 4f, 4f, 20f, 20f, 3f) }
             Icon.PIXELS -> { roundRect(c, 4f, 4f, 11f, 11f, 1f); roundRect(c, 13f, 4f, 20f, 11f, 1f); roundRect(c, 4f, 13f, 11f, 20f, 1f); roundRect(c, 13f, 13f, 20f, 20f, 1f) }
             Icon.LOGO -> drawLogo(c)
+            Icon.STAR, Icon.STAR_FILLED -> {
+                path.reset()
+                for (i in 0 until 10) {
+                    val a = Math.toRadians(-90.0 + i * 36.0)
+                    val rad = if (i % 2 == 0) 8.5 else 3.8
+                    val x = (12 + rad * Math.cos(a)).toFloat()
+                    val y = (12.8 + rad * Math.sin(a)).toFloat()
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.close()
+                if (icon == Icon.STAR_FILLED) c.drawPath(path, fill)
+                c.drawPath(path, stroke)
+            }
+            Icon.RESET -> { arc(c, 12f, 12.5f, 7f, 120f, 300f); poly(c, 4.2f, 8.5f, 5.6f, 12.3f, 9.2f, 10.8f) }
+            Icon.BRUSH -> {
+                // Round brush: handle, ferrule, tip.
+                line(c, 19.5f, 4.5f, 12.5f, 11.5f)
+                poly(c, 12.5f, 11.5f, 14.5f, 13.5f, 11.5f, 16.5f, 9.5f, 14.5f, close = true)
+                path.reset(); path.moveTo(9.5f, 14.5f); path.cubicTo(6f, 15f, 6.5f, 19f, 4f, 20f)
+                path.cubicTo(8f, 20.5f, 11f, 19f, 11.5f, 16.5f); c.drawPath(path, stroke)
+            }
         }
     }
 
