@@ -355,33 +355,56 @@ JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(
 }
 
 // --- Brush strokes ------------------------------------------------------------
+// sample: Engine::kSampleFloats floats (x, y, t, pressure, tilt, orientation; NaN = none)
+// params: diameter, opacity, spacing, minSizeFraction, minOpacityFraction, tiltStrength, pressureSmoothing
+// flags : 1 erase, 2 pressure->size, 4 pressure->opacity, 8 tilt shapes the dab
+// curve : PressureLut::kSize floats (pressure response), or null for linear
 JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeBegin(
-    JNIEnv*, jclass, jlong handle, jfloat x, jfloat y, jfloat t, jfloat diameter, jfloat opacity, jint argb,
-    jfloat spacing, jboolean erase) {
+    JNIEnv* env, jclass, jlong handle, jfloatArray sample, jfloatArray params, jint argb, jint flags, jfloatArray curve) {
     guard("nativeStrokeBegin", 0, [&] {
+        if (!sample || !params || env->GetArrayLength(sample) < static_cast<jsize>(pe::Engine::kSampleFloats) ||
+            env->GetArrayLength(params) < 7)
+            return 0;
+        jfloat s[pe::Engine::kSampleFloats];
+        jfloat p[7];
+        env->GetFloatArrayRegion(sample, 0, static_cast<jsize>(pe::Engine::kSampleFloats), s);
+        env->GetFloatArrayRegion(params, 0, 7, p);
         pe::brush::BrushSettings b;
-        b.diameter = diameter;
-        b.opacity = opacity;
+        b.diameter = p[0];
+        b.opacity = p[1];
+        b.spacing = p[2];
+        b.minSizeFraction = p[3];
+        b.minOpacityFraction = p[4];
+        b.tiltStrength = p[5];
+        b.pressureSmoothing = p[6];
         b.argb = static_cast<uint32_t>(argb);
-        b.spacing = spacing;
-        b.erase = erase == JNI_TRUE;
-        fromHandle(handle)->strokeBegin(b, x, y, t);
+        b.erase = (flags & 1) != 0;
+        b.pressureSize = (flags & 2) != 0;
+        b.pressureOpacity = (flags & 4) != 0;
+        b.tiltShape = (flags & 8) != 0;
+        if (curve && env->GetArrayLength(curve) == static_cast<jsize>(pe::brush::PressureLut::kSize)) {
+            auto lut = std::make_shared<pe::brush::PressureLut>();
+            env->GetFloatArrayRegion(curve, 0, static_cast<jsize>(pe::brush::PressureLut::kSize), lut->lut.data());
+            b.pressureCurve = lut;  // validated by BrushSettings::sanitized()
+        }
+        fromHandle(handle)->strokeBegin(b, s);
         return 0;
     });
 }
 
-// `xyt`: `count` samples as (x, y, t) triples, screen pixels / ms, in time order.
+// `samples`: `count` samples of Engine::kSampleFloats floats each, oldest first.
 JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeSamples(JNIEnv* env, jclass, jlong handle,
-                                                                                    jfloatArray xyt, jint count) {
+                                                                                    jfloatArray samples, jint count) {
     guard("nativeStrokeSamples", 0, [&] {
-        if (!xyt || count <= 0) return 0;
-        const jsize len = env->GetArrayLength(xyt);
-        const jsize n = std::min<jsize>(count, len / 3);
+        if (!samples || count <= 0) return 0;
+        constexpr jsize kStride = static_cast<jsize>(pe::Engine::kSampleFloats);
+        const jsize len = env->GetArrayLength(samples);
+        const jsize n = std::min<jsize>(count, len / kStride);
         // Copied through a stack buffer: no allocation per touch event.
-        jfloat chunk[64 * 3];
+        jfloat chunk[64 * pe::Engine::kSampleFloats];
         for (jsize done = 0; done < n;) {
             const jsize k = std::min<jsize>(64, n - done);
-            env->GetFloatArrayRegion(xyt, done * 3, k * 3, chunk);
+            env->GetFloatArrayRegion(samples, done * kStride, k * kStride, chunk);
             fromHandle(handle)->strokeSamples(chunk, static_cast<size_t>(k));
             done += k;
         }

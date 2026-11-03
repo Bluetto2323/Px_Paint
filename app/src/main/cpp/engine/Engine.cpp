@@ -326,19 +326,34 @@ size_t Engine::loadCanvasContent(const std::vector<ContentOp>& ops) {
     return kept;
 }
 
-void Engine::strokeBegin(const brush::BrushSettings& settings, double screenX, double screenY, double t) {
-    canvas::Vec2 c;
+namespace {
+// Screen sample -> canvas sample (viewport locked by the caller).
+brush::StrokePoint toCanvas(const canvas::Viewport& view, const float* f) {
+    const canvas::Vec2 c = view.toCanvas({f[0], f[1]});
+    brush::StrokePoint p{c.x, c.y, f[2]};
+    p.axes.pressure = std::isfinite(f[3]) ? f[3] : brush::kNoValue;
+    p.axes.tilt = std::isfinite(f[4]) ? f[4] : brush::kNoValue;
+    // Screen direction = canvas direction + view rotation.
+    p.axes.orientation =
+        std::isfinite(f[5]) ? static_cast<float>(canvas::normalizeAngle(f[5] - view.rotation())) : brush::kNoValue;
+    return p;
+}
+}  // namespace
+
+void Engine::strokeBegin(const brush::BrushSettings& settings, const float* sample) {
+    if (!sample) return;
+    brush::StrokePoint p;
     {
         std::lock_guard<std::mutex> lock(viewMutex_);
         if (!view_.valid()) return;
-        c = view_.toCanvas({screenX, screenY});
+        p = toCanvas(view_, sample);
     }
-    doc_.strokeBegin(settings, {c.x, c.y, t});
+    doc_.strokeBegin(settings, p);
     queue_.wake();
 }
 
-void Engine::strokeSamples(const float* xyt, size_t count) {
-    if (!xyt || count == 0) return;
+void Engine::strokeSamples(const float* samples, size_t count) {
+    if (!samples || count == 0) return;
     // Converted in chunks on the stack: no allocation per touch event.
     brush::StrokePoint chunk[64];
     size_t done = 0;
@@ -347,11 +362,7 @@ void Engine::strokeSamples(const float* xyt, size_t count) {
         {
             std::lock_guard<std::mutex> lock(viewMutex_);
             if (!view_.valid()) return;
-            for (size_t i = 0; i < n; ++i) {
-                const float* p = xyt + (done + i) * 3;
-                const canvas::Vec2 c = view_.toCanvas({p[0], p[1]});
-                chunk[i] = {c.x, c.y, p[2]};
-            }
+            for (size_t i = 0; i < n; ++i) chunk[i] = toCanvas(view_, samples + (done + i) * kSampleFloats);
         }
         doc_.strokeSamples(chunk, n);
         done += n;

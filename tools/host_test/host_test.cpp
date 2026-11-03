@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -861,19 +862,32 @@ bool brushIdle(pe::Engine& e, std::chrono::milliseconds t = 10s) {
     return e.waitForStatus([&](const EngineStatus& s) { return s.canvas.brushSamplesProcessed >= processed; }, t);
 }
 
-// Stroke along screen points; `perBatch` samples per call (like MotionEvent history).
+// Engine stroke sample: x, y, t, pressure, tilt, orientation (NaN = absent).
+struct Sample6 {
+    float v[pe::Engine::kSampleFloats];
+};
+Sample6 sample6(double x, double y, double t, float pressure = NAN, float tilt = NAN, float orientation = NAN) {
+    return {{static_cast<float>(x), static_cast<float>(y), static_cast<float>(t), pressure, tilt, orientation}};
+}
+
+// Stroke along screen points; `perBatch` samples per call (like MotionEvent
+// history). `pressure(i)` (optional) gives sample i's pressure.
 void screenStroke(pe::Engine& e, const pe::brush::BrushSettings& b, const std::vector<pe::canvas::Vec2>& pts,
-                  size_t perBatch = 4, bool finish = true) {
-    e.strokeBegin(b, pts[0].x, pts[0].y, 0.0);
-    std::vector<float> xyt;
+                  size_t perBatch = 4, bool finish = true, const std::function<float(size_t)>& pressure = nullptr,
+                  float tilt = NAN, float orientation = NAN) {
+    auto at = [&](size_t k) {
+        return sample6(pts[k].x, pts[k].y, static_cast<double>(k * 4), pressure ? pressure(k) : NAN, tilt, orientation);
+    };
+    const Sample6 first = at(0);
+    e.strokeBegin(b, first.v);
+    std::vector<float> buf;
     for (size_t i = 1; i < pts.size(); i += perBatch) {
-        xyt.clear();
+        buf.clear();
         for (size_t k = i; k < std::min(pts.size(), i + perBatch); ++k) {
-            xyt.push_back(static_cast<float>(pts[k].x));
-            xyt.push_back(static_cast<float>(pts[k].y));
-            xyt.push_back(static_cast<float>(k * 4));
+            const Sample6 sm = at(k);
+            buf.insert(buf.end(), sm.v, sm.v + pe::Engine::kSampleFloats);
         }
-        e.strokeSamples(xyt.data(), xyt.size() / 3);
+        e.strokeSamples(buf.data(), buf.size() / pe::Engine::kSampleFloats);
     }
     if (finish) e.strokeEnd();
 }
@@ -1106,16 +1120,12 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
             const double y = 60 + (sidx % 12) * 40;
             std::vector<pe::canvas::Vec2> pts;
             for (int i = 0; i <= 60; ++i) pts.push_back({50 + i * 13.0, y + 25 * std::sin(i * 0.3)});
-            engine.strokeBegin(brushOf(sidx % 2 ? 48.0f : 6.0f, 0.8f, 0xFF203060u), pts[0].x, pts[0].y, 0);
+            engine.strokeBegin(brushOf(sidx % 2 ? 48.0f : 6.0f, 0.8f, 0xFF203060u), sample6(pts[0].x, pts[0].y, 0).v);
             for (size_t i = 1; i < pts.size(); i += 2) {
-                float xyt[6];
+                Sample6 batch[2];
                 size_t n = 0;
-                for (size_t k = i; k < std::min(pts.size(), i + 2); ++k, ++n) {
-                    xyt[n * 3] = static_cast<float>(pts[k].x);
-                    xyt[n * 3 + 1] = static_cast<float>(pts[k].y);
-                    xyt[n * 3 + 2] = static_cast<float>(k * 4);
-                }
-                engine.strokeSamples(xyt, n);
+                for (size_t k = i; k < std::min(pts.size(), i + 2); ++k, ++n) batch[n] = sample6(pts[k].x, pts[k].y, k * 4.0);
+                engine.strokeSamples(batch[0].v, n);
                 std::this_thread::sleep_for(4ms);
             }
             engine.strokeEnd();
@@ -1138,6 +1148,60 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
                     static_cast<unsigned long long>(s8.canvas.textureUploads), s8.canvas.bytesUploaded / 1048576.0,
                     static_cast<unsigned long long>(s8.canvas.rasterTiles), s8.canvas.tilesAllocated);
         check(s8.canvas.bytesUploaded < 4096ull * 4096 * 4, "S8: partial uploads only (less than one full canvas uploaded in total)");
+
+        section("S10 stylus pressure and tilt on the GPU (Block 4)");
+        check(engine.createCanvas({1200, 800, kPaper}).empty(), "S10: canvas");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.width == 1200; }, 10s),
+              "S10: ready");
+        double z1[] = {1.0, 450, 300};
+        engine.viewportOp(pe::ViewOp::SetZoomAt, z1, 3);
+        pe::brush::BrushSettings pb = brushOf(40, 1.0f, 0xFF000000u);
+        pb.pressureSize = true;
+        pb.pressureSmoothing = 0.0f;
+        const auto ramp = screenLine(150, 150, 750, 150, 61);
+        screenStroke(engine, pb, ramp, 4, true, [](size_t k) { return static_cast<float>(k) / 60.0f; });
+        // Finger stroke right after (no pressure axis): plain full-size stroke.
+        screenStroke(engine, pb, screenLine(150, 300, 750, 300, 30));
+        // Opacity from pressure.
+        pe::brush::BrushSettings ob = brushOf(30, 1.0f, 0xFF000000u);
+        ob.pressureOpacity = true;
+        ob.pressureSmoothing = 0.0f;
+        screenStroke(engine, ob, screenLine(150, 420, 750, 420, 30), 4, true, [](size_t) { return 0.5f; });
+        check(brushIdle(engine), "S10: processed");
+        Cap c10;
+        if (capture(engine, c10)) {
+            auto span = [&](int x, int yc) {
+                int n = 0;
+                for (int y = yc - 40; y <= yc + 40; ++y) n += c10.grey(x, y) < 128;
+                return n;
+            };
+            const int lo = span(200, 150), mid = span(450, 150), hi = span(700, 150), finger = span(450, 300);
+            std::printf("    pressure ramp widths on screen: %d / %d / %d px; finger stroke %d px\n", lo, mid, hi, finger);
+            check(lo < hi - 20 && std::abs(mid - 24) <= 2, "S10: stroke width follows the pressure ramp on screen");
+            check(std::abs(finger - 40) <= 2, "S10: finger stroke after a stylus stroke: full 40 px");
+            check(std::abs(c10.grey(450, 420) - 102) <= 4, "S10: 50% pressure -> 60% opacity on screen (grey ~102)");
+        }
+        // Tilt: the stylus points right ON SCREEN; with the view rotated 90 degrees
+        // the dab must still be long horizontally on screen (orientation mapped
+        // to canvas space by the engine).
+        check(engine.createCanvas({1200, 800, kPaper}).empty(), "S10: fresh canvas for the tilt check");
+        engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.rasterTiles == 0; }, 10s);
+        engine.viewportOp(pe::ViewOp::SetZoomAt, z1, 3);
+        double r90[] = {pe::canvas::kPi / 2, 450, 300};
+        engine.viewportOp(pe::ViewOp::SetRotationAt, r90, 3);
+        pe::brush::BrushSettings tb = brushOf(20, 1.0f, 0xFF000000u);
+        tb.tiltShape = true;
+        const Sample6 tap = sample6(450, 560, 0, NAN, static_cast<float>(pe::canvas::kPi / 3), static_cast<float>(pe::canvas::kPi / 2));
+        engine.strokeBegin(tb, tap.v);
+        engine.strokeEnd();
+        check(brushIdle(engine), "S10: tilted tap processed");
+        if (capture(engine, c10)) {
+            int w = 0, h = 0;
+            for (int x = 400; x <= 500; ++x) w += c10.grey(x, 560) < 128;
+            for (int y = 530; y <= 590; ++y) h += c10.grey(450, y) < 128;  // stays inside the canvas
+            std::printf("    tilted dab on screen (view rotated 90 deg): %d x %d px\n", w, h);
+            check(w > 40 && std::abs(h - 20) <= 2, "S10: tilt ellipse follows the stylus direction on screen, view rotated");
+        }
 
         section("S9 close -> resources released");
         engine.closeCanvas();
@@ -1184,16 +1248,12 @@ int suitePerf(const std::string& pref, const std::string& expected, bool noFallb
         std::vector<pe::canvas::Vec2> pts;
         for (int i = 0; i <= 60; ++i) pts.push_back({100 + i * 13.0, y + 25 * std::sin(i * 0.3)});
         const float size = sidx % 2 ? 48.0f : 6.0f;
-        engine.strokeBegin(brushOf(size, 1.0f, 0xFF203060u), pts[0].x, pts[0].y, 0);
+        engine.strokeBegin(brushOf(size, 1.0f, 0xFF203060u), sample6(pts[0].x, pts[0].y, 0).v);
         for (size_t i = 1; i < pts.size(); i += 2) {
-            float xyt[6];
+            Sample6 batch[2];
             size_t n = 0;
-            for (size_t k = i; k < std::min(pts.size(), i + 2); ++k, ++n) {
-                xyt[n * 3] = static_cast<float>(pts[k].x);
-                xyt[n * 3 + 1] = static_cast<float>(pts[k].y);
-                xyt[n * 3 + 2] = static_cast<float>(k * 4);
-            }
-            engine.strokeSamples(xyt, n);
+            for (size_t k = i; k < std::min(pts.size(), i + 2); ++k, ++n) batch[n] = sample6(pts[k].x, pts[k].y, k * 4.0);
+            engine.strokeSamples(batch[0].v, n);
             std::this_thread::sleep_for(4ms);
         }
         engine.strokeEnd();

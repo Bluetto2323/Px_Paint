@@ -149,15 +149,35 @@ class NativeEngine(config: Config) : AutoCloseable {
 
     // --- Brush strokes (UI thread; never block, processed at the next frame) -
     /**
-     * Starts a stroke at a SCREEN point (view pixels; mapped through the
-     * current viewport). [diameter] is in CANVAS pixels, [opacity] 0..1,
-     * [argb] straight colour, [spacing] = dab distance / diameter.
+     * Brush of one stroke. [diameter] in CANVAS pixels (the maximum size when
+     * pressure controls size), [opacity] 0..1, [argb] straight colour,
+     * [spacing] = dab distance / diameter. Pressure / tilt dynamics act only
+     * on strokes whose samples carry those axes (stylus); finger strokes are
+     * drawn at full size and opacity. [pressureCurve]: response table of
+     * [PRESSURE_CURVE_SIZE] values (0..1, monotonic), null = linear.
      */
-    fun strokeBegin(x: Float, y: Float, tMs: Float, diameter: Float, opacity: Float, argb: Int, spacing: Float, erase: Boolean) =
-        withHandle { nativeStrokeBegin(it, x, y, tMs, diameter, opacity, argb, spacing, erase) }
+    class Brush(
+        val diameter: Float, val opacity: Float, val argb: Int, val spacing: Float, val erase: Boolean,
+        val pressureSize: Boolean = false, val minSizeFraction: Float = 0.2f,
+        val pressureOpacity: Boolean = false, val minOpacityFraction: Float = 0.2f,
+        val tiltShape: Boolean = false, val tiltStrength: Float = 1f,
+        val pressureSmoothing: Float = 0.35f, val pressureCurve: FloatArray? = null,
+    ) {
+        internal fun params() = floatArrayOf(diameter, opacity, spacing, minSizeFraction, minOpacityFraction, tiltStrength, pressureSmoothing)
+        internal fun flags() = (if (erase) 1 else 0) or (if (pressureSize) 2 else 0) or
+            (if (pressureOpacity) 4 else 0) or (if (tiltShape) 8 else 0)
+    }
 
-    /** [xyt]: [count] samples as (x, y, tMs) triples, screen pixels, oldest first. */
-    fun strokeSamples(xyt: FloatArray, count: Int) = withHandle { nativeStrokeSamples(it, xyt, count) }
+    /**
+     * Starts a stroke. [sample] holds [SAMPLE_FLOATS] floats: x, y (SCREEN
+     * pixels, mapped through the current viewport), t (ms), pressure (0..1),
+     * tilt (rad), orientation (rad, screen space); NaN = axis not reported.
+     */
+    fun strokeBegin(sample: FloatArray, brush: Brush) =
+        withHandle { nativeStrokeBegin(it, sample, brush.params(), brush.argb, brush.flags(), brush.pressureCurve) }
+
+    /** [samples]: [count] samples of [SAMPLE_FLOATS] floats each (see [strokeBegin]), oldest first. */
+    fun strokeSamples(samples: FloatArray, count: Int) = withHandle { nativeStrokeSamples(it, samples, count) }
     fun strokeEnd() = withHandle { nativeStrokeEnd(it) }
     /** Removes the stroke in progress; the canvas returns exactly to its previous state. */
     fun strokeCancel() = withHandle { nativeStrokeCancel(it) }
@@ -207,6 +227,11 @@ class NativeEngine(config: Config) : AutoCloseable {
     }
 
     companion object {
+        /** Floats per stroke sample: x, y, tMs, pressure, tilt, orientation. */
+        const val SAMPLE_FLOATS = 6
+        /** Entries of a pressure response table (PressureLut::kSize). */
+        const val PRESSURE_CURVE_SIZE = 257
+
         /** Null when the library loaded, otherwise the load error. */
         val loadError: Throwable? = try {
             System.loadLibrary("paintengine")
@@ -248,9 +273,9 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeStamp(handle: Long, x: Double, y: Double, size: Int, argb: Int): Boolean
         @JvmStatic private external fun nativeRunCanvasSelfTest(handle: Long)
         @JvmStatic private external fun nativeStrokeBegin(
-            handle: Long, x: Float, y: Float, t: Float, diameter: Float, opacity: Float, argb: Int, spacing: Float, erase: Boolean,
+            handle: Long, sample: FloatArray, params: FloatArray, argb: Int, flags: Int, curve: FloatArray?,
         )
-        @JvmStatic private external fun nativeStrokeSamples(handle: Long, xyt: FloatArray, count: Int)
+        @JvmStatic private external fun nativeStrokeSamples(handle: Long, samples: FloatArray, count: Int)
         @JvmStatic private external fun nativeStrokeEnd(handle: Long)
         @JvmStatic private external fun nativeStrokeCancel(handle: Long)
         @JvmStatic private external fun nativeExportCanvasTiles(handle: Long, changedOnly: Boolean, maxTiles: Int): ByteArray?

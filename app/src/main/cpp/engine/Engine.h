@@ -153,11 +153,14 @@ public:
     size_t loadCanvasContent(const std::vector<ContentOp>& ops);
 
     // --- Brush strokes (any thread except the render thread; never block) ---
-    // Samples are SCREEN pixels, mapped to canvas pixels with the viewport at
-    // the time of the call; `t` in ms. Processed in order at the next frame.
-    void strokeBegin(const brush::BrushSettings& settings, double screenX, double screenY, double t);
-    // `xyt` holds `count` triples (x, y, t).
-    void strokeSamples(const float* xyt, size_t count);
+    // A sample is kSampleFloats floats: x, y (SCREEN pixels, mapped to canvas
+    // pixels with the viewport at the time of the call), t (ms), pressure
+    // (normalised 0..1), tilt (radians), orientation (radians, screen space,
+    // converted to canvas space here). NaN = axis not reported by the device.
+    // Processed in order at the next frame.
+    static constexpr size_t kSampleFloats = 6;
+    void strokeBegin(const brush::BrushSettings& settings, const float* sample);
+    void strokeSamples(const float* samples, size_t count);
     void strokeEnd();
     void strokeCancel();
 
