@@ -16,6 +16,7 @@ enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
     EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE, HISTORY,
+    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -162,6 +163,37 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 poly(c, 12f, 3.5f, 20f, 7.5f, 12f, 11.5f, 4f, 7.5f, close = true)
                 line(c, 12f, 13.5f, 12f, 20.5f)
                 poly(c, 8.5f, 17f, 12f, 20.5f, 15.5f, 17f)
+            }
+            Icon.LIBRARY -> {
+                // Brush library: three brushes standing in a cup.
+                roundRect(c, 6f, 13f, 18f, 20.5f, 2f)
+                line(c, 9f, 13f, 7.5f, 4.5f)
+                line(c, 12f, 13f, 12f, 3.5f)
+                line(c, 15f, 13f, 16.5f, 4.5f)
+            }
+            Icon.EYEDROPPER -> {
+                // Pipette: bulb top right, glass tube down to a tip bottom left.
+                poly(c, 14.5f, 6.5f, 17.5f, 9.5f)
+                circle(c, 17f, 7f, 2.6f)
+                poly(c, 15.8f, 8.2f, 7f, 17f, 5f, 19f, 7f, 17f)
+                line(c, 13.6f, 6.4f, 17.6f, 10.4f)
+                line(c, 7f, 17f, 9.5f, 17f)
+            }
+            Icon.PIN -> {
+                poly(c, 9f, 4f, 15f, 4f)
+                poly(c, 10f, 4f, 10f, 10f, 7f, 13.5f, 17f, 13.5f, 14f, 10f, 14f, 4f)
+                line(c, 12f, 13.5f, 12f, 20f)
+            }
+            Icon.FULLSCREEN -> {
+                poly(c, 4f, 9f, 4f, 4f, 9f, 4f); poly(c, 15f, 4f, 20f, 4f, 20f, 9f)
+                poly(c, 20f, 15f, 20f, 20f, 15f, 20f); poly(c, 9f, 20f, 4f, 20f, 4f, 15f)
+            }
+            Icon.FULLSCREEN_EXIT -> {
+                poly(c, 4f, 9f, 9f, 9f, 9f, 4f); poly(c, 15f, 4f, 15f, 9f, 20f, 9f)
+                poly(c, 20f, 15f, 15f, 15f, 15f, 20f); poly(c, 9f, 20f, 9f, 15f, 4f, 15f)
+            }
+            Icon.GRIP -> {
+                line(c, 10f, 6f, 10f, 18f); line(c, 14f, 6f, 14f, 18f)
             }
             Icon.HISTORY -> {
                 // Clock face with a counter-clockwise arrow: going back in time.

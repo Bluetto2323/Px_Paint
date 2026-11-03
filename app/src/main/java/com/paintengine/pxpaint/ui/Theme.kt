@@ -39,39 +39,40 @@ class PxTheme(context: Context, val settings: AppSettings) {
         (if (settings.largeTouchTargets) LayoutPolicy.LARGE_TOUCH_TARGET_DP else LayoutPolicy.TOUCH_TARGET_DP).toFloat(),
     )
 
-    // --- colours ------------------------------------------------------------
-    val bg = if (dark) 0xFF0F1012.toInt() else 0xFFF4F2EE.toInt()
-    val surface = if (dark) 0xFF17191C.toInt() else 0xFFFFFFFF.toInt()
-    val raised = if (dark) 0xFF1F2226.toInt() else 0xFFFBFAF8.toInt()
-    val sunken = if (dark) 0xFF0B0C0E.toInt() else 0xFFE9E6E0.toInt()
-    val outline = when {
-        settings.highContrast -> if (dark) 0xFF9AA1A9.toInt() else 0xFF5A5E64.toInt()
-        dark -> 0xFF2B2F35.toInt()
-        else -> 0xFFDDD9D2.toInt()
-    }
-    val text = if (dark) 0xFFEEF0F2.toInt() else 0xFF18191B.toInt()
-    val textSecondary = if (dark) 0xFFA3A9B0.toInt() else 0xFF5E636A.toInt()
-    val textTertiary = if (dark) 0xFF6E747C.toInt() else 0xFF8E939A.toInt()
-    val accent = if (dark) 0xFFFF7A59.toInt() else 0xFFE5532F.toInt()
-    val onAccent = if (dark) 0xFF1A0D08.toInt() else 0xFFFFFFFF.toInt()
-    val accentSoft = (accent and 0x00FFFFFF) or (if (dark) 0x2E000000 else 0x24000000)
-    val danger = if (dark) 0xFFFF5C6C.toInt() else 0xFFD93848.toInt()
-    val scrim = if (dark) 0xB3000000.toInt() else 0x80101012.toInt()
+    // --- colours (core/DesignTokens) -------------------------------------------
+    val colors = com.paintengine.pxpaint.core.DesignTokens.colors(dark, settings.highContrast)
+    val bg = colors.bg
+    val surface = colors.surface
+    val raised = colors.raised
+    val sunken = colors.sunken
+    val outline = colors.outline
+    val text = colors.text
+    val textSecondary = colors.textSecondary
+    val textTertiary = colors.textTertiary
+    val accent = colors.accent
+    val onAccent = colors.onAccent
+    val accentSoft = colors.accentSoft
+    val danger = colors.danger
+    val scrim = colors.scrim
     /** Around the canvas in the workspace (passed to the engine). */
-    val workspace = if (dark) 0xFF121316.toInt() else 0xFFE4E1DB.toInt()
+    val workspace = colors.workspace
     /** Floating chrome over the canvas: slightly translucent surface. */
-    val chrome = (raised and 0x00FFFFFF) or 0xF2000000.toInt()
-    val ripple = if (dark) 0x33FFFFFF else 0x22000000
+    val chrome = colors.chrome
+    val ripple = colors.ripple
 
     // --- metrics --------------------------------------------------------------
     fun dp(v: Float): Int = (v * density * scale).roundToInt()
     fun dp(v: Int): Int = dp(v.toFloat())
     fun dpF(v: Float): Float = v * density * scale
-    val radiusS get() = dpF(10f)
-    val radiusM get() = dpF(16f)
-    val radiusL get() = dpF(24f)
-    val gap get() = dp(8)
-    val pad get() = dp(16)
+    val radiusS get() = dpF(com.paintengine.pxpaint.core.DesignTokens.RADIUS_S)
+    val radiusM get() = dpF(com.paintengine.pxpaint.core.DesignTokens.RADIUS_M)
+    val radiusL get() = dpF(com.paintengine.pxpaint.core.DesignTokens.RADIUS_L)
+    val radiusPill get() = dpF(com.paintengine.pxpaint.core.DesignTokens.RADIUS_PILL)
+    val gap get() = dp(com.paintengine.pxpaint.core.DesignTokens.SPACE_S)
+    val pad get() = dp(com.paintengine.pxpaint.core.DesignTokens.SPACE_L)
+    val disabledAlpha get() = com.paintengine.pxpaint.core.DesignTokens.DISABLED_ALPHA
+    /** Animation length (0 with "reduce motion"). */
+    fun motion(ms: Long): Long = if (reduceMotion) 0L else ms
 
     // --- typography (sp, scaled by the interface size; user font scale applies) -------
     enum class Type(val sp: Float, val medium: Boolean) {

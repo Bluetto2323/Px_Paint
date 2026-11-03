@@ -392,6 +392,24 @@ class PxPaintActivity : Activity(), PxHost {
         densityDpi = c.densityDpi
     }
 
+    override fun setImmersive(on: Boolean) {
+        val w = window
+        if (Build.VERSION.SDK_INT >= 30) {
+            val c = w.insetsController ?: return
+            if (on) {
+                c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                c.hide(android.view.WindowInsets.Type.systemBars())
+            } else {
+                c.show(android.view.WindowInsets.Type.systemBars())
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            val immersive = View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN
+            @Suppress("DEPRECATION")
+            w.decorView.systemUiVisibility = if (on) w.decorView.systemUiVisibility or immersive else w.decorView.systemUiVisibility and immersive.inv()
+        }
+    }
+
     private fun applyWindowStyle() {
         val w = window
         w.decorView.setBackgroundColor(theme.bg)

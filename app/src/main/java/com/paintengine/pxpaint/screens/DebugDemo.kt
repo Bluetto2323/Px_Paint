@@ -16,22 +16,30 @@ import com.paintengine.pxpaint.core.BrushTool
  *   settings        settings screen
  *   layers          five layers (modes, opacity, hidden, locked) + the Layers panel
  *   history         the layers demo (all recorded), 3 steps undone, the History panel
+ *   color           the colour workspace
+ *   canvas          the demo strokes, no panel open
+ *   fullscreen      the demo strokes with the interface hidden
+ *
+ * Optional: --es pxpaint.pin brushes|color|layers  pins that panel (tablets).
  *
  * The strokes are drawn through the normal engine stroke API with finger-like
  * samples (no pressure: nothing is simulated).
  */
 object DebugDemo {
-    data class Script(val panel: String, val filter: BrushFilter?, val brush: String?)
+    data class Script(val panel: String, val filter: BrushFilter?, val brush: String?, val pin: String? = null)
 
     fun from(intent: Intent?): Script? {
         if (!BuildConfig.DEBUG || intent == null) return null
         val state = intent.getStringExtra("pxpaint.demo") ?: return null
         val filter = intent.getStringExtra("pxpaint.filter")?.let { f -> BrushFilter.entries.firstOrNull { it.name.equals(f, true) } }
-        return Script(state, filter, intent.getStringExtra("pxpaint.brush"))
+        return Script(state, filter, intent.getStringExtra("pxpaint.brush"), intent.getStringExtra("pxpaint.pin"))
     }
 
     fun start(host: PxHost, s: Script) {
         host.markTipShown(WorkspaceScreen.TIP_GESTURES)   // the first-run tip would cover the panels
+        val pin = com.paintengine.pxpaint.core.PinnedPanel.entries.firstOrNull { it.name.equals(s.pin ?: "none", true) }
+            ?: com.paintengine.pxpaint.core.PinnedPanel.NONE
+        host.updateSettings(host.settings.copy(pinnedPanel = pin), rebuild = false)
         if (s.panel == "settings") {
             host.push(SettingsScreen(host))
             return

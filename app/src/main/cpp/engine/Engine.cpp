@@ -1,6 +1,7 @@
 #include "engine/Engine.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <system_error>
@@ -536,6 +537,17 @@ ViewportInfo Engine::viewportOp(ViewOp op, const double* a, size_t n) {
     }
     if (changed) requestRender();
     return info;
+}
+
+bool Engine::sampleColor(double screenX, double screenY, uint32_t& argb) const {
+    canvas::Vec2 c;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        if (!view_.valid()) return false;
+        c = view_.toCanvas({screenX, screenY});
+    }
+    if (!std::isfinite(c.x) || !std::isfinite(c.y)) return false;
+    return doc_.sampleColor(static_cast<int32_t>(std::floor(c.x)), static_cast<int32_t>(std::floor(c.y)), argb);
 }
 
 canvas::Vec2 Engine::screenToCanvas(canvas::Vec2 p) const {

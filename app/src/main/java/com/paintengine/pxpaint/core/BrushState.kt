@@ -38,13 +38,24 @@ data class BrushState(
     val eraser: ToolBrush = ToolBrush(64f, 1f, DEFAULT_SPACING),
     val color: Int = 0xFF2B3A67.toInt(),
     val recentColors: List<Int> = emptyList(),
+    /** The user's saved colours (Block 8), in the order they were added. */
+    val palette: List<Int> = emptyList(),
 ) {
     fun encode(): Map<String, String> = mapOf(
         "marker" to enc(marker),
         "eraser" to enc(eraser),
         "color" to color.toString(),
         "recent" to recentColors.take(MAX_RECENT).joinToString(","),
+        "palette" to palette.take(MAX_PALETTE).joinToString(","),
     )
+
+    /** Adds [c] (opaque) to the saved palette; already there or full: unchanged. */
+    fun withSaved(c: Int): BrushState {
+        val o = c or 0xFF000000.toInt()
+        return if (o in palette || palette.size >= MAX_PALETTE) this else copy(palette = palette + o)
+    }
+
+    fun withoutSaved(c: Int): BrushState = copy(palette = palette - c)
 
     fun withRecent(c: Int): BrushState =
         copy(recentColors = (listOf(c) + recentColors.filter { it != c }).take(MAX_RECENT))
@@ -58,6 +69,7 @@ data class BrushState(
         /** Continuous stroke (the engine also keeps big brushes' edges straight). */
         const val DEFAULT_SPACING = 0.08f
         const val MAX_RECENT = 8
+        const val MAX_PALETTE = 30
         /** Lowest minimum size / opacity the UI offers (the engine floors are lower). */
         const val MIN_PRESSURE_FRACTION = 0.05f
 
@@ -68,6 +80,7 @@ data class BrushState(
                 eraser = dec(map["eraser"]) ?: d.eraser,
                 color = map["color"]?.toIntOrNull() ?: d.color,
                 recentColors = map["recent"]?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.take(MAX_RECENT) ?: emptyList(),
+                palette = map["palette"]?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.distinct()?.take(MAX_PALETTE) ?: emptyList(),
             )
         }
 

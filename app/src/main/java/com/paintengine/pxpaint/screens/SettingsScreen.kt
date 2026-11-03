@@ -9,6 +9,8 @@ import com.paintengine.BuildConfig
 import com.paintengine.pxpaint.core.AppSettings
 import com.paintengine.pxpaint.core.BackendChoice
 import com.paintengine.pxpaint.core.DockSide
+import com.paintengine.pxpaint.core.PinnedPanel
+import com.paintengine.pxpaint.core.Side
 import com.paintengine.pxpaint.core.FingerMode
 import com.paintengine.pxpaint.core.LanguagePref
 import com.paintengine.pxpaint.core.RenderPreference
@@ -67,6 +69,13 @@ class SettingsScreen(host: PxHost) : Screen(host) {
             DockSide.AUTO to tr(S.SIDE_AUTO), DockSide.LEFT to tr(S.SIDE_LEFT), DockSide.RIGHT to tr(S.SIDE_RIGHT),
         ), s.dockSide) { set(s.copy(dockSide = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.TOOL_LABELS), null, s.showToolLabels) { set(s.copy(showToolLabels = it)) })
+        page.addView(choice(tr(S.SLIDER_SIDE), tr(S.SLIDER_SIDE_DESC), listOf(
+            Side.LEFT to tr(S.SIDE_LEFT), Side.RIGHT to tr(S.SIDE_RIGHT),
+        ), s.sliderSide) { set(s.copy(sliderSide = it)) })
+        page.addView(choice(tr(S.PINNED_PANEL), tr(S.PINNED_PANEL_DESC), listOf(
+            PinnedPanel.NONE to tr(S.PINNED_NONE), PinnedPanel.BRUSHES to tr(S.BRUSH), PinnedPanel.COLOR to tr(S.COLOR),
+            PinnedPanel.LAYERS to tr(S.LAYERS),
+        ), s.pinnedPanel) { set(s.copy(pinnedPanel = it)) })
 
         // --- Gestures
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_GESTURES)))
@@ -78,6 +87,11 @@ class SettingsScreen(host: PxHost) : Screen(host) {
             isEnabled = s.twoFingerRotate
             alpha = if (s.twoFingerRotate) 1f else 0.45f
         })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_TAP_UNDO), null, s.tapUndo) { set(s.copy(tapUndo = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_TAP_REDO), null, s.tapRedo) { set(s.copy(tapRedo = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_PINCH_FIT), tr(S.GESTURE_PINCH_FIT_DESC), s.quickPinchFit) { set(s.copy(quickPinchFit = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_TAP_FULLSCREEN), null, s.tapFullscreen) { set(s.copy(tapFullscreen = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_STYLUS_PICK), tr(S.GESTURE_STYLUS_PICK_DESC), s.stylusButtonPick) { set(s.copy(stylusButtonPick = it)) })
 
         // --- Stylus & pressure
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_STYLUS)))

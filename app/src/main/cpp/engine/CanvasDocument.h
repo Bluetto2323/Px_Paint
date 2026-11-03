@@ -191,6 +191,11 @@ public:
     // Composite pixel (what is displayed, paper included where opaque) and
     // a layer's own pixel (tests).
     canvas::Rgba8 pixel(int32_t x, int32_t y);
+    // Eyedropper: straight (non-premultiplied) opaque ARGB of what is shown
+    // at canvas pixel (x, y), paper included; false outside the canvas or
+    // where nothing is painted over a transparent background. Reads the
+    // composite as displayed (no compositing work: callable from the UI).
+    bool sampleColor(int32_t x, int32_t y, uint32_t& argb) const;
     canvas::Rgba8 layerPixel(uint32_t id, int32_t x, int32_t y);
     // Exact fingerprint of a layer's pixels / of the composite (transparent
     // tiles count as absent): equal checksums = identical pictures (tests).

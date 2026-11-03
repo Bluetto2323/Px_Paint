@@ -584,6 +584,35 @@ void testBenchmarks() {
 
 }  // namespace
 
+void testEyedropper() {
+    section("LY12 eyedropper (Block 8): the colour shown, straight sRGB, paper included");
+    CanvasDocument d;
+    d.open(600, 400);
+    d.setBackground(0xFFF3EBDDu, false);
+    uint32_t c = 0;
+    check(d.sampleColor(10, 10, c) && c == 0xFFF3EBDDu, "LY12: empty canvas: the paper colour");
+    d.fill({100, 100, 200, 100}, 0xFF2B3A67u);
+    (void)d.pixel(0, 0);  // composited, as by a frame
+    check(d.sampleColor(150, 150, c) && c == 0xFF2B3A67u, "LY12: an opaque colour comes back exactly (what was painted is what is picked)");
+    uint32_t l2 = 0;
+    d.addLayer(0, "", l2);
+    d.fill({100, 100, 200, 100}, 0x80FFFFFFu);  // 50 % white over it
+    (void)d.pixel(0, 0);
+    const Rgba8 shown = d.pixel(150, 150);
+    check(d.sampleColor(150, 150, c) && c == (0xFF000000u | (uint32_t{shown.r} << 16) | (uint32_t{shown.g} << 8) | shown.b),
+          "LY12: over layers / opacity: exactly the displayed composite");
+    check(!d.sampleColor(-1, 5, c) && !d.sampleColor(600, 5, c) && !d.sampleColor(5, 400, c), "LY12: outside the canvas: nothing");
+    CanvasDocument t;
+    t.open(300, 300);
+    t.setBackground(0xFFFFFFFFu, true);
+    t.fill({0, 0, 100, 100}, 0x80336699u);  // straight 50 % #336699
+    (void)t.pixel(0, 0);
+    check(!t.sampleColor(200, 200, c), "LY12: transparent background, nothing painted: nothing to pick");
+    check(t.sampleColor(50, 50, c) && std::abs(int((c >> 16) & 255) - 0x33) <= 1 && std::abs(int((c >> 8) & 255) - 0x66) <= 1 &&
+              std::abs(int(c & 255) - 0x99) <= 1 && (c >> 24) == 255,
+          "LY12: semi-transparent paint: its colour, un-premultiplied, opaque");
+}
+
 int main() {
     std::printf("=== layer system tests (CPU) ===\n");
     testBlendReference();
@@ -596,6 +625,7 @@ int main() {
     testThumbnails();
     testSaveReload();
     testMigration();
+    testEyedropper();
     testBenchmarks();
     std::printf("=== %d/%d checks passed ===\n", gChecks - gFailures, gChecks);
     return gFailures == 0 ? 0 : 1;

@@ -963,6 +963,23 @@ DocumentStats CanvasDocument::stats() const {
     return s;
 }
 
+bool CanvasDocument::sampleColor(int32_t x, int32_t y, uint32_t& argb) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!open_ || x < 0 || y < 0 || x >= static_cast<int32_t>(composite_.width()) || y >= static_cast<int32_t>(composite_.height()))
+        return false;
+    auto c8 = [](float v) { return static_cast<uint32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    if (!composite_.tileAllocated(x / RasterStore::kTile, y / RasterStore::kTile)) {
+        if (!backdrop_.opaque) return false;
+        argb = 0xFF000000u | (c8(backdrop_.r) << 16) | (c8(backdrop_.g) << 8) | c8(backdrop_.b);
+        return true;
+    }
+    const canvas::Rgba8 p = composite_.pixel(x, y);
+    if (p.a == 0) return false;
+    auto u = [&](uint8_t v) { return p.a == 255 ? uint32_t{v} : std::min<uint32_t>(255, (uint32_t{v} * 255 + p.a / 2) / p.a); };
+    argb = 0xFF000000u | (u(p.r) << 16) | (u(p.g) << 8) | u(p.b);
+    return true;
+}
+
 canvas::Rgba8 CanvasDocument::pixel(int32_t x, int32_t y) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!open_) return {};

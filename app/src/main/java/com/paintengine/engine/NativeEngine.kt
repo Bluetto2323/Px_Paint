@@ -126,6 +126,18 @@ class NativeEngine(config: Config) : AutoCloseable {
         return if (h == 0L) ViewportInfo.EMPTY else ViewportInfo.from(nativeViewportOp(h, op.code, args))
     }
 
+    /**
+     * Eyedropper: the colour shown at a screen point (view pixels), straight
+     * opaque ARGB, paper included; null outside the canvas or where nothing
+     * is painted over a transparent background. Cheap (no compositing).
+     */
+    fun sampleColor(x: Double, y: Double): Int? {
+        val h = handle
+        if (h == 0L) return null
+        val r = nativeSampleColor(h, x, y)
+        return if (r < 0) null else r.toInt()
+    }
+
     /** Exact screen (view pixels) -> canvas pixels mapping. */
     fun screenToCanvas(x: Double, y: Double): DoubleArray =
         handle.let { if (it != 0L) nativeMapPoint(it, true, x, y) ?: doubleArrayOf(0.0, 0.0) else doubleArrayOf(0.0, 0.0) }
@@ -340,6 +352,7 @@ class NativeEngine(config: Config) : AutoCloseable {
         ): Boolean
         @JvmStatic private external fun nativeLayers(handle: Long): String?
         @JvmStatic private external fun nativeHistoryOp(handle: Long, op: Int, count: Int): Int
+        @JvmStatic private external fun nativeSampleColor(handle: Long, x: Double, y: Double): Long
         @JvmStatic private external fun nativeHistoryCounts(handle: Long): Long
         @JvmStatic private external fun nativeHistory(handle: Long): String?
         @JvmStatic private external fun nativeSetHistoryBudget(handle: Long, bytes: Long, maxSteps: Int)

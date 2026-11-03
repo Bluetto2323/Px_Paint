@@ -365,6 +365,16 @@ JNIEXPORT jdoubleArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeMa
     });
 }
 
+// Eyedropper at a screen point: straight opaque ARGB (low 32 bits), or -1 if
+// nothing is there (outside the canvas, transparent background).
+JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeSampleColor(JNIEnv*, jclass, jlong handle, jdouble x,
+                                                                                  jdouble y) {
+    return guard("nativeSampleColor", jlong{-1}, [&]() -> jlong {
+        uint32_t argb = 0;
+        return fromHandle(handle)->sampleColor(x, y, argb) ? static_cast<jlong>(argb) : jlong{-1};
+    });
+}
+
 JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(JNIEnv*, jclass, jlong handle,
                                                                                 jdouble x, jdouble y, jint size,
                                                                                 jint argb) {

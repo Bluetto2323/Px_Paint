@@ -53,6 +53,8 @@ interface PxHost {
     /** Shared brush preview renderer + cache. */
     val previews: com.paintengine.pxpaint.ui.BrushPreviews
     fun openDiagnostics()
+    /** Hides (true) or shows the system bars: the workspace's "hide interface" mode. */
+    fun setImmersive(on: Boolean)
     fun tipsShown(id: String): Boolean
     fun markTipShown(id: String)
     fun resetTips()

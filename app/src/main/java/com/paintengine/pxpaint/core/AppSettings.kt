@@ -33,6 +33,16 @@ data class AppSettings(
     val twoFingerRotate: Boolean = true,
     val rotationSnap: Boolean = true,
     val fingerMode: FingerMode = FingerMode.DRAW,
+    // Gestures (Block 8): finger taps anywhere on the canvas.
+    val tapUndo: Boolean = true,            // two-finger tap
+    val tapRedo: Boolean = true,            // three-finger tap
+    val quickPinchFit: Boolean = true,      // fast pinch-in: fit the canvas
+    val tapFullscreen: Boolean = true,      // four-finger tap: interface on / off
+    val stylusButtonPick: Boolean = true,   // stylus side button held: eyedropper
+    // Workspace (Block 8)
+    val sliderSide: Side = Side.LEFT,       // quick size / opacity sliders
+    val pinnedPanel: PinnedPanel = PinnedPanel.NONE,   // tablets
+    val panelWidthDp: Int = LayoutPolicy.PANEL_DEFAULT_DP,
     // Stylus & pressure (Block 4): device calibration, shared by every brush.
     val pressureCurve: PressureCurve = PressureCurve.LINEAR,
     val pressureSensitivity: Float = 0f,   // -1 (needs force) .. +1 (light touch)
@@ -55,6 +65,14 @@ data class AppSettings(
         K_ROTATE to twoFingerRotate.toString(),
         K_SNAP to rotationSnap.toString(),
         K_FINGER_MODE to fingerMode.name,
+        K_TAP_UNDO to tapUndo.toString(),
+        K_TAP_REDO to tapRedo.toString(),
+        K_PINCH_FIT to quickPinchFit.toString(),
+        K_TAP_FULLSCREEN to tapFullscreen.toString(),
+        K_STYLUS_PICK to stylusButtonPick.toString(),
+        K_SLIDER_SIDE to sliderSide.name,
+        K_PINNED to pinnedPanel.name,
+        K_PANEL_WIDTH to panelWidthDp.toString(),
         K_PRESSURE_CURVE to pressureCurve.encode(),
         K_PRESSURE_SENSITIVITY to pressureSensitivity.toString(),
         K_PRESSURE_SMOOTHING to pressureSmoothing.toString(),
@@ -79,6 +97,14 @@ data class AppSettings(
         const val K_FINGER = "finger_drawing"
         const val K_FINGER_MODE = "finger_mode"
         const val K_PRESSURE_CURVE = "pressure_curve"
+        const val K_TAP_UNDO = "tap_undo"
+        const val K_TAP_REDO = "tap_redo"
+        const val K_PINCH_FIT = "quick_pinch_fit"
+        const val K_TAP_FULLSCREEN = "tap_fullscreen"
+        const val K_STYLUS_PICK = "stylus_button_pick"
+        const val K_SLIDER_SIDE = "slider_side"
+        const val K_PINNED = "pinned_panel"
+        const val K_PANEL_WIDTH = "panel_width_dp"
         const val K_PRESSURE_SENSITIVITY = "pressure_sensitivity"
         const val K_PRESSURE_SMOOTHING = "pressure_smoothing"
         const val K_RENDER = "render"
@@ -103,6 +129,14 @@ data class AppSettings(
                         "false" -> FingerMode.PAN
                         else -> d.fingerMode
                     },
+                tapUndo = boolOr(map[K_TAP_UNDO], d.tapUndo),
+                tapRedo = boolOr(map[K_TAP_REDO], d.tapRedo),
+                quickPinchFit = boolOr(map[K_PINCH_FIT], d.quickPinchFit),
+                tapFullscreen = boolOr(map[K_TAP_FULLSCREEN], d.tapFullscreen),
+                stylusButtonPick = boolOr(map[K_STYLUS_PICK], d.stylusButtonPick),
+                sliderSide = enumOr(map[K_SLIDER_SIDE], d.sliderSide),
+                pinnedPanel = enumOr(map[K_PINNED], d.pinnedPanel),
+                panelWidthDp = map[K_PANEL_WIDTH]?.toIntOrNull()?.coerceIn(LayoutPolicy.PANEL_MIN_DP, LayoutPolicy.PANEL_MAX_DP) ?: d.panelWidthDp,
                 pressureCurve = PressureCurve.decode(map[K_PRESSURE_CURVE]) ?: d.pressureCurve,
                 pressureSensitivity = floatIn(map[K_PRESSURE_SENSITIVITY], -1f, 1f, d.pressureSensitivity),
                 pressureSmoothing = floatIn(map[K_PRESSURE_SMOOTHING], 0f, 1f, d.pressureSmoothing),

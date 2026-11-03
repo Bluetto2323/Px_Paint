@@ -205,6 +205,8 @@ public:
     // Viewport: applied immediately (thread-safe), drawn at the next frame.
     ViewportInfo viewportOp(ViewOp op, const double* args, size_t argCount);
     canvas::Vec2 screenToCanvas(canvas::Vec2 screen) const;
+    // Eyedropper at a screen point (view pixels): see CanvasDocument::sampleColor.
+    bool sampleColor(double screenX, double screenY, uint32_t& argb) const;
     canvas::Vec2 canvasToScreen(canvas::Vec2 canvasPoint) const;
 
     // --- Misc --------------------------------------------------------------

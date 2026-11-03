@@ -17,7 +17,6 @@ import com.paintengine.engine.EngineSurfaceView
 import com.paintengine.engine.NativeEngine
 import com.paintengine.engine.NativeEngine.ViewOp
 import com.paintengine.pxpaint.core.BrushState
-import com.paintengine.pxpaint.core.DockPlacement
 import com.paintengine.pxpaint.core.Format
 import com.paintengine.pxpaint.core.LayerError
 import com.paintengine.pxpaint.core.LayerInfo
@@ -38,10 +37,17 @@ import com.paintengine.pxpaint.core.BrushParams
 import com.paintengine.pxpaint.core.BrushTool
 import com.paintengine.pxpaint.core.TwoFinger
 import com.paintengine.pxpaint.core.WorkspaceSpec
+import com.paintengine.pxpaint.core.DesignTokens
+import com.paintengine.pxpaint.core.GestureShortcut
+import com.paintengine.pxpaint.core.PanelStyle
+import com.paintengine.pxpaint.core.PinnedPanel
+import com.paintengine.pxpaint.core.QuickPinch
+import com.paintengine.pxpaint.core.Side
+import com.paintengine.pxpaint.core.TapGesture
+import com.paintengine.pxpaint.core.ToolbarPlacement
 import com.paintengine.pxpaint.core.tr
 import com.paintengine.pxpaint.ui.CheckerDrawable
 import com.paintengine.pxpaint.ui.BrushPreviewView
-import com.paintengine.pxpaint.ui.ColorPicker
 import com.paintengine.pxpaint.ui.MaxHeight
 import com.paintengine.pxpaint.ui.Icon
 import com.paintengine.pxpaint.ui.IconButton
@@ -49,6 +55,8 @@ import com.paintengine.pxpaint.ui.IconDrawable
 import com.paintengine.pxpaint.ui.OverlayHost
 import com.paintengine.pxpaint.ui.PxSlider
 import com.paintengine.pxpaint.ui.PxTheme
+import com.paintengine.pxpaint.ui.QuickSlider
+import com.paintengine.pxpaint.ui.SliderBubble
 import com.paintengine.pxpaint.ui.Thumbnails
 import com.paintengine.pxpaint.ui.Widgets
 import com.paintengine.pxpaint.ui.column
@@ -57,9 +65,11 @@ import kotlin.math.roundToInt
 
 /**
  * The painting workspace: GPU canvas (EngineSurfaceView) under floating,
- * adaptive chrome. Layout from LayoutPolicy: bottom dock on portrait
- * phones, side rail in landscape / on tablets, docked side panel on wide
- * tablets.
+ * adaptive chrome (Block 8). Layout from core/LayoutPolicy, from the real
+ * window size: phone portrait = bottom dock + bottom sheets, phone landscape
+ * = side rail + side sheets, tablets = one top toolbar + popovers or a
+ * pinned, resizable side panel. Size / opacity sliders on a screen edge,
+ * "hide interface" mode, finger-tap shortcuts and the eyedropper.
  *
  * Input: one finger paints with the active tool from the first touch (no
  * delay). Every sample of every MotionEvent - historical ones first, in
@@ -187,6 +197,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         removed = true
         thumbExec.shutdown()
         layerExec.shutdown()
+        if (fullscreen) host.setImmersive(false)
         handler.removeCallbacks(poll)
         handler.removeCallbacks(historyRefresh)
         router.interrupt()
@@ -199,6 +210,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     override fun onBack(): Boolean {
+        if (fullscreen) {
+            setFullscreen(false)
+            return true
+        }
+        if (eyedropperArmed) {
+            eyedropperArmed = false
+            return true
+        }
         if (panel != Panel.NONE) {
             setPanel(Panel.NONE)
             return true
@@ -362,6 +381,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 handler.postDelayed({ setPanel(Panel.HISTORY) }, 600)
             }
             "workspace" -> setPanel(Panel.TOOL)
+            "color" -> {
+                applyColor(0xFF3B6EA8.toInt(), true)
+                host.updateBrush(host.brush.withSaved(0xFF8C2F39.toInt()).withSaved(0xFF2E6F57.toInt()).withSaved(0xFFE0B040.toInt()))
+                setPanel(Panel.COLOR)
+            }
+            "fullscreen" -> setFullscreen(true)
             "library" -> {
                 d.filter?.let { libraryState.filter = it }
                 setPanel(Panel.LIBRARY)
@@ -494,38 +519,98 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
     }
 
+    // Finger taps (undo / redo / interface) and the quick pinch (fit): core/Gestures.
+    private val taps by lazy { TapGesture(slopPx = theme.dpF(18f)) }
+    private var pinchStartDist = 0.0
+    private var pinchStartMs = 0L
+
     private fun dispatch(e: MotionEvent) {
         val i = e.actionIndex
         val id = e.getPointerId(i)
         // FLAG_CANCELED (API 33): the system decided the lifted pointer was
         // accidental (e.g. a palm); its stroke is cancelled, not committed.
         val canceled = Build.VERSION.SDK_INT >= 33 && (e.flags and FLAG_CANCELED) != 0
+        val kind = StylusInput.kind(e, i)
+        // Eyedropper: armed from the colour panel, or the stylus side button
+        // held when the stylus touches. The whole touch picks, nothing is painted.
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+            val stylusButton = host.settings.stylusButtonPick && kind.isStylus &&
+                (e.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+            picking = eyedropperArmed || stylusButton
+            if (picking && panel != Panel.NONE && spec?.pinned != PinnedPanel.COLOR) setPanel(Panel.NONE)
+        }
+        if (picking) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> pickAt(e.getX(0), e.getY(0), false)
+                MotionEvent.ACTION_UP -> {
+                    pickAt(e.getX(i), e.getY(i), true)
+                    picking = false
+                    eyedropperArmed = false
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    loupe?.let { chrome?.removeView(it) }
+                    loupe = null
+                    picking = false
+                }
+            }
+            return
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 ignoreUntilUp = false
-                if (panel != Panel.NONE && spec?.sidePanelDocked != true) {
+                // A tap on the canvas closes a floating panel (pinned panels stay).
+                if (panel != Panel.NONE) {
                     setPanel(Panel.NONE)
                     ignoreUntilUp = true
                     return
                 }
-                router.fingerMode = host.settings.fingerMode
+                val st = host.settings
+                taps.undoEnabled = st.tapUndo
+                taps.redoEnabled = st.tapRedo
+                taps.fullscreenEnabled = st.tapFullscreen
+                taps.pointerDown(id, e.eventTime, e.getX(i), e.getY(i), kind == ToolKind.FINGER)
+                router.fingerMode = st.fingerMode
                 router.moveTool = tool == Tool.MOVE
                 router.eraserTool = tool == Tool.ERASER
                 // Deliver MOVE events as they arrive, not batched per frame.
                 surfaceView?.requestUnbufferedDispatch(e)
-                router.down(id, StylusInput.kind(e, i), e.eventTime, e.getX(i), e.getY(i))
+                router.down(id, kind, e.eventTime, e.getX(i), e.getY(i))
             }
-            MotionEvent.ACTION_POINTER_DOWN ->
-                if (!ignoreUntilUp) router.pointerDown(id, StylusInput.kind(e, i), e.eventTime, e.getX(i), e.getY(i))
-            MotionEvent.ACTION_MOVE -> if (!ignoreUntilUp) router.move()
-            MotionEvent.ACTION_POINTER_UP -> if (!ignoreUntilUp) router.pointerUp(id, canceled)
+            MotionEvent.ACTION_POINTER_DOWN -> if (!ignoreUntilUp) {
+                taps.pointerDown(id, e.eventTime, e.getX(i), e.getY(i), kind == ToolKind.FINGER)
+                router.pointerDown(id, kind, e.eventTime, e.getX(i), e.getY(i))
+            }
+            MotionEvent.ACTION_MOVE -> if (!ignoreUntilUp) {
+                for (k in 0 until e.pointerCount) taps.pointerMove(e.getPointerId(k), e.getX(k), e.getY(k))
+                router.move()
+            }
+            MotionEvent.ACTION_POINTER_UP -> if (!ignoreUntilUp) {
+                router.pointerUp(id, canceled)
+                taps.pointerUp(id, e.eventTime, canceled)
+            }
             MotionEvent.ACTION_UP -> {
-                if (!ignoreUntilUp) router.up(id, canceled)
+                if (!ignoreUntilUp) {
+                    router.up(id, canceled)                   // commits a stroke first (it then is no tap)
+                    taps.pointerUp(id, e.eventTime, canceled)?.let { shortcut(it) }
+                }
                 ignoreUntilUp = false
             }
             MotionEvent.ACTION_CANCEL -> {
                 router.cancel()
+                taps.cancel()
                 ignoreUntilUp = false
+            }
+        }
+    }
+
+    private fun shortcut(sc: GestureShortcut) {
+        when (sc) {
+            GestureShortcut.UNDO -> historyOp(NativeEngine.HistoryOp.UNDO)
+            GestureShortcut.REDO -> historyOp(NativeEngine.HistoryOp.REDO)
+            GestureShortcut.FULLSCREEN -> setFullscreen(!fullscreen)
+            GestureShortcut.FIT -> {
+                viewOp(ViewOp.FIT)
+                host.overlays.message(tr(S.FIT_DONE))
             }
         }
     }
@@ -577,6 +662,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (StylusInput.append(e, pointerId, strokeKind, strokeT0, samples)) engine?.strokeSamples(samples.data, samples.count)
             }
             engine?.strokeEnd()
+            taps.strokeCommitted()
             // The stroke becomes a history step at the next frame: show it without waiting for the poll.
             handler.postDelayed(historyRefresh, 50)
         }
@@ -598,6 +684,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         override fun gestureStart(a: Int, b: Int) {
             prevA = pos(a) ?: return
             prevB = pos(b) ?: return
+            pinchStartDist = kotlin.math.hypot(prevA.x - prevB.x, prevA.y - prevB.y)
+            pinchStartMs = SystemClock.uptimeMillis()
         }
 
         override fun gestureMove(a: Int, b: Int) {
@@ -610,6 +698,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
 
         override fun gestureEnd(a: Int, b: Int) {
+            // Fingers closed fast: fit the canvas (an ordinary pinch zooms out).
+            val dist = kotlin.math.hypot(prevA.x - prevB.x, prevA.y - prevB.y)
+            if (host.settings.quickPinchFit && QuickPinch.isFit(pinchStartDist, dist, SystemClock.uptimeMillis() - pinchStartMs)) {
+                shortcut(GestureShortcut.FIT)
+                return
+            }
             if (host.settings.rotationSnap && host.settings.twoFingerRotate) {
                 RotationSnap.target(view.rotation)?.let { target ->
                     if (target != view.rotation) {
@@ -633,68 +727,120 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private val libraryState = BrushLibraryPanel.State()
 
     // --------------------------------------------------------------- chrome
+    // Layout (core/LayoutPolicy): phone portrait = top bar + bottom dock +
+    // edge sliders + bottom sheets; phone landscape = short top bar + side
+    // rail + edge sliders + side sheets; tablet = one top toolbar + edge
+    // sliders + popovers, or a pinned, resizable side panel.
+    private var fullscreen = false
+    private var sizeSlider: QuickSlider? = null
+    private var opacitySlider: QuickSlider? = null
+    private var sliderBubble: SliderBubble? = null
+    private var libraryButton: IconButton? = null
+    private var pinnedView: View? = null
+    private val colorState = ColorPanel.State()
+    /** Colour when the colour panel opened ("previous" swatch). */
+    private var colorBefore = 0
+
     private fun buildChrome() {
+        val t0 = SystemClock.elapsedRealtimeNanos()
         val c = chrome ?: return
         c.removeAllViews()
         toolButtons.clear()
+        panelView = null
+        pinnedView = null
+        sizeSlider = null
+        opacitySlider = null
         val s = LayoutPolicy.workspace(host.windowWidthDp, host.windowHeightDp, host.smallestWidthDp, host.settings)
         spec = s
         val ins = host.insets
         val m = theme.dp(8)
+        if (fullscreen) {
+            // Only a small corner button (and the four-finger tap) brings the interface back.
+            c.addView(IconButton(context, theme, Icon.FULLSCREEN_EXIT, tr(S.FULLSCREEN_EXIT)).apply {
+                background = theme.pressable(theme.rounded(theme.chrome, theme.radiusPill, theme.outline), theme.radiusPill)
+                alpha = 0.85f
+                setOnClickListener { setFullscreen(false) }
+            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
+                setMargins(0, ins.top + m, ins.right + m, 0)
+            })
+            zoomChip = null
+            hud = null
+            return
+        }
+        val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 4 else 12)
+        val pinnedW = if (s.pinned != PinnedPanel.NONE) theme.dp(s.panelWidthDp) + m + theme.touchTarget else 0
+        val pinnedLeft = s.pinned != PinnedPanel.NONE && s.panelSide == Side.LEFT
+        val pinnedRight = s.pinned != PinnedPanel.NONE && s.panelSide == Side.RIGHT
 
-        // Top bar
-        val bar = topBar(s)
-        c.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
+        // Top bar (actions; on tablets also the tools)
+        c.addView(topBar(s), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
             setMargins(ins.left + m, ins.top + m, ins.right + m, 0)
         })
+        val belowBar = ins.top + m + barH + m
 
-        // Zoom / rotation chip
+        // Pinned panel (tablets): beside the canvas, under the top bar.
+        if (s.pinned != PinnedPanel.NONE) pinnedPanel(c, s, belowBar)
+
+        // Zoom / rotation chip, centred over the canvas area.
         zoomChip = theme.text(context, "", PxTheme.Type.LABEL, theme.text).apply {
             gravity = Gravity.CENTER
             minHeight = theme.dp(32)
             setPadding(theme.dp(12), 0, theme.dp(12), 0)
-            background = theme.pressable(theme.rounded(theme.chrome, theme.dpF(999f), theme.outline), theme.dpF(999f))
+            background = theme.pressable(theme.rounded(theme.chrome, theme.radiusPill, theme.outline), theme.radiusPill)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             isClickable = true
             setOnClickListener { viewOp(ViewOp.FIT) }
             setOnLongClickListener { canvasMenu(this); true }
         }
-        val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 8 else 16)
         c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = ins.top + m + barH + theme.dp(8)
+            topMargin = belowBar
+            if (pinnedRight) rightMargin = pinnedW
+            if (pinnedLeft) leftMargin = pinnedW
         })
         updateViewport(view)
 
-        // Dock
-        val dock = dock(s)
-        val dockLp = when (s.dock) {
-            DockPlacement.BOTTOM -> FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = ins.bottom + theme.dp(14)
+        // Tools: bottom dock / side rail (on tablets they are in the top bar).
+        var dockH = 0
+        when (s.toolbar) {
+            ToolbarPlacement.BOTTOM -> {
+                c.addView(dock(s, vertical = false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = ins.bottom + theme.dp(12) })
+                dockH = theme.touchTarget + theme.dp(12) + theme.dp(if (s.toolLabels) 18 else 0) + theme.dp(12)
             }
-            DockPlacement.LEFT -> FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.START or Gravity.CENTER_VERTICAL).apply {
-                marginStart = ins.left + theme.dp(10)
+            ToolbarPlacement.SIDE -> {
+                val left = s.railSide == Side.LEFT
+                c.addView(dock(s, vertical = true), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                    (if (left) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL).apply {
+                    if (left) marginStart = ins.left + m else marginEnd = ins.right + m
+                    topMargin = belowBar - ins.top
+                })
             }
-            DockPlacement.RIGHT -> FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL).apply {
-                marginEnd = ins.right + theme.dp(10)
-            }
+            ToolbarPlacement.TOP -> Unit
         }
-        c.addView(dock, dockLp)
 
-        // Docked side panel (wide tablets): tool settings + colour, always visible.
-        if (s.sidePanelDocked) {
-            val side = column(context, theme, horizontalPadding = false) {
-                setPadding(theme.dp(16), theme.dp(16), theme.dp(16), theme.dp(16))
-                background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-                addView(toolSettings())
-                addView(Widgets.divider(context, theme).apply { (layoutParams as LinearLayout.LayoutParams).setMargins(0, theme.dp(16), 0, theme.dp(16)) })
-                addView(colorPicker())
-            }
-            val onRight = s.dock != DockPlacement.RIGHT
-            c.addView(android.widget.ScrollView(context).apply { addView(side) }, FrameLayout.LayoutParams(theme.dp(300), FrameLayout.LayoutParams.WRAP_CONTENT,
-                (if (onRight) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL).apply {
-                if (onRight) marginEnd = ins.right + theme.dp(12) else marginStart = ins.left + theme.dp(12)
-                topMargin = ins.top + barH + theme.dp(56)
-                bottomMargin = ins.bottom + theme.dp(16)
+        // Quick size / opacity sliders on a screen edge.
+        val sliderTop = belowBar + theme.dp(40)
+        val sliderBottom = ins.bottom + dockH + m
+        val availPx = (if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()) - sliderTop - sliderBottom
+        val lengthPx = ((availPx - theme.dp(16)) / 2).coerceIn(theme.dp(72), theme.dp(QuickSlider.LENGTH_DP))
+        val sliders = quickSliders(s, lengthPx)
+        val sliderLeft = s.sliderSide == Side.LEFT
+        val railOnSliderSide = s.toolbar == ToolbarPlacement.SIDE && s.railSide == s.sliderSide
+        val sideInset = theme.dp(2) + (if (railOnSliderSide) theme.touchTarget + theme.dp(24) else 0) +
+            (if (sliderLeft && pinnedLeft || !sliderLeft && pinnedRight) pinnedW else 0)
+        c.addView(sliders, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            (if (sliderLeft) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL).apply {
+            if (sliderLeft) marginStart = ins.left + sideInset else marginEnd = ins.right + sideInset
+            topMargin = sliderTop
+            bottomMargin = sliderBottom
+        })
+        sliderBubble = SliderBubble(context, theme).also { b ->
+            c.addView(b, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                (if (sliderLeft) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL).apply {
+                val off = sideInset + theme.touchTarget + theme.dp(10)
+                if (sliderLeft) marginStart = ins.left + off else marginEnd = ins.right + off
+                topMargin = sliderTop
+                bottomMargin = sliderBottom
             })
         }
 
@@ -705,32 +851,41 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setPadding(theme.dp(10), theme.dp(6), theme.dp(10), theme.dp(6))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }.also {
-            c.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
-                setMargins(ins.left + theme.dp(12), ins.top + m + barH + theme.dp(52), 0, 0)
+            c.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or (if (sliderLeft) Gravity.END else Gravity.START)).apply {
+                topMargin = belowBar + theme.dp(40)
+                if (sliderLeft) marginEnd = ins.right + m + (if (pinnedRight) pinnedW else 0) else marginStart = ins.left + m + (if (pinnedLeft) pinnedW else 0)
             })
         } else null
 
         if (panel != Panel.NONE) showPanel(panel)
         refreshDock()
+        if (com.paintengine.BuildConfig.DEBUG) android.util.Log.i("PxPaint", String.format(java.util.Locale.US,
+            "UI chrome %s (%dx%d dp, sw %d) built in %.2f ms", s.kind, host.windowWidthDp, host.windowHeightDp, host.smallestWidthDp,
+            (SystemClock.elapsedRealtimeNanos() - t0) / 1e6))
     }
 
     private fun topBar(s: WorkspaceSpec): View = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-        val v = theme.dp(if (s.compactTopBar) 2 else 6)
+        val v = theme.dp(if (s.compactTopBar) 0 else 4)
         setPadding(theme.dp(4), v, theme.dp(4), v)
         addView(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY)).apply { setOnClickListener { host.pop() } })
-        val title = theme.text(context, meta.name, if (s.compactTopBar) PxTheme.Type.LABEL else PxTheme.Type.HEADLINE, lines = 1).apply {
-            setPadding(theme.dp(6), 0, theme.dp(6), 0)
-            gravity = Gravity.CENTER_VERTICAL
-            minHeight = theme.touchTarget
-            background = theme.pressable(null, theme.radiusS)
-            isClickable = true
-            contentDescription = "${tr(S.ACTION_RENAME)}: ${meta.name}"
-            setOnClickListener { rename() }
+        if (s.showTitle) {
+            val title = theme.text(context, meta.name, if (s.compactTopBar) PxTheme.Type.LABEL else PxTheme.Type.HEADLINE, lines = 1).apply {
+                setPadding(theme.dp(6), 0, theme.dp(6), 0)
+                gravity = Gravity.CENTER_VERTICAL
+                minHeight = theme.touchTarget
+                background = theme.pressable(null, theme.radiusS)
+                isClickable = true
+                contentDescription = "${tr(S.ACTION_RENAME)}: ${meta.name}"
+                setOnClickListener { rename() }
+            }
+            addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        } else {
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
         }
-        addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         // Undo / redo: tap = one step, long-press = the History panel.
         undoButton = IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}").apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
@@ -741,21 +896,23 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
         }.also { addView(it) }
         showHistoryButtons()
+        if (s.toolbar == ToolbarPlacement.TOP) {
+            addView(separator(vertical = false))
+            addTools(this, s)
+        }
         val more = IconButton(context, theme, Icon.MORE, tr(S.CANVAS_MENU))
         more.setOnClickListener { canvasMenu(more) }
         addView(more)
     }
 
-    private fun dock(s: WorkspaceSpec): View {
-        val vertical = s.dock != DockPlacement.BOTTOM
-        val box = LinearLayout(context).apply {
-            orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-            elevation = theme.dpF(4f)
-            val p = theme.dp(6)
-            setPadding(p, p, p, p)
-        }
+    private fun separator(vertical: Boolean): View = View(context).apply { setBackgroundColor(theme.outline) }.also {
+        it.layoutParams = if (vertical) LinearLayout.LayoutParams(theme.dp(24), maxOf(1, theme.dp(1f))).apply { setMargins(0, theme.dp(6), 0, theme.dp(6)) }
+        else LinearLayout.LayoutParams(maxOf(1, theme.dp(1f)), theme.dp(24)).apply { setMargins(theme.dp(6), 0, theme.dp(6), 0) }
+    }
+
+    /** Brush, eraser, move | library, colour, layers: the same group in every layout. */
+    private fun addTools(box: LinearLayout, s: WorkspaceSpec) {
+        val vertical = box.orientation == LinearLayout.VERTICAL
         for (t in Tool.entries) {
             val b = IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null)
             b.setOnClickListener { selectTool(t) }
@@ -769,9 +926,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             toolButtons[t] = b
             box.addView(b)
         }
-        box.addView(View(context).apply { setBackgroundColor(theme.outline) },
-            if (vertical) LinearLayout.LayoutParams(theme.dp(24), maxOf(1, theme.dp(1f))).apply { setMargins(0, theme.dp(6), 0, theme.dp(6)) }
-            else LinearLayout.LayoutParams(maxOf(1, theme.dp(1f)), theme.dp(24)).apply { setMargins(theme.dp(6), 0, theme.dp(6), 0) })
+        box.addView(separator(vertical))
+        val preset = host.brushes.selectedPreset(brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool))
+        libraryButton = IconButton(context, theme, Icon.LIBRARY, tr(S.BRUSH_LIBRARY_DESC, preset.displayName()),
+            label = if (s.toolLabels) tr(S.BRUSH_LIBRARY) else null).apply {
+            setOnClickListener { togglePanel(Panel.LIBRARY) }
+        }.also { box.addView(it) }
         val swatch = FrameLayout(context).apply {
             minimumWidth = theme.touchTarget
             minimumHeight = theme.touchTarget
@@ -781,99 +941,332 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             background = theme.pressable(null, theme.radiusS)
             addView(View(context).apply { background = theme.oval(color, theme.text) },
                 FrameLayout.LayoutParams(theme.dp(28), theme.dp(28), Gravity.CENTER))
-            if (!s.sidePanelDocked) setOnClickListener { togglePanel(Panel.COLOR) }
+            setOnClickListener { togglePanel(Panel.COLOR) }
         }
         colorButton = swatch
         box.addView(swatch)
         box.addView(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null).apply {
             setOnClickListener { togglePanel(Panel.LAYERS) }
         })
-        return box
     }
+
+    private fun dock(s: WorkspaceSpec, vertical: Boolean): View = LinearLayout(context).apply {
+        orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
+        elevation = theme.dpF(4f)
+        val p = theme.dp(if (vertical) 4 else 6)
+        setPadding(p, p, p, p)
+        addTools(this, s)
+    }
+
+    /** Size and opacity of the current tool, on a screen edge; a bubble shows the value while dragging. */
+    private fun quickSliders(s: WorkspaceSpec, lengthPx: Int): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        val bt = brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool)
+        val b = host.brushes.effective(bt)
+        val size = QuickSlider(context, theme, tr(S.QUICK_SIZE), wedge = true).apply {
+            valueText = { BrushState.sizeLabel(BrushState.sliderToSize(it)) }
+            setValue(BrushState.sizeToSlider(b.size))
+            onChange = { v, fromUser, _ ->
+                if (fromUser) host.updateBrushes(host.brushes.setLive(currentBrushTool(), size = BrushState.sliderToSize(v)))
+            }
+            onPreview = { v -> sliderBubble?.show(v?.let { BrushState.sliderToSize(it) }, null, color, view.zoom) }
+        }
+        val opacity = QuickSlider(context, theme, tr(S.QUICK_OPACITY), wedge = false).apply {
+            valueText = { "${(BrushState.sliderToOpacity(it) * 100).roundToInt()}%" }
+            setValue(b.opacity)
+            onChange = { v, fromUser, _ ->
+                if (fromUser) host.updateBrushes(host.brushes.setLive(currentBrushTool(), opacity = BrushState.sliderToOpacity(v)))
+            }
+            onPreview = { v -> sliderBubble?.show(null, v?.let { BrushState.sliderToOpacity(it) }, color, view.zoom) }
+        }
+        sizeSlider = size
+        opacitySlider = opacity
+        addView(size, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
+        addView(View(context), LinearLayout.LayoutParams(1, theme.dp(14)))
+        addView(opacity, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
+        if (tool == Tool.MOVE) alpha = theme.disabledAlpha
+    }
+
+    private fun currentBrushTool(): BrushTool = brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool)
 
     private fun refreshDock() {
         for ((t, b) in toolButtons) b.isSelected = t == tool
         (colorButton as? FrameLayout)?.getChildAt(0)?.background = theme.oval(color, theme.text)
+        val bt = currentBrushTool()
+        val b = host.brushes.effective(bt)
+        sizeSlider?.setValue(BrushState.sizeToSlider(b.size))
+        opacitySlider?.setValue(b.opacity)
+        libraryButton?.contentDescription = tr(S.BRUSH_LIBRARY_DESC, host.brushes.selectedPreset(bt).displayName())
+        for (sl in listOfNotNull(sizeSlider, opacitySlider)) (sl.parent as? View)?.alpha = if (tool == Tool.MOVE) theme.disabledAlpha else 1f
     }
 
     private fun selectTool(t: Tool) {
-        if (t == tool && t != Tool.MOVE && spec?.sidePanelDocked != true) {
+        if (t == tool && t != Tool.MOVE) {
             togglePanel(Panel.TOOL)
         } else {
             tool = t
-            if (panel == Panel.TOOL) showPanel(Panel.TOOL)
-            if (spec?.sidePanelDocked == true) buildChrome()
+            if (panel == Panel.TOOL || panel == Panel.LIBRARY) showPanel(panel)
+            if (spec?.pinned == PinnedPanel.BRUSHES) refreshPinned()
             host.overlays.message(tr(t.desc))
         }
         refreshDock()
     }
 
+    private fun setFullscreen(on: Boolean) {
+        if (fullscreen == on) return
+        fullscreen = on
+        host.setImmersive(on)
+        if (on) panel = Panel.NONE
+        buildChrome()
+        if (on) host.overlays.message(tr(S.FULLSCREEN_HINT))
+    }
+
     // --------------------------------------------------------------- panels
     private var panelView: View? = null
 
-    private fun togglePanel(p: Panel) = setPanel(if (panel == p) Panel.NONE else p)
+    private fun pinnedPanelOf(s: WorkspaceSpec?): Panel = when (s?.pinned) {
+        PinnedPanel.BRUSHES -> Panel.TOOL
+        PinnedPanel.COLOR -> Panel.COLOR
+        PinnedPanel.LAYERS -> Panel.LAYERS
+        else -> Panel.NONE
+    }
+
+    private fun pinnable(p: Panel): PinnedPanel? = when (p) {
+        Panel.TOOL -> PinnedPanel.BRUSHES
+        Panel.COLOR -> PinnedPanel.COLOR
+        Panel.LAYERS -> PinnedPanel.LAYERS
+        else -> null
+    }
+
+    private fun togglePanel(p: Panel) {
+        if (p != Panel.NONE && p == pinnedPanelOf(spec)) return   // already open beside the canvas
+        setPanel(if (panel == p) Panel.NONE else p)
+    }
 
     private fun setPanel(p: Panel) {
-        val leftLibrary = panel == Panel.LIBRARY && p != Panel.LIBRARY
-        panel = p
-        if (leftLibrary && spec?.sidePanelDocked == true) {
-            buildChrome()
+        if (p == Panel.COLOR && panel != Panel.COLOR) colorBefore = color
+        if (p != Panel.NONE && p == pinnedPanelOf(spec)) {
+            // Already open beside the canvas: just refresh it.
+            panel = Panel.NONE
+            panelView?.let { chrome?.removeView(it) }
+            panelView = null
+            refreshPinned()
             return
         }
+        panel = p
         panelView?.let { chrome?.removeView(it) }
         panelView = null
         if (p != Panel.NONE) showPanel(p)
     }
 
+    private fun panelContent(p: Panel): View? = when (p) {
+        Panel.TOOL -> toolSettings()
+        Panel.COLOR -> colorPicker()
+        Panel.LAYERS -> layersPanel()
+        Panel.LIBRARY -> libraryPanel()
+        Panel.HISTORY -> historyPanel()
+        Panel.NONE -> null
+    }
+
     private fun showPanel(p: Panel) {
         val c = chrome ?: return
         panelView?.let { c.removeView(it) }
+        panelView = null
         val s = spec ?: return
-        if ((p == Panel.TOOL || p == Panel.LIBRARY) && tool == Tool.MOVE) return
-        val content = when (p) {
-            Panel.TOOL -> toolSettings()
-            Panel.COLOR -> colorPicker()
-            Panel.LAYERS -> layersPanel()
-            Panel.LIBRARY -> libraryPanel()
-            Panel.HISTORY -> historyPanel()
-            Panel.NONE -> return
+        if (fullscreen) return
+        if (p == pinnedPanelOf(s)) {
+            refreshPinned()
+            return
         }
-        val card = column(context, theme, horizontalPadding = false) {
-            setPadding(theme.dp(16), theme.dp(14), theme.dp(16), theme.dp(16))
+        val content = panelContent(p) ?: return
+        val ins = host.insets
+        val m = theme.dp(8)
+        val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 4 else 12)
+        val belowBar = ins.top + m + barH + m
+        val heightPx = if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()
+        val pinnedW = if (s.pinned != PinnedPanel.NONE) theme.dp(s.panelWidthDp) + m + theme.touchTarget else 0
+        val frame: View
+        val lp: FrameLayout.LayoutParams
+        when (s.panelStyle) {
+            PanelStyle.BOTTOM_SHEET -> {
+                val dockH = theme.touchTarget + theme.dp(24) + theme.dp(if (s.toolLabels) 18 else 0)
+                val maxH = minOf(theme.dp(s.sheetMaxHeightDp), heightPx - belowBar - ins.bottom - dockH - m)
+                frame = panelFrame(p, content, s, sheet = true, docked = false, maxHeight = maxH)
+                lp = FrameLayout.LayoutParams(minOf(c.width.takeIf { it > 0 } ?: Int.MAX_VALUE, theme.dp(DesignTokens.SHEET_MAX_WIDTH)) - 2 * m,
+                    FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                    bottomMargin = ins.bottom + dockH
+                }
+            }
+            PanelStyle.SIDE_SHEET -> {
+                frame = panelFrame(p, content, s, sheet = false, docked = false, maxHeight = heightPx - belowBar - ins.bottom - m)
+                lp = FrameLayout.LayoutParams(theme.dp(s.panelWidthDp), FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or (if (s.panelSide == Side.LEFT) Gravity.START else Gravity.END)).apply {
+                    topMargin = belowBar
+                    if (s.panelSide == Side.LEFT) marginStart = ins.left + m else marginEnd = ins.right + m
+                }
+            }
+            PanelStyle.POPOVER -> {
+                frame = panelFrame(p, content, s, sheet = false, docked = false, maxHeight = heightPx - belowBar - ins.bottom - m)
+                lp = FrameLayout.LayoutParams(theme.dp(s.panelWidthDp), FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or (if (s.panelSide == Side.LEFT) Gravity.START else Gravity.END)).apply {
+                    topMargin = belowBar
+                    // Beside the pinned panel, never over it.
+                    if (s.panelSide == Side.LEFT) marginStart = ins.left + m + pinnedW else marginEnd = ins.right + m + pinnedW
+                }
+            }
+        }
+        panelView = frame
+        c.addView(frame, lp)
+        if (!theme.reduceMotion) {
+            frame.alpha = 0f
+            frame.translationY = if (s.panelStyle == PanelStyle.BOTTOM_SHEET) theme.dpF(24f) else 0f
+            frame.animate().alpha(1f).translationY(0f).setDuration(DesignTokens.MOTION_SHORT).start()
+        }
+    }
+
+    /**
+     * Card around a panel: a header with the sheet's drag handle (swipe down
+     * closes), pin / unpin (tablets) and close; the content scrolls inside,
+     * never taller than [maxHeight].
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun panelFrame(p: Panel, content: View, s: WorkspaceSpec, sheet: Boolean, docked: Boolean, maxHeight: Int): View {
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
             background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-            elevation = theme.dpF(8f)
+            elevation = theme.dpF(if (docked) 2f else 8f)
             isClickable = true
+        }
+        val header = FrameLayout(context).apply {
+            minimumHeight = theme.dp(if (sheet) 28 else 8)
+        }
+        if (sheet) {
+            header.addView(View(context).apply { background = theme.rounded(theme.textTertiary, theme.radiusPill) },
+                FrameLayout.LayoutParams(theme.dp(36), theme.dp(4), Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply { topMargin = theme.dp(10) })
+            var downY = 0f
+            header.setOnTouchListener { _, e ->
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> downY = e.rawY
+                    MotionEvent.ACTION_MOVE -> card.translationY = (e.rawY - downY).coerceAtLeast(0f)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (e.rawY - downY > theme.dpF(56f)) setPanel(Panel.NONE) else card.animate().translationY(0f).setDuration(theme.motion(DesignTokens.MOTION_SHORT)).start()
+                    }
+                }
+                true
+            }
+        }
+        val actions = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        val pin = pinnable(p)
+        if (pin != null && s.canPin) {
+            actions.addView(IconButton(context, theme, Icon.PIN, tr(if (docked) S.PANEL_UNPIN else S.PANEL_PIN), sizeDp = 34f).apply {
+                isSelected = docked
+                alpha = if (docked) 1f else 0.7f
+                setOnClickListener {
+                    if (!docked) panel = Panel.NONE
+                    host.updateSettings(host.settings.copy(pinnedPanel = if (docked) PinnedPanel.NONE else pin))
+                }
+            })
+        }
+        if (!docked) actions.addView(IconButton(context, theme, Icon.CLOSE, tr(S.PANEL_CLOSE), sizeDp = 34f).apply {
+            setOnClickListener { setPanel(Panel.NONE) }
+        })
+        if (actions.childCount > 0) header.addView(actions, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP).apply { setMargins(0, theme.dp(4), theme.dp(6), 0) })
+        card.addView(header, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        val body = FrameLayout(context).apply {
+            setPadding(theme.dp(16), 0, theme.dp(16), theme.dp(16))
             addView(content)
         }
-        val ins = host.insets
-        val width = minOf(theme.dp(if (p == Panel.LIBRARY) 360 else 320), c.width - theme.dp(24)).coerceAtLeast(theme.dp(240))
-        val lp = when (s.dock) {
-            DockPlacement.BOTTOM -> FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = ins.bottom + theme.dp(14) + theme.touchTarget + theme.dp(if (s.toolLabels) 40 else 24)
-            }
-            DockPlacement.LEFT -> FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.START or Gravity.CENTER_VERTICAL).apply {
-                marginStart = ins.left + theme.dp(10) + theme.touchTarget + theme.dp(if (s.toolLabels) 40 else 24)
-            }
-            DockPlacement.RIGHT -> FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL).apply {
-                marginEnd = ins.right + theme.dp(10) + theme.touchTarget + theme.dp(if (s.toolLabels) 40 else 24)
-            }
+        val scroll = android.widget.ScrollView(context).apply {
+            isVerticalScrollBarEnabled = true
+            addView(body)
         }
-        val scroll = android.widget.ScrollView(context).apply { addView(card) }
-        // Never taller than the space between the top bar and the dock.
-        val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 8 else 16)
-        val reserved = ins.top + barH + theme.dp(24) + (if (s.dock == DockPlacement.BOTTOM) lp.bottomMargin else ins.bottom + theme.dp(16))
-        val available = if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()
-        val capped = MaxHeight(context, (available - reserved).coerceAtLeast(theme.dp(240))).apply { addView(scroll) }
-        if (s.dock != DockPlacement.BOTTOM) lp.topMargin = ins.top + barH + theme.dp(12)
-        panelView = capped
-        c.addView(capped, lp)
+        card.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        return MaxHeight(context, maxHeight.coerceAtLeast(theme.dp(200))).apply { addView(card) }
+    }
+
+    /**
+     * The pinned panel (tablets): beside the canvas, under the top bar. A grip
+     * just outside its inner edge (a full touch target over the canvas edge)
+     * drags to resize it; accessibility: scroll forward / backward = +/- 20 dp.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun pinnedPanel(c: FrameLayout, s: WorkspaceSpec, top: Int) {
+        val p = pinnedPanelOf(s)
+        val content = panelContent(p) ?: return
+        val ins = host.insets
+        val m = theme.dp(8)
+        val gripW = theme.touchTarget
+        val heightPx = if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()
+        val frame = panelFrame(p, content, s, sheet = false, docked = true, maxHeight = heightPx - top - ins.bottom - m)
+        val left = s.panelSide == Side.LEFT
+        val box = FrameLayout(context)
+        box.addView(frame, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+            if (left) marginEnd = gripW else marginStart = gripW
+        })
+        val lp = FrameLayout.LayoutParams(theme.dp(s.panelWidthDp) + gripW, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or (if (left) Gravity.START else Gravity.END)).apply {
+            topMargin = top
+            if (left) marginStart = ins.left + m else marginEnd = ins.right + m
+        }
+        fun resizeTo(w: Int, save: Boolean) {
+            lp.width = theme.dp(w) + gripW
+            box.layoutParams = lp
+            if (save && w != host.settings.panelWidthDp) host.updateSettings(host.settings.copy(panelWidthDp = w))
+        }
+        val grip = object : View(context) {
+            override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(info)
+                info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
+                info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD)
+            }
+
+            override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
+                val step = when (action) {
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> 20
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> -20
+                    else -> return super.performAccessibilityAction(action, arguments)
+                }
+                resizeTo(LayoutPolicy.resizePanel(host.settings.panelWidthDp, step, host.windowWidthDp, theme.scale), true)
+                return true
+            }
+        }.apply {
+            background = IconDrawable(Icon.GRIP, theme.textTertiary)
+            contentDescription = tr(S.PANEL_RESIZE)
+            isClickable = true
+        }
+        var startX = 0f
+        var startW = 0
+        grip.setOnTouchListener { _, e ->
+            val dpx = context.resources.displayMetrics.density * theme.scale
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { startX = e.rawX; startW = s.panelWidthDp }
+                MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                    // Towards the canvas = wider.
+                    val delta = ((if (left) e.rawX - startX else startX - e.rawX) / dpx).roundToInt()
+                    resizeTo(LayoutPolicy.resizePanel(startW, delta, host.windowWidthDp, theme.scale), e.actionMasked == MotionEvent.ACTION_UP)
+                }
+            }
+            true
+        }
+        box.addView(grip, FrameLayout.LayoutParams(gripW, theme.dp(72), (if (left) Gravity.END else Gravity.START) or Gravity.TOP).apply {
+            topMargin = theme.dp(120)
+        })
+        pinnedView = box
+        c.addView(box, lp)
+    }
+
+    private fun refreshPinned() {
+        if (spec?.pinned != PinnedPanel.NONE) buildChrome()
     }
 
     private fun toolSettings(): View = column(context, theme, horizontalPadding = false) {
         val t = if (tool == Tool.MOVE) Tool.MARKER else tool
         val bt = brushTool(t)
-        addView(theme.text(context, tr(t.label), PxTheme.Type.HEADLINE))
-        addView(theme.text(context, tr(t.desc), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(8)) })
+        addView(theme.text(context, tr(t.label), PxTheme.Type.HEADLINE).apply { minHeight = theme.dp(36); gravity = Gravity.CENTER_VERTICAL })
         // The tool's brush: live preview + name; opens the library.
         val preset = host.brushes.selectedPreset(bt)
         addView(LinearLayout(context).apply {
@@ -886,7 +1279,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             contentDescription = "${tr(S.CHANGE_BRUSH)}: ${preset.displayName()}"
             setOnClickListener { setPanel(Panel.LIBRARY) }
             addView(BrushPreviewView(context, theme, host.previews, false) { host.pressureTable() }.also { it.show(preset.params) },
-                LinearLayout.LayoutParams(theme.dp(104), theme.dp(40)))
+                LinearLayout.LayoutParams(theme.dp(96), theme.dp(40)))
             addView(column(context, theme, horizontalPadding = false) {
                 setPadding(theme.dp(10), 0, 0, 0)
                 addView(theme.text(context, preset.displayName(), PxTheme.Type.LABEL, lines = 1))
@@ -895,13 +1288,32 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             addView(View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) },
                 LinearLayout.LayoutParams(theme.dp(18), theme.dp(18)))   // explicit size (see Widgets.row)
         })
+        // Quick switching: the recently used brushes.
+        val recents = host.brushes.recents.mapNotNull { host.brushes.get(it) }.filter { it.id != preset.id }.take(6)
+        if (recents.isNotEmpty()) {
+            addView(theme.text(context, tr(S.RECENT_BRUSHES), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(12), 0, theme.dp(6)) })
+            addView(android.widget.HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    for (r in recents) addView(Widgets.chip(context, theme, r.displayName(), false) {
+                        host.updateBrushes(host.brushes.select(bt, r.id))
+                        showPanel(panel)
+                        refreshDock()
+                    }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = theme.dp(6) },
+                        LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, theme.touchTarget).apply { marginEnd = theme.dp(6) })
+                })
+            })
+        }
         val b = host.brushes.effective(bt)
         val percent = { f: Float -> "${(f * 100).roundToInt()}%" }
         addView(sliderRow(tr(S.SIZE), BrushState.sizeToSlider(b.size), { BrushState.sizeLabel(BrushState.sliderToSize(it)) }) {
             host.updateBrushes(host.brushes.setLive(bt, size = BrushState.sliderToSize(it)))
+            sizeSlider?.setValue(it)
         })
         addView(sliderRow(tr(S.OPACITY), b.opacity, { percent(BrushState.sliderToOpacity(it)) }) {
             host.updateBrushes(host.brushes.setLive(bt, opacity = BrushState.sliderToOpacity(it)))
+            opacitySlider?.setValue(it)
         })
         addView(Widgets.row(context, theme, tr(S.EDIT_BRUSH), null,
             View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {
@@ -911,7 +1323,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             isClickable = true
             setOnClickListener { host.push(BrushEditorScreen(host, bt)) }
         })
-        addView(stylusSettings(t))
+        // Pressure / tilt: the full controls when a pressure stylus is in use, else one row.
+        if (host.stylus.pressureAvailable) addView(stylusSettings(t))
+        else addView(Widgets.row(context, theme, tr(S.STYLUS_PRESSURE_ROW), tr(S.NO_PRESSURE_STYLUS),
+            View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {
+                it.layoutParams = LinearLayout.LayoutParams(theme.dp(18), theme.dp(18))
+            }).apply {
+            setPadding(0, paddingTop, 0, paddingBottom)
+            isClickable = true
+            setOnClickListener { host.push(PressureScreen(host)) }
+        })
     }
 
     private fun libraryPanel(): View {
@@ -988,14 +1409,79 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             })
         }
 
-    private fun colorPicker(): View = column(context, theme, horizontalPadding = false) {
-        addView(theme.text(context, tr(S.COLOR), PxTheme.Type.HEADLINE).apply { setPadding(0, 0, 0, theme.dp(12)) })
-        addView(ColorPicker(context, theme, color, host.brush.recentColors) { c ->
-            host.updateBrush(host.brush.copy(color = c))
-            if (tool == Tool.ERASER || tool == Tool.MOVE) tool = Tool.MARKER
-            remember(c)
+    private fun colorPicker(): View = ColorPanel(host, colorOps, colorState).view()
+
+    private val colorOps = object : ColorPanel.Ops {
+        override val color: Int get() = this@WorkspaceScreen.color
+        override val previous: Int get() = if (colorBefore != 0) colorBefore else this@WorkspaceScreen.color
+        override val recent: List<Int> get() = host.brush.recentColors
+        override val palette: List<Int> get() = host.brush.palette
+        override fun pick(color: Int, final: Boolean) = applyColor(color, final)
+        override fun eyedropper() = armEyedropper()
+        override fun save(color: Int) {
+            if (host.brush.palette.size >= BrushState.MAX_PALETTE) host.overlays.message(tr(S.COLOR_PALETTE_FULL))
+            host.updateBrush(host.brush.withSaved(color))
+            showColorPanels()
+        }
+        override fun remove(color: Int) {
+            host.updateBrush(host.brush.withoutSaved(color))
+            showColorPanels()
+        }
+    }
+
+    /** The brush colour changes (picker, eyedropper); painting tools follow it. */
+    private fun applyColor(c: Int, final: Boolean) {
+        // While the wheel is dragged only the swatch follows; the brush colour is set on release.
+        (colorButton as? FrameLayout)?.getChildAt(0)?.background = theme.oval(c, theme.text)
+        if (!final) return
+        host.updateBrush(host.brush.copy(color = c))
+        if (tool == Tool.ERASER || tool == Tool.MOVE) {
+            tool = Tool.MARKER
             refreshDock()
-        })
+        }
+        remember(c)
+    }
+
+    private fun showColorPanels() {
+        if (panel == Panel.COLOR) showPanel(Panel.COLOR)
+        if (spec?.pinned == PinnedPanel.COLOR) refreshPinned()
+    }
+
+    // ------------------------------------------------------------- eyedropper
+    private var eyedropperArmed = false
+    private var picking = false
+    private var loupe: View? = null
+
+    private fun armEyedropper() {
+        eyedropperArmed = true
+        if (spec?.pinned != PinnedPanel.COLOR) setPanel(Panel.NONE)
+        host.overlays.message(tr(S.EYEDROPPER_HINT))
+    }
+
+    /** Samples the colour under the finger / stylus; [final] applies it. */
+    private fun pickAt(x: Float, y: Float, final: Boolean) {
+        val e = engine ?: return
+        val c = e.sampleColor(x.toDouble(), y.toDouble())
+        val ch = chrome
+        if (!final && c != null && ch != null) {
+            val l = loupe ?: View(context).also {
+                loupe = it
+                ch.addView(it, FrameLayout.LayoutParams(theme.dp(56), theme.dp(56)))
+            }
+            l.background = theme.oval(c, theme.text)
+            l.translationX = x - theme.dp(28)
+            l.translationY = y - theme.dp(28) - theme.dp(72)   // above the finger
+        }
+        if (final) {
+            loupe?.let { chrome?.removeView(it) }
+            loupe = null
+            if (c == null) host.overlays.message(tr(S.EYEDROPPER_NOTHING))
+            else {
+                applyColor(c, true)
+                host.overlays.message(tr(S.COLOR_PICKED, com.paintengine.pxpaint.core.ColorMath.toHex(c)))
+                showColorPanels()
+            }
+        }
     }
 
     private fun remember(c: Int) {
