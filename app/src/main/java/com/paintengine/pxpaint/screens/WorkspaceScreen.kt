@@ -799,8 +799,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
             topMargin = belowBar
-            if (pinnedRight) rightMargin = pinnedW
-            if (pinnedLeft) leftMargin = pinnedW
+            // Centred over the canvas area: FrameLayout shifts a centred child by the whole margin.
+            if (pinnedRight) rightMargin = pinnedW / 2
+            if (pinnedLeft) leftMargin = pinnedW / 2
         })
         updateViewport(view)
 
