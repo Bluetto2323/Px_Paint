@@ -247,6 +247,9 @@ private:
     // Records a property change of layer `id` made by `apply`.
     template <typename Fn>
     void recordProperty(HistoryKind kind, Layer& l, Fn&& apply) {
+        // Strokes already ended are steps before this one (chronological order);
+        // a stroke still in progress continues (an opacity drag does not cut it).
+        if (Layer* a = activeLayer()) brush_.process(a->store);
         const LayerInfo before = l.info;
         apply();
         auto cmd = std::make_unique<PropertyCommand>(kind, before, l.info);

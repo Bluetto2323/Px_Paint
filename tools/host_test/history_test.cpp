@@ -19,6 +19,7 @@
 #include "core/Time.h"
 #include "engine/CanvasDocument.h"
 #include "engine/History.h"
+#include "PresetFile.h"
 
 using pe::CanvasDocument;
 using pe::HistoryKind;
@@ -196,6 +197,21 @@ void testLayerOps() {
     d.undo();
     check(snap(d) == s0, "H3: undoing the drag restores the original opacity");
     check(d.setActive(1) == LayerError::None && d.historyStats().redoSteps == 1, "H3: selecting a layer is not an edit (redo kept)");
+    // Order: a stroke still queued when a property changes is recorded first.
+    CanvasDocument o;
+    base(o);
+    for (auto op : {0, 1, 2}) {
+        stroke(o, brush(30, 0xFF000000u), 50, 100 + op * 100, 850, 120 + op * 100);  // queued, not processed yet
+        if (op == 0) o.setOpacity(1, 0.5f);
+        if (op == 1) o.setBlend(1, BlendMode::Screen);
+        if (op == 2) o.renameLayer(1, "Later");
+    }
+    const auto oe = o.historyEntries();
+    const std::vector<HistoryKind> want = {HistoryKind::Stroke, HistoryKind::Opacity, HistoryKind::Stroke, HistoryKind::Blend,
+                                           HistoryKind::Stroke, HistoryKind::RenameLayer};
+    bool inOrder = oe.size() == want.size();
+    for (size_t i = 0; inOrder && i < want.size(); ++i) inOrder = oe[i].kind == want[i];
+    check(inOrder && oe[0].label == "Layer 1", "H3: queued strokes are recorded before a following opacity / blend / rename (chronological order)");
 }
 
 void testMergeFlatten() {
@@ -226,6 +242,53 @@ void testMergeFlatten() {
     check(d.clear() == LayerError::None, "H4: clear layer");
     const Snapshot cleared = snap(d);
     check(d.undo() == 1 && snap(d) == s0 && d.redo() == 1 && snap(d) == cleared, "H4: clear layer undo / redo exact");
+}
+
+void testPresets() {
+    section("H4b the 12 shipped brush presets (grain, jitter, buildup, wet edge): queued back to back, each one step, exact");
+    const auto presets = pxtest::loadPresets(PE_BRUSH_ASSET);
+    CanvasDocument d;
+    base(d, 1600, 2400);
+    std::vector<Snapshot> states{snap(d)};
+    // Queued without processing in between, like the app's demo and fast drawing.
+    for (size_t i = 0; i < presets.size(); ++i) {
+        auto b = presets[i].s;
+        b.diameter = std::min(presets[i].size, 100.0f);
+        b.argb = 0xFF000000u | (0x1F2A44u + static_cast<uint32_t>(i) * 0x0A0B0Cu);
+        const double y = 150 + static_cast<double>(i) * 180;
+        stroke(d, b, 100, y, 1500, y + 40, 40);
+    }
+    const auto e = d.historyEntries();
+    check(presets.size() == 12 && e.size() == 12, fmt("H4b: 12 queued preset strokes = 12 steps (%.0f)", static_cast<double>(e.size())));
+    // Exactness per preset: undo one by one, compare with a document that draws only the first k strokes.
+    bool exact = true;
+    for (size_t k = presets.size(); k-- > 0;) {
+        CanvasDocument ref;
+        base(ref, 1600, 2400);
+        for (size_t i = 0; i < k; ++i) {
+            auto b = presets[i].s;
+            b.diameter = std::min(presets[i].size, 100.0f);
+            b.argb = 0xFF000000u | (0x1F2A44u + static_cast<uint32_t>(i) * 0x0A0B0Cu);
+            const double y = 150 + static_cast<double>(i) * 180;
+            stroke(ref, b, 100, y, 1500, y + 40, 40);
+        }
+        exact &= d.undo() == 1 && snap(d).pixels == snap(ref).pixels;
+    }
+    check(exact, "H4b: undoing preset by preset gives exactly the canvas drawn without the later presets");
+    bool redo = true;
+    while (d.redo() == 1) {
+    }
+    CanvasDocument all;
+    base(all, 1600, 2400);
+    for (size_t i = 0; i < presets.size(); ++i) {
+        auto b = presets[i].s;
+        b.diameter = std::min(presets[i].size, 100.0f);
+        b.argb = 0xFF000000u | (0x1F2A44u + static_cast<uint32_t>(i) * 0x0A0B0Cu);
+        const double y = 150 + static_cast<double>(i) * 180;
+        stroke(all, b, 100, y, 1500, y + 40, 40);
+    }
+    redo &= snap(d).pixels == snap(all).pixels;
+    check(redo, "H4b: redoing all of them gives exactly the full drawing");
 }
 
 void testTilesAndLarge() {
@@ -640,6 +703,7 @@ int main() {
     testSequences();
     testLayerOps();
     testMergeFlatten();
+    testPresets();
     testTilesAndLarge();
     testBudget();
     testCycles();

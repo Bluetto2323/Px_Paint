@@ -36,7 +36,16 @@ These are not recorded:
 * selecting the active layer, which is navigation and not an edit;
 * operations that fail (locked, hidden, last layer, memory, and so on);
 * cancelled strokes;
-* strokes still in progress.
+* strokes still in progress;
+* strokes that change no pixel (for example entirely outside the canvas).
+
+## Order
+
+Steps are recorded in the order of the operations. Every recorded operation
+first commits the strokes that have already ended and are still queued for
+the render thread, so a stroke drawn just before an opacity, blend or rename
+change is the step before it. A stroke still in progress is not cut: it
+becomes a step when it ends.
 
 ## Grouping
 
