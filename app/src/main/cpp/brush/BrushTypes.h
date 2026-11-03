@@ -126,8 +126,8 @@ struct BrushSettings {
         s.tiltStrength = std::clamp(finite(tiltStrength, 1.0f), 0.0f, 1.0f);
         s.pressureSmoothing = std::clamp(finite(pressureSmoothing, 0.35f), 0.0f, 1.0f);
         if (s.pressureCurve && !s.pressureCurve->valid()) s.pressureCurve.reset();
-        if (static_cast<int>(tip) < 0 || static_cast<int>(tip) >= kBrushTipCount) s.tip = BrushTip::Round;
-        if (static_cast<int>(grain) < 0 || static_cast<int>(grain) >= kBrushGrainCount) s.grain = BrushGrain::None;
+        if (static_cast<int>(tip) >= kBrushTipCount) s.tip = BrushTip::Round;
+        if (static_cast<int>(grain) >= kBrushGrainCount) s.grain = BrushGrain::None;
         if (accumulation != Accumulation::Buildup) s.accumulation = Accumulation::StrokeMax;
         s.hardness = std::clamp(finite(hardness, 1.0f), 0.0f, 1.0f);
         s.flow = std::clamp(finite(flow, 1.0f), 0.01f, 1.0f);

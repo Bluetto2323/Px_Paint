@@ -60,7 +60,7 @@ diagnostics tools (`DiagnosticsActivity`) in a separate process
 | `setCanvasColors(workspace, paper, transparent)` | Workspace colour around the canvas; paper colour or checkerboard. |
 | `runCanvasSelfTest()` | Renders known content (tiles, seams, partial updates, rotation) and compares the pixels against a CPU model. Result in `canvasSelfTest*`. |
 
-## Brush strokes (Blocks 3-4)
+## Brush strokes (Blocks 3-5)
 
 | Call | Notes |
 |---|---|
@@ -91,6 +91,38 @@ drawn provisionally at once, so the stroke tip follows the finger without a
 one-sample lag. Below `spacing` 0.25 the engine also limits the dab distance
 so the edge ripple of big brushes stays under 0.1 px. See
 `app/src/main/cpp/brush/` and `docs/BLOCK3_REPORT.md`.
+
+### Brush model and previews (Block 5)
+
+`NativeEngine.Brush(params, flags, argb, pressureCurve)` carries the brush
+already encoded (`pxpaint.core.BrushEncoding`). `params` = 21 floats:
+
+| # | Field | # | Field |
+|---|---|---|---|
+| 0 | diameter (canvas px) | 11 | size jitter |
+| 1 | opacity | 12 | scatter |
+| 2 | spacing | 13 | angle jitter |
+| 3 | min size fraction | 14 | flow jitter |
+| 4 | min opacity fraction | 15 | grain depth |
+| 5 | tilt strength | 16 | grain pressure |
+| 6 | pressure smoothing | 17 | wet edge |
+| 7 | hardness | 18 | tip (0 round, 1 chalk, 2 charcoal, 3 bristle) |
+| 8 | flow | 19 | grain (0 none, 1 paper, 2 rough, 3 canvas, 4 wash) |
+| 9 | roundness | 20 | accumulation (0 stroke max, 1 buildup) |
+| 10 | angle (degrees) | | |
+
+`flags`: 1 erase, 2 pressure → size, 4 pressure → opacity, 8 tilt, 16 angle
+follows the stroke. A 7-float array (Block 4) is still accepted and gives
+the classic round brush. A fixed angle is screen space: the engine
+subtracts the view rotation, as it does for the stylus orientation.
+Parameters, textures and file formats are described in `docs/BRUSHES.md`.
+
+`NativeEngine.renderBrushPreview(brush, width, height, strokes, background)`
+(static, any thread, no engine instance) renders preview strokes with the same
+StrokePath / StrokeCompositor code as the canvas into a private CPU raster.
+It returns opaque ARGB. `strokes` = `[n, then per stroke: count, diameter (≤ 0:
+brush), opacity (< 0: brush), count × 6 floats in preview pixels]`. Host test
+L14 checks that the preview equals the canvas stroke for all 12 presets.
 
 Status fields: `brushStrokes`, `brushCancelled`, `brushSamplesReceived`,
 `brushSamplesProcessed`, `brushDabs`, `brushPending`, `brushStrokeTiles`,

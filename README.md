@@ -133,7 +133,7 @@ Installare dal telefono:
    scarica gli artifact) → **Actions** → ultima esecuzione verde di
    *Android build* → sezione **Artifacts** → `PxPaint-debug-apk-…`.
 2. Si scarica uno **.zip**: aprilo con *File* / *I miei file* di Samsung ed
-   estrai `PxPaint-block4-debug-….apk`.
+   estrai `PxPaint-block5-debug-….apk`.
 3. Tocca l'APK. La prima volta Android chiede di consentire l'installazione
    da quell'app (*Impostazioni → Installa app sconosciute*): consentila solo
    per *I miei file* / il browser usato.

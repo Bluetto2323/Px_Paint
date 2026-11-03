@@ -296,3 +296,66 @@ curva (area di prova: grigio = pressione dello stilo, colore = risposta),
 inclinazione (con l'opzione attiva), gomma della penna, appoggio del palmo
 mentre lo stilo disegna (nessun segno del palmo). Anche questo risultato
 va riportato come "testato su <modello>".
+
+# Blocco 5 — Libreria pennelli: checklist sul Galaxy A33
+
+Installa `PxPaint-block5-debug-….apk` **sopra** la build del Blocco 4, senza disinstallarla, per verificare la migrazione. Poi ripeti i test da un'installazione pulita.
+
+### 1. Migrazione e compatibilità
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1.1 | Apri una tela creata nei blocchi precedenti | si apre identica, nessun pixel cambiato |
+| 1.2 | Tocca lo strumento *Pennello* (pannello) | pennello attivo **Pennello duro** con la tua dimensione e opacità di prima |
+| 1.3 | Disegna col dito | tratto identico al Blocco 4 |
+| 1.4 | Installazione pulita: primo pennello | **Tondo base** (bordo leggermente morbido); gomma = *Pennello duro* |
+
+### 2. Libreria
+
+| # | Azione | Atteso |
+|---|---|---|
+| 2.1 | Pannello del pennello → riga del pennello, oppure **pressione lunga** sul pulsante Pennello | si apre la libreria, la tela resta visibile intorno |
+| 2.2 | Scorri i 12 pennelli | ogni riga ha un'anteprima disegnata dal motore (non un'icona), tutte diverse |
+| 2.3 | Filtri: Preferiti, Recenti, Schizzo, Inchiostro, Pittura, Aerografo, Tecniche secche, I miei | elenchi coerenti; messaggi chiari se vuoti |
+| 2.4 | Cerca: "carb", "acquerello", "ink", "matita sfumatura" | trovati per nome (anche italiano), categoria, etichette |
+| 2.5 | Stella su due pennelli → filtro *Preferiti* | ci sono, nell'ordine scelto; restano dopo il riavvio dell'app |
+| 2.6 | Cambia pennello più volte | nessuna pausa percettibile; *Recenti* in ordine d'uso |
+| 2.7 | Cursori Dimensione / Opacità nella libreria | cambiano il pennello selezionato; tornando a quel pennello i valori restano |
+
+### 3. I 12 pennelli col dito (stessa tela)
+
+| # | Pennello | Atteso |
+|---|---|---|
+| 3.1 | Tondo base / Pennello duro | bordo morbido / bordo netto |
+| 3.2 | Aerografo morbido | velatura leggera che si scurisce ripassando nello stesso tratto |
+| 3.3 | Matita / Matita grafite | grana della carta visibile; la grafite è più larga e si accumula ripassando |
+| 3.4 | Penna a inchiostro | pennino piatto: tratti orizzontali e verticali di spessore diverso |
+| 3.5 | Fineliner | linea sottile costante |
+| 3.6 | Pennarello | semitrasparente; due tratti sovrapposti si scuriscono, un tratto da solo no |
+| 3.7 | Carboncino / Gessetto | bordi irregolari e grana ruvida; il gessetto è più "a puntini" |
+| 3.8 | Pennello materico | striature parallele al tratto in ogni direzione, trama della tela |
+| 3.9 | Acquerello | bordo più scuro dell'interno, granulazione leggera |
+| 3.10 | Indicatore prestazioni: tratti lunghi con Pennello materico e Aerografo a dimensione massima | annota *brush ms* e la fluidità |
+
+### 4. Personalizzazione
+
+| # | Azione | Atteso |
+|---|---|---|
+| 4.1 | Libreria → ⋮ → *Modifica pennello* su *Gessetto* | editor con anteprima (tratto, dimensioni, opacità) e area di prova |
+| 4.2 | Disegna nell'area di prova, poi cambia *Profondità della grana* e *Durezza* | il disegno di prova si aggiorna con i nuovi parametri |
+| 4.3 | Torna alla libreria | *Gessetto · Modificato* |
+| 4.4 | ⋮ → *Ripristina originale* | torna ai valori originali, la scritta *Modificato* sparisce |
+| 4.5 | ⋮ → *Duplica* | "Gessetto copia" nel filtro *I miei* |
+| 4.6 | Rinomina la copia ("Mio gessetto"); prova anche un nome vuoto | rinominata; il nome vuoto viene rifiutato |
+| 4.7 | Elimina la copia | sparisce da libreria, preferiti e recenti; un pennello incluso non si può eliminare |
+| 4.8 | Chiudi l'app (anche dal multitasking) e riaprila | preferiti, recenti, pennelli personali, modifiche e pennello selezionato restano |
+
+### 5. Gomma
+
+| # | Azione | Atteso |
+|---|---|---|
+| 5.1 | Strumento Gomma → libreria → *Gessetto* | la gomma cancella con la forma del gesso |
+| 5.2 | Torna al Pennello | il pennello non è cambiato; dimensione e pennello della gomma restano separati |
+
+Riporta OK / KO per ogni riga; per i KO aggiungi uno screenshot e, se
+possibile, il REPORT della diagnostica.

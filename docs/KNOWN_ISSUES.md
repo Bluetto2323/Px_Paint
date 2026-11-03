@@ -149,3 +149,36 @@ finger contact estimate, which PxPaint deliberately ignores. Therefore:
 * tilt shaping assumes Android's orientation convention (0 = stylus
   pointing to the top of the screen, clockwise positive). A device that
   reports it differently would rotate the ellipse.
+
+## KI-9 — Brush library: verified by automated tests and an emulator only (Block 5)
+
+* **Not tested by hand on a phone yet.** The 12 presets, the library, the editor
+  and the previews are covered by:
+  * CPU pixel tests;
+  * GPU tests on Mesa GLES and lavapipe Vulkan;
+  * JVM unit tests;
+  * screenshots from an Android 14 **emulator** (SwiftShader, finger only).
+
+  Look and speed on the Galaxy A33 are still to be checked (DEVICE_VALIDATION
+  "Blocco 5").
+* **Pressure, tilt and "pressure fills the grain"** of the presets are tested only
+  with synthetic samples (KI-8).
+* **Fine Liner and Hard Brush give the same dab at equal size without pressure.**
+  Both use the classic round dab. They differ by default size, spacing and by
+  pressure (Fine Liner keeps a constant width). The other 64 of the 66 preset
+  pairs differ even with a finger at equal size (host test L4).
+* **The watercolour look is not a fluid simulation.** It comes from a wet-edge
+  transfer curve, a soft tip and a granulation texture; there is no flow,
+  diffusion or mixing.
+* **Grain textures repeat every 512 canvas pixels.** The repeat is hard to see on
+  fine grains and can show on large flat areas of the coarse grains.
+* **Textured stamps cost more CPU than round dabs**, with the bristle tip the
+  heaviest at about 1.4 ms per 8-sample frame at 48 px on the host. Very large
+  stamped brushes (300 px and more) can exceed a 16 ms frame on slow phones;
+  this is unmeasured on the A33.
+* **Size and opacity are remembered per brush and per tool.** Moving the quick
+  sliders does not mark a built-in brush as modified; changing any other
+  parameter in the editor does, and "Reset to original" undoes both.
+* **Migration.** Block 3/4 users land on Hard Brush with their size, opacity,
+  spacing and stylus settings. The eraser shares that customisation and keeps
+  its own size and opacity.
