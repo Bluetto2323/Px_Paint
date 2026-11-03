@@ -79,13 +79,16 @@ per sample, brushes 48 / 6 px. GitHub Actions runners, **software GPUs**
 (Mesa llvmpipe for GLES, lavapipe for Vulkan): the GPU work itself runs on
 the CPU there, so only the relative numbers mean something.
 
-| | Block 2 (baseline) | Block 3 |
+| | Block 2 (baseline, run 41606710117) | Block 3 (runs 41606696432 / 41607161658) |
 |---|---|---|
-| input -> frame presented, GLES, avg / max | 27.9 / 72.4 ms | 19.3 / 23.8 ms |
-| input -> frame presented, Vulkan, avg / max | 29.7 / 52.7 ms | 18.6 / 21.8 ms |
-| frame CPU work avg (GLES / Vulkan) | 16.0 / 16.7 ms | 11.0 / 10.7 ms |
-| texture uploads for the 40 strokes | 11 519 (one per stamp) | 916 / 948 |
-| bytes uploaded | 11.8 MiB | 17.9 MiB |
+| input -> frame presented, GLES, avg / max | 27.9 / 72.4 ms | 19.3 / 23.8 ms · 15.3 / 19.8 ms |
+| input -> frame presented, Vulkan, avg / max | 29.7 / 52.7 ms | 18.6 / 21.8 ms · 14.8 / 18.7 ms |
+| frame CPU work avg (GLES / Vulkan) | 16.0 / 16.7 ms | 11.0 / 10.7 ms · 8.9 / 8.7 ms |
+| texture uploads for the 40 strokes | 11 519 (one per stamp) | 916-1 158 |
+| bytes uploaded | 11.8 MiB | 17.9-18.7 MiB |
+
+Runner-to-runner variance is visible in the two Block 3 runs; the baseline
+was measured once.
 
 Block 3 draws round antialiased dabs with fine spacing instead of Block 2's
 square stamps, so it uploads more bytes but in 12x fewer uploads. CPU brush
