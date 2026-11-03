@@ -42,21 +42,8 @@ run() { local name=$1 icd=$2; shift 2
     # Make failures readable from the CI job log itself.
     grep -E "\[FAIL\]|state=|attempt |E/" "$BUILD/$name.log" | head -25 | sed 's/^/      | /'
   fi; }
-# backend selection / fallback matrix
-run basic_gles             "$ICD"               gles   gles   --suite basic
-run basic_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite basic
-run basic_auto_vulkan      "$ICD"               auto   vulkan --suite basic
-run basic_auto_no_vulkan   /nonexistent.json    auto   gles   --suite basic
-run basic_vulkan_fallback  /nonexistent.json    vulkan gles   --suite basic
-run basic_no_backend       /nonexistent.json    vulkan none   --no-fallback --suite basic
-# lifecycle / surface protocol
-run lifecycle_gles         "$ICD"               gles   gles   --suite lifecycle
-run lifecycle_vulkan       "$ICD"               vulkan vulkan --no-fallback --suite lifecycle
-# injected faults, recovery and fallback after an error
-run faults_gles            "$ICD"               gles   gles   --no-fallback --suite faults
-run faults_vulkan_only     "$ICD"               vulkan vulkan --no-fallback --suite faults
-run faults_auto_fallback   "$ICD"               auto   vulkan --suite faults
-# PxPaint canvas engine (GPU canvas, tiles, viewport, self-test) on both backends
-run canvas_gles            "$ICD"               gles   gles   --suite canvas
-run canvas_vulkan          "$ICD"               vulkan vulkan --no-fallback --suite canvas
+# Block 2 BASELINE measurement only (branch perf-baseline-block2): drawing perf scenario.
+run perf_gles              "$ICD"               gles   gles   --suite perf
+run perf_vulkan            "$ICD"               vulkan vulkan --no-fallback --suite perf
+grep -h "PERF" "$BUILD"/perf_*.log || true
 exit $fail

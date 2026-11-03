@@ -319,6 +319,10 @@ bool Engine::stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t a
     }
     if (canvasPoint) *canvasPoint = c;
     if (rect.empty()) return false;
+    {
+        int64_t expectedZero = 0;
+        stampQueuedNs_.compare_exchange_strong(expectedZero, nowNs());
+    }
     const ContentOp op{rect.x, rect.y, rect.w, rect.h, argb};
     // The mirror and the posted task are updated under the same lock so the
     // render thread receives fills in exactly the mirror's order.
@@ -707,6 +711,7 @@ void Engine::renderFrame() {
             std::lock_guard<std::mutex> lock(viewMutex_);
             view = view_;
         }
+        if (const int64_t t = stampQueuedNs_.exchange(0)) frameStampNs_ = frameStampNs_ ? std::min(frameStampNs_, t) : t;
         sceneOk = canvas_.render(device, *frame.context, *frame.backbuffer, view);
         if (canvas_.selfTestWantsCapture() && !canvasCaptureInFlight_) {
             if (device.requestCapture())
@@ -749,6 +754,13 @@ void Engine::renderFrame() {
         status = gfx::FrameStatus::DeviceLost;
     }
     if (status == gfx::FrameStatus::Ok) {
+        if (frameStampNs_) {
+            const double l = (tPresented - frameStampNs_) / 1e6;
+            frameStampNs_ = 0;
+            latMax_ = std::max(latMax_, l);
+            latAvg_ = latN_ == 0 ? l : latAvg_ + (l - latAvg_) / 60.0;
+            latN_++;
+        }
         scheduler_.endFramePresented(tPresented, nsToMs(tAcquired - tBegin), nsToMs(tRecorded - tAcquired),
                                      nsToMs(tPresented - tRecorded));
         consecutiveErrors_ = 0;

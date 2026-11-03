@@ -803,6 +803,73 @@ int suiteCanvas(const std::string& pref, const std::string& expected, bool noFal
         for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());
     return 0;
 }
+
+// ================================================================ suite: perf (Block 2 baseline)
+// Block 2 drawing path, as WorkspaceScreen drove it: per touch sample the UI
+// placed dabs every max(1, 0.3 * size * zoom) screen px (StrokeSampler) and
+// sent ONE stamp per dab (Engine::stampAt -> posted task -> square fill ->
+// one texture upload per stamp).
+int suitePerf(const std::string& pref, const std::string& expected, bool noFallback) {
+    const BackendType want = expected == "vulkan" ? BackendType::Vulkan : BackendType::OpenGLES;
+    std::shared_ptr<WindowProbe> probe;
+    pe::EngineConfig cfg = makeConfig(pref, noFallback, RenderMode::OnDemand);
+    cfg.scene = pe::SceneMode::Canvas;
+    cfg.enableValidation = false;
+    pe::Engine engine(cfg);
+    engine.start();
+    constexpr uint32_t kW = 1080, kH = 1600;
+    engine.surfaceCreated(trackedWindow(kW, kH, probe));
+    engine.surfaceChanged(kW, kH);
+    check(waitRunning(engine) && engine.status().backend == want, "engine running on expected backend");
+    check(engine.createCanvas({2480, 3508, 0xFFFFFFFFu}).empty(), "A4 canvas (tiled)");
+    engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady; }, 10s);
+    double zf[] = {1.0, kW / 2.0, kH / 2.0};
+    engine.viewportOp(pe::ViewOp::SetZoomAt, zf, 3);
+    const auto s0 = engine.status();
+    const int64_t t0 = pe::nowNs();
+    std::vector<double> lags;
+    uint64_t stamps = 0;
+    for (int sidx = 0; sidx < 40; ++sidx) {
+        const double y = 200 + (sidx % 24) * 50;
+        std::vector<pe::canvas::Vec2> pts;
+        for (int i = 0; i <= 60; ++i) pts.push_back({100 + i * 13.0, y + 25 * std::sin(i * 0.3)});
+        const uint32_t size = sidx % 2 ? 48 : 6;
+        const double spacing = std::max(1.0, size * 0.3);
+        pe::canvas::Vec2 last = pts[0];
+        double carry = 0;
+        auto stamp = [&](pe::canvas::Vec2 p) { if (engine.stampAt(p.x, p.y, size, 0xFF203060u, nullptr)) stamps++; };
+        stamp(last);
+        for (size_t i = 1; i < pts.size(); i += 2) {
+            for (size_t k = i; k < std::min(pts.size(), i + 2); ++k) {
+                const pe::canvas::Vec2 d = pts[k] - last;
+                const double len = d.length();
+                double sdist = spacing - carry;
+                while (sdist <= len) { stamp(last + d * (sdist / len)); sdist += spacing; }
+                carry = len - (sdist - spacing);
+                last = pts[k];
+            }
+            std::this_thread::sleep_for(4ms);
+        }
+        const int64_t tEnd = pe::nowNs();
+        const uint64_t framesAtEnd = frames(engine);
+        engine.waitForStatus([&](const EngineStatus& s) { return s.canvas.journalOps >= stamps; }, 10s);
+        engine.waitForStatus([&](const EngineStatus& s) { return s.frames.framesPresented > framesAtEnd; }, 2s);
+        lags.push_back(msSince(tEnd));
+    }
+    const double total = msSince(t0);
+    const auto s1 = engine.status();
+    std::sort(lags.begin(), lags.end());
+    std::printf("    PERF-BASELINE %s: input->present avg %.2f ms, max %.2f ms (%llu frames with input); ", expected.c_str(),
+                engine.latAvg_, engine.latMax_, static_cast<unsigned long long>(engine.latN_));
+    std::printf("40 strokes in %.0f ms (4.8 s of input pacing), %llu frames, frame CPU work avg %.2f ms "
+                "(steady), end of stroke -> idle: median %.1f ms, worst %.1f ms, %llu uploads (%llu stamps), %.1f MiB uploaded\n",
+                total, static_cast<unsigned long long>(s1.frames.framesPresented - s0.frames.framesPresented),
+                s1.frames.steadyAvgRecordMs + s1.frames.steadyAvgSubmitMs, lags[lags.size() / 2], lags.back(),
+                static_cast<unsigned long long>(s1.canvas.textureUploads - s0.canvas.textureUploads),
+                static_cast<unsigned long long>(stamps), (s1.canvas.bytesUploaded - s0.canvas.bytesUploaded) / 1048576.0);
+    engine.shutdown();
+    return 0;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -833,6 +900,8 @@ int main(int argc, char** argv) {
         suiteFaults(pref, expected, noFallback);
     else if (suite == "canvas")
         suiteCanvas(pref, expected, noFallback);
+    else if (suite == "perf")
+        suitePerf(pref, expected, noFallback);
     else {
         std::fprintf(stderr, "unknown suite %s\n", suite.c_str());
         return 2;

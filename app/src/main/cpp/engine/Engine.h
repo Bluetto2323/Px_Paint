@@ -249,6 +249,13 @@ private:
     std::vector<ContentOp> contentOps_;
     uint64_t contentRevision_ = 0;
 
+public:
+    // Baseline measurement only (Block 2 + instrumentation): stamp -> present.
+    std::atomic<int64_t> stampQueuedNs_{0};
+    int64_t frameStampNs_ = 0;
+    double latAvg_ = 0, latMax_ = 0;
+    uint64_t latN_ = 0;
+private:
     // Published snapshot
     mutable std::mutex statusMutex_;
     mutable std::condition_variable statusCv_;
