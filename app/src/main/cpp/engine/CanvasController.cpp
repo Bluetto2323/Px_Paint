@@ -304,6 +304,16 @@ void CanvasController::fillStatus(CanvasStatus& c) const {
     c.compositeTiles = d.compositeTiles;
     c.compositeLastMs = d.lastCompositeMs;
     c.compositeMaxMs = d.maxCompositeMs;
+    c.historyUndo = static_cast<uint32_t>(d.history.undoSteps);
+    c.historyRedo = static_cast<uint32_t>(d.history.redoSteps);
+    c.historyBytes = d.history.bytes;
+    c.historyBudget = d.history.budget;
+    c.historyMaxSteps = static_cast<uint32_t>(d.history.maxSteps);
+    c.historyDropped = d.history.dropped;
+    c.historyRefused = d.history.refused;
+    c.historyLastUndoMs = d.history.lastUndoMs;
+    c.historyLastRedoMs = d.history.lastRedoMs;
+    c.historyLastRecordMs = d.history.lastRecordMs;
     c.revision = d.revision;
     c.brushStrokes = d.brush.strokesCommitted;
     c.brushCancelled = d.brush.strokesCancelled;

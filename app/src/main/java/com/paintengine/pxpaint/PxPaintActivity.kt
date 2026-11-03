@@ -357,6 +357,8 @@ class PxPaintActivity : Activity(), PxHost {
             engineFailed = true
             return null
         }
+        // Undo history: memory budget from the device RAM (on top of the canvas budget).
+        e.setHistoryBudget(historyBudget(), com.paintengine.pxpaint.core.HistoryState.MAX_STEPS)
         if (!resumed) e.pause()
         engine = e
         return e
@@ -369,7 +371,14 @@ class PxPaintActivity : Activity(), PxHost {
         return CanvasSizeRules.budgetForRam(mi.totalMem)
     }
 
-    private fun renderMode(s: AppSettings) =
+    /** 1/32 of device RAM, clamped to 32 … 192 MiB (HistoryState.budgetForRam). */
+    fun historyBudget(): Long {
+        val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        return com.paintengine.pxpaint.core.HistoryState.budgetForRam(mi.totalMem)
+    }
+
+        private fun renderMode(s: AppSettings) =
         if (s.render == RenderPreference.SMOOTH) NativeEngine.RenderMode.CONTINUOUS else NativeEngine.RenderMode.ON_DEMAND
 
     // --------------------------------------------------------------- window

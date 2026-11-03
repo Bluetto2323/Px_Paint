@@ -397,3 +397,50 @@ Installa `PxPaint-block6-debug-….apk` **sopra** la build precedente, così si 
 | 3.3 | Trascina l'opacità di un livello grande | la tela si aggiorna in fretta; su tele molto grandi si aggiorna a zone in pochi istanti, l'app non si blocca |
 
 Riporta OK / KO per ogni riga.
+
+
+---
+
+# Blocco 7 — Annulla / Ripeti: checklist sul Galaxy A33
+
+Installa `PxPaint-block7-debug-….apk` **sopra** la build del Blocco 6 (i progetti restano).
+
+### 1. Tratti
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1.1 | Apri una tela nuova | ↶ e ↷ in alto sono attenuati (disattivati) |
+| 1.2 | Disegna un tratto | ↶ si attiva subito dopo aver sollevato il dito |
+| 1.3 | ↶ | il tratto sparisce del tutto (anche i bordi sfumati); messaggio "Annullato: Tratto · …"; ↷ si attiva |
+| 1.4 | ↷ | il tratto ricompare identico |
+| 1.5 | 10 tratti, poi ↶ 10 volte | spariscono uno alla volta, dal più recente; poi ↶ si disattiva |
+| 1.6 | ↶ 3 volte, poi disegna un tratto nuovo | ↷ si disattiva (i 3 passi annullati non sono più ripetibili) |
+| 1.7 | Gomma su un tratto semitrasparente, poi ↶ | il tratto torna esattamente com'era |
+| 1.8 | Pennelli diversi (acquerello, gesso, aerografo), ↶ e ↷ | ogni tratto sparisce e ricompare identico, grana compresa |
+
+### 2. Livelli
+
+| # | Azione | Atteso |
+|---|---|---|
+| 2.1 | Aggiungi un livello, ↶ | il livello sparisce; ↷ lo rimette |
+| 2.2 | Disegna su un livello, eliminalo, ↶ | torna lo stesso livello (stesso nome, stesso disegno, stessa posizione) |
+| 2.3 | Duplica, Sposta su/giù, Rinomina, Nascondi, Blocca, Modalità: ↶ dopo ognuno | ogni modifica torna indietro; il pannello Livelli si aggiorna |
+| 2.4 | Trascina l'opacità di un livello, ↶ | torna all'opacità di prima del trascinamento, in un solo passo |
+| 2.5 | Unisci in basso, ↶ | tornano i due livelli originali, con modalità e opacità |
+| 2.6 | ⋮ → Unisci tutti i livelli, ↶ | tornano tutti i livelli, anche quelli nascosti |
+| 2.7 | ⋮ → Svuota livello, ↶ | il disegno torna |
+
+### 3. Cronologia, memoria, salvataggio
+
+| # | Azione | Atteso |
+|---|---|---|
+| 3.1 | Tieni premuto ↶ (o ⋮ → Cronologia) | pannello Cronologia: passaggi dal più recente, quello attuale evidenziato, gli annullati attenuati, "Inizio" in fondo |
+| 3.2 | Tocca un passaggio più in basso, poi uno più in alto | la tela salta a quello stato e poi torna avanti |
+| 3.3 | Svuota cronologia (con conferma) | il disegno non cambia; ↶ e ↷ si disattivano |
+| 3.4 | Più di 100 tratti | restano disponibili gli ultimi 100 (o meno su tele grandi); il pannello dice quanti sono stati eliminati |
+| 3.5 | ↶ alcuni passi, torna alla galleria, riapri la tela | la tela è come la lasciavi (passi annullati esclusi); la cronologia è vuota |
+| 3.6 | ↶ un'eliminazione di livello, chiudi l'app dalle recenti, riapri | il livello ripristinato c'è |
+| 3.7 | Indicatore prestazioni, disegna velocemente | il tratto è fluido come nel Blocco 6 |
+
+Riporta OK / KO per ogni riga.
+

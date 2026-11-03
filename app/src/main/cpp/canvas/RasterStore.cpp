@@ -180,6 +180,11 @@ void RasterStore::markAllUnsaved() {
     version_++;
 }
 
+void RasterStore::markEverythingUnsaved() {
+    for (auto& t : tiles_) t.unsaved = true;
+    version_++;
+}
+
 bool RasterStore::tileEmpty(int32_t tx, int32_t ty) const {
     const uint8_t* px = tile(tx, ty);
     if (!px) return true;

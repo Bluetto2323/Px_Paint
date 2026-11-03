@@ -15,6 +15,7 @@ import com.paintengine.pxpaint.core.BrushTool
  *   editor          brush editor of --es pxpaint.brush <preset id>
  *   settings        settings screen
  *   layers          five layers (modes, opacity, hidden, locked) + the Layers panel
+ *   history         the layers demo (all recorded), 3 steps undone, the History panel
  *
  * The strokes are drawn through the normal engine stroke API with finger-like
  * samples (no pressure: nothing is simulated).

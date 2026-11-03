@@ -36,7 +36,7 @@ ninja -C "$BUILD"
 export EGL_PLATFORM=surfaceless
 fail=0
 # Pure-CPU suites (no GPU): canvas math / tiles / storage, brush engine.
-for t in pe_canvas_test pe_brush_test pe_layer_test; do
+for t in pe_canvas_test pe_brush_test pe_layer_test pe_history_test; do
   if "$BUILD/$t" > "$BUILD/$t.log" 2>&1; then
     echo "PASS  $t  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$t.log"))"
   else
@@ -53,7 +53,7 @@ run() { local name=$1 icd=$2; shift 2
     grep -E "\[FAIL\]|state=|attempt |E/" "$BUILD/$name.log" | head -25 | sed 's/^/      | /'
   fi
   # Measurements (brush / canvas suites) straight into the job log.
-  case "$name" in brush_*|canvas_*|perf_*) grep -E "^    " "$BUILD/$name.log" | grep -vE "^    \[" | head -14 | sed 's/^/      /' || true;; esac; }
+  case "$name" in brush_*|canvas_*|perf_*) grep -E "^    " "$BUILD/$name.log" | grep -vE "^    \[" | head -30 | sed 's/^/      /' || true;; esac; }
 # backend selection / fallback matrix
 run basic_gles             "$ICD"               gles   gles   --suite basic
 run basic_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite basic

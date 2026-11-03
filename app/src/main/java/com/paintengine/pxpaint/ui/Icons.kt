@@ -15,7 +15,7 @@ import android.graphics.drawable.Drawable
 enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
-    EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE,
+    EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE, HISTORY,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -162,6 +162,12 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 poly(c, 12f, 3.5f, 20f, 7.5f, 12f, 11.5f, 4f, 7.5f, close = true)
                 line(c, 12f, 13.5f, 12f, 20.5f)
                 poly(c, 8.5f, 17f, 12f, 20.5f, 15.5f, 17f)
+            }
+            Icon.HISTORY -> {
+                // Clock face with a counter-clockwise arrow: going back in time.
+                arc(c, 12f, 12f, 8f, 200f, 290f)
+                poly(c, 3.2f, 6.8f, 4.6f, 10.4f, 8.2f, 9.2f)
+                poly(c, 12f, 7.5f, 12f, 12f, 15f, 14f)
             }
             Icon.RESET -> { arc(c, 12f, 12.5f, 7f, 120f, 300f); poly(c, 4.2f, 8.5f, 5.6f, 12.3f, 9.2f, 10.8f) }
             Icon.BRUSH -> {

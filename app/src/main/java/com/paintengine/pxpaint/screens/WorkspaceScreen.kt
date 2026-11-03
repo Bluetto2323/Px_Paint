@@ -21,6 +21,7 @@ import com.paintengine.pxpaint.core.DockPlacement
 import com.paintengine.pxpaint.core.Format
 import com.paintengine.pxpaint.core.LayerError
 import com.paintengine.pxpaint.core.LayerInfo
+import com.paintengine.pxpaint.core.HistoryState
 import com.paintengine.pxpaint.core.LayerStack
 import com.paintengine.pxpaint.core.LayoutPolicy
 import com.paintengine.pxpaint.core.P
@@ -82,7 +83,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         MOVE(Icon.MOVE, S.TOOL_MOVE, S.TOOL_MOVE_DESC),
     }
 
-    private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY }
+    private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY, HISTORY }
 
     private val handler = Handler(Looper.getMainLooper())
     private var engine: NativeEngine? = null
@@ -106,6 +107,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private val thumbCache = HashMap<Int, Pair<Long, android.graphics.Bitmap>>()
     private val thumbExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "PxPaint-layer-thumbs") }
     private var lastBlockedMessage = 0L
+    // UI thread: undo / redo availability (lock-free engine counts) and the
+    // last fetched history list (History panel).
+    private var historyCounts = 0 to 0
+    private var history = HistoryState.EMPTY
+    private var undoButton: IconButton? = null
+    private var redoButton: IconButton? = null
 
     // Tools (sizes / opacities / spacing / colour live in host.brush, persisted)
     private var tool = Tool.MARKER
@@ -132,6 +139,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     /** Debug-only scripted state (DebugDemo), run once the canvas is loaded. */
     var demo: DebugDemo.Script? = null
 
+
+    private val historyRefresh = Runnable { refreshHistoryButtons() }
 
     private val poll = object : Runnable {
         override fun run() {
@@ -179,6 +188,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         thumbExec.shutdown()
         layerExec.shutdown()
         handler.removeCallbacks(poll)
+        handler.removeCallbacks(historyRefresh)
         router.interrupt()
         closeCanvas()
     }
@@ -276,7 +286,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private class OpenFailure(message: String) : Exception(message)
 
     /** DebugDemo "layers": a few layers with different modes, one hidden, one locked; then the panel. */
-    private fun demoLayers(e: NativeEngine, w: Float, h: Float) {
+    private fun demoLayers(e: NativeEngine, w: Float, h: Float, openPanel: Boolean = true) {
         val round = host.brushes.get("builtin.airbrush")?.params ?: return
         fun stroke(x0: Float, y0: Float, x1: Float, y1: Float, size: Float, argb: Int) {
             val n = 30
@@ -309,7 +319,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         e.layerOp(NativeEngine.LayerOp.LOCKED, ink, 1)
         e.layerOp(NativeEngine.LayerOp.ACTIVE, shade)
         layerStack = LayerStack.parse(e.layers())
-        handler.postDelayed({ setPanel(Panel.LAYERS) }, 400)
+        if (openPanel) handler.postDelayed({ setPanel(Panel.LAYERS) }, 400)
     }
 
     /** DebugDemo: one stroke per built-in preset (finger-like samples), then the requested panel. */
@@ -345,6 +355,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         when (d.panel) {
             "layers" -> demoLayers(e, w, h)
+            "history" -> {
+                // The layered demo (strokes + layer operations, all recorded), then 3 steps undone and the panel.
+                demoLayers(e, w, h, openPanel = false)
+                historyOp(NativeEngine.HistoryOp.UNDO, 3, announce = false)
+                handler.postDelayed({ setPanel(Panel.HISTORY) }, 600)
+            }
             "workspace" -> setPanel(Panel.TOOL)
             "library" -> {
                 d.filter?.let { libraryState.filter = it }
@@ -432,6 +448,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             return
         }
         updateViewport(e.viewport(ViewOp.QUERY))
+        refreshHistoryButtons()
         hud?.let { h ->
             val fps = if (s.optBoolean("rateValid")) String.format(java.util.Locale.US, " · %.0f fps", s.optDouble("fps")) else ""
             h.text = String.format(
@@ -560,6 +577,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (StylusInput.append(e, pointerId, strokeKind, strokeT0, samples)) engine?.strokeSamples(samples.data, samples.count)
             }
             engine?.strokeEnd()
+            // The stroke becomes a history step at the next frame: show it without waiting for the poll.
+            handler.postDelayed(historyRefresh, 50)
         }
 
         override fun cancelStroke() {
@@ -712,12 +731,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setOnClickListener { rename() }
         }
         addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        for ((icon, label) in listOf(Icon.UNDO to S.UNDO, Icon.REDO to S.REDO)) {
-            addView(IconButton(context, theme, icon, "${tr(label)} — ${tr(S.UNDO_SOON)}").apply {
-                alpha = 0.4f
-                setOnClickListener { host.overlays.message(tr(S.UNDO_SOON)) }
-            })
-        }
+        // Undo / redo: tap = one step, long-press = the History panel.
+        undoButton = IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}").apply {
+            setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
+            setOnLongClickListener { togglePanel(Panel.HISTORY); true }
+        }.also { addView(it) }
+        redoButton = IconButton(context, theme, Icon.REDO, "${tr(S.REDO)} — ${tr(S.REDO_DESC)}").apply {
+            setOnClickListener { historyOp(NativeEngine.HistoryOp.REDO) }
+            setOnLongClickListener { togglePanel(Panel.HISTORY); true }
+        }.also { addView(it) }
+        showHistoryButtons()
         val more = IconButton(context, theme, Icon.MORE, tr(S.CANVAS_MENU))
         more.setOnClickListener { canvasMenu(more) }
         addView(more)
@@ -812,6 +835,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             Panel.COLOR -> colorPicker()
             Panel.LAYERS -> layersPanel()
             Panel.LIBRARY -> libraryPanel()
+            Panel.HISTORY -> historyPanel()
             Panel.NONE -> return
         }
         val card = column(context, theme, horizontalPadding = false) {
@@ -986,6 +1010,93 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private fun layersPanel(): View = LayersPanel(host, layerOps).view()
 
+    // ---------------------------------------------------------------- history
+    private fun historyPanel(): View {
+        if (history.undo != historyCounts.first || history.redo != historyCounts.second) fetchHistory()
+        return HistoryPanel(host, historyOps).view()
+    }
+
+    private val historyOps = object : HistoryPanel.Ops {
+        override val history: HistoryState get() = this@WorkspaceScreen.history
+        override fun goTo(index: Int) {
+            val delta = history.moveTo(index)
+            if (delta < 0) historyOp(NativeEngine.HistoryOp.UNDO, -delta, announce = false)
+            else if (delta > 0) historyOp(NativeEngine.HistoryOp.REDO, delta, announce = false)
+        }
+        override fun clear() = historyOp(NativeEngine.HistoryOp.CLEAR)
+    }
+
+    /** Enabled state of undo / redo from the engine's lock-free counts (cheap: every poll and after edits). */
+    private fun refreshHistoryButtons() {
+        val e = engine ?: return
+        if (closed) return
+        val c = e.historyCounts()
+        if (c == historyCounts) return
+        historyCounts = c
+        showHistoryButtons()
+        if (panel == Panel.HISTORY) fetchHistory()
+    }
+
+    private fun showHistoryButtons() {
+        val (u, r) = historyCounts
+        undoButton?.let { it.isEnabled = u > 0; it.alpha = if (u > 0) 1f else 0.38f }
+        redoButton?.let { it.isEnabled = r > 0; it.alpha = if (r > 0) 1f else 0.38f }
+    }
+
+    /** History list for the panel, read off the UI thread (it consumes queued input). */
+    private fun fetchHistory() {
+        val e = engine ?: return
+        if (closed) return
+        layerExec.execute {
+            val h = HistoryState.parse(e.historyTable()) ?: return@execute
+            host.runOnMain {
+                if (closed) return@runOnMain
+                history = h
+                historyCounts = h.undo to h.redo
+                showHistoryButtons()
+                if (panel == Panel.HISTORY) showPanel(Panel.HISTORY)
+            }
+        }
+    }
+
+    /**
+     * Undo / redo [count] steps, or clear the history, on the layer thread
+     * (after every queued layer operation, in order). The layer stack, the
+     * panels and the buttons follow; the step undone / redone is announced.
+     */
+    private fun historyOp(op: NativeEngine.HistoryOp, count: Int = 1, announce: Boolean = true) {
+        val e = engine ?: return
+        if (closed || !loaded) return
+        layerExec.execute {
+            val done = e.history(op, count)
+            val table = e.layers()
+            val h = HistoryState.parse(e.historyTable())
+            host.runOnMain {
+                if (closed) return@runOnMain
+                LayerStack.parse(table)?.let { layerStack = it }
+                if (h != null) {
+                    history = h
+                    historyCounts = h.undo to h.redo
+                }
+                showHistoryButtons()
+                when {
+                    done < 0 -> host.overlays.message(tr(S.HISTORY_REFUSED), long = true)
+                    op == NativeEngine.HistoryOp.CLEAR -> host.overlays.message(tr(S.HISTORY_CLEARED))
+                    done == 0 -> host.overlays.message(tr(if (op == NativeEngine.HistoryOp.UNDO) S.NOTHING_TO_UNDO else S.NOTHING_TO_REDO))
+                    announce && h != null -> {
+                        // Undo: the first undone step; redo: the last done one.
+                        val step = if (op == NativeEngine.HistoryOp.UNDO) h.steps.getOrNull(h.undo) else h.steps.getOrNull(h.undo - 1)
+                        step?.let {
+                            val what = tr(it.kind.label) + if (it.label.isNotEmpty()) " · ${it.label}" else ""
+                            host.overlays.message(tr(if (op == NativeEngine.HistoryOp.UNDO) S.UNDONE else S.REDONE, what))
+                        }
+                    }
+                }
+                if (panel == Panel.LAYERS || panel == Panel.HISTORY) showPanel(panel)
+            }
+        }
+    }
+
     private val layerOps = object : LayersPanel.Ops {
         override val stack: LayerStack? get() = layerStack
         override fun run(op: NativeEngine.LayerOp, id: Int, arg: Int, value: Float, text: String?, done: S?) =
@@ -1012,6 +1123,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (err != LayerError.NONE) err.message?.let { host.overlays.message(tr(it)) }
                 else done?.let { host.overlays.message(tr(it)) }
                 LayerStack.parse(table)?.let { layerStack = it }
+                refreshHistoryButtons()
                 // The opacity slider keeps its own state while it is dragged.
                 if (panel == Panel.LAYERS && op != NativeEngine.LayerOp.OPACITY) showPanel(Panel.LAYERS)
             }
@@ -1111,6 +1223,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             OverlayHost.MenuItem(tr(S.ACTUAL_PIXELS), Icon.PIXELS) { viewOp(ViewOp.SET_ZOOM_AT, 1.0, c[0], c[1]) },
             OverlayHost.MenuItem(tr(S.RESET_ROTATION), Icon.ROTATE) { viewOp(ViewOp.SET_ROTATION_AT, 0.0, c[0], c[1]) },
             OverlayHost.MenuItem(tr(S.CENTER), Icon.CENTER) { viewOp(ViewOp.CENTER) },
+            OverlayHost.MenuItem(tr(S.HISTORY), Icon.HISTORY) { setPanel(Panel.HISTORY) },
             OverlayHost.MenuItem(tr(S.CANVAS_INFO), Icon.INFO) { canvasInfo() },
             OverlayHost.MenuItem(tr(S.TEST_RENDERING), Icon.TARGET) { testRendering() },
             OverlayHost.MenuItem(tr(S.CLEAR_CANVAS), Icon.TRASH, destructive = true) { confirmClear() },

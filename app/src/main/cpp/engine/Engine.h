@@ -191,6 +191,17 @@ public:
     }
     void runCanvasSelfTest();
 
+    // --- Undo / redo history (any thread; Block 7). Applies at the next frame.
+    enum class HistoryOp : int32_t { Undo = 0, Redo = 1, Clear = 2 };
+    // Undo / Redo `count` steps (>= 1). Returns the steps done, or -1 if a
+    // step was refused (the document was not in the recorded state: nothing
+    // was changed and the history was cleared). Clear returns 0.
+    int historyOp(HistoryOp op, int32_t count);
+    uint64_t historyCounts() const { return doc_.historyCounts(); }
+    std::vector<HistoryEntry> historyEntries() { return doc_.historyEntries(); }
+    HistoryStats historyStats() { return doc_.historyStats(); }
+    void setHistoryBudget(uint64_t bytes, size_t maxSteps) { doc_.setHistoryBudget(bytes, maxSteps); }
+
     // Viewport: applied immediately (thread-safe), drawn at the next frame.
     ViewportInfo viewportOp(ViewOp op, const double* args, size_t argCount);
     canvas::Vec2 screenToCanvas(canvas::Vec2 screen) const;

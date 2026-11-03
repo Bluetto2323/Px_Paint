@@ -1,4 +1,4 @@
-# PxPaint — Blocco 6 (livelli) sul motore Paint Engine
+# PxPaint — Blocco 7 (annulla / ripeti) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -45,6 +45,20 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   * Nuovo formato di progetto a livelli; le tele precedenti vengono migrate.
   * Pannello Livelli con miniature.
   * Dettagli: `docs/LAYERS.md`, `docs/BLOCK6_REPORT.md`.
+* **Blocco 7**: **annulla / ripeti**.
+  * Cronologia nel motore, indipendente dall'interfaccia: un comando per
+    operazione, con `undo()` e `redo()` esatti.
+  * Tratti e gomma: per ogni tile toccato, solo il rettangolo modificato,
+    salvato come XOR prima/dopo compresso (RLE) e verificato con hash prima
+    di ogni ripristino. Il risultato è identico bit per bit, alpha compreso,
+    senza istantanee della tela.
+  * Tutte le operazioni sui livelli sono annullabili: un livello eliminato
+    torna con lo stesso id e contenuto; unisci in basso e unisci tutto sono
+    reversibili.
+  * Budget di memoria (1/32 della RAM) e limite di 100 passi: i più vecchi
+    vengono scartati.
+  * Pulsanti ↶ ↷ attivi o disattivati, pannello Cronologia.
+  * Dettagli: `docs/HISTORY.md`, `docs/BLOCK7_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).

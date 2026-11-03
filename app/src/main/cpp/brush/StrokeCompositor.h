@@ -32,6 +32,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -56,6 +57,18 @@ struct DabShape {
 
 class StrokeCompositor {
 public:
+    // A tile the committed stroke changed: its pixels before the stroke
+    // (`before`, null if the tile did not exist) and the region written.
+    struct CommittedTile {
+        int32_t tx = 0, ty = 0;
+        const uint8_t* before = nullptr;
+        canvas::RectI touched;
+    };
+    // Called by commit() with the store already holding the final pixels
+    // (the history records the stroke from it). Not called for cancels.
+    using CommitHook = std::function<void(const canvas::RasterStore&, const std::vector<CommittedTile>&, bool erase)>;
+    void setCommitHook(CommitHook hook) { commitHook_ = std::move(hook); }
+
     struct Stats {
         uint64_t dabs = 0;
         uint64_t compositedPixels = 0;
@@ -99,6 +112,7 @@ private:
         std::unique_ptr<uint16_t[]> tail;       // kTile * kTile
         canvas::RectI dirty;                    // canvas coords, to composite
         canvas::RectI tailRect;                 // canvas coords covered by the tail mask
+        canvas::RectI touched;                  // canvas coords written to the store so far
     };
     StrokeTile* tileFor(canvas::RasterStore& store, int32_t tx, int32_t ty, bool create);
     void rasterDab(canvas::RasterStore& store, const Dab& d, bool toTail, uint32_t index);
@@ -125,6 +139,8 @@ private:
     std::vector<std::unique_ptr<StrokeTile>> tiles_;
     std::vector<std::unique_ptr<StrokeTile>> pool_;
     Stats stats_;
+    CommitHook commitHook_;
+    std::vector<CommittedTile> committedScratch_;
 };
 
 }  // namespace pe::brush

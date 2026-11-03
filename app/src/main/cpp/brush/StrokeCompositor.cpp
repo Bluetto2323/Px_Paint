@@ -103,6 +103,7 @@ StrokeCompositor::StrokeTile* StrokeCompositor::tileFor(RasterStore& store, int3
     std::memset(st->tail.get(), 0, kPlane * sizeof(uint16_t));
     st->dirty = {};
     st->tailRect = {};
+    st->touched = {};
     if (!settings_.erase) store.tileForWrite(tx, ty);  // paint needs a destination tile
     slot_[idx] = static_cast<int32_t>(tiles_.size());
     tiles_.push_back(std::move(st));
@@ -481,6 +482,7 @@ void StrokeCompositor::composite(RasterStore& store, StrokeTile& st) {
     const RectI region = st.dirty.intersect(store.tileRect(st.tx, st.ty));
     st.dirty = {};
     if (region.empty()) return;
+    grow(st.touched, region);
     uint8_t* dst = settings_.erase ? const_cast<uint8_t*>(store.tile(st.tx, st.ty)) : store.tileForWrite(st.tx, st.ty);
     if (!dst) return;
     const int32_t ox = st.tx * kTile, oy = st.ty * kTile;
@@ -538,6 +540,13 @@ void StrokeCompositor::commit(RasterStore& store) {
     // leftover provisional tail is removed.
     setTail(store, nullptr, 0);
     flush(store);
+    if (commitHook_) {
+        committedScratch_.clear();
+        for (const auto& st : tiles_)
+            if (!st->touched.empty())
+                committedScratch_.push_back({st->tx, st->ty, st->storeHadTile ? st->base.get() : nullptr, st->touched});
+        if (!committedScratch_.empty()) commitHook_(store, committedScratch_, settings_.erase);
+    }
     releaseTiles();
     active_ = false;
 }
@@ -548,8 +557,8 @@ void StrokeCompositor::cancel(RasterStore& store) {
         if (st->storeHadTile) {
             uint8_t* px = store.tileForWrite(st->tx, st->ty);
             std::memcpy(px, st->base.get(), RasterStore::kTileBytes);
-        } else if (uint8_t* px = const_cast<uint8_t*>(store.tile(st->tx, st->ty))) {
-            std::memset(px, 0, RasterStore::kTileBytes);
+        } else {
+            store.releaseTile(st->tx, st->ty);  // it did not exist before the stroke: gone again
         }
         store.markChanged(store.tileRect(st->tx, st->ty));
     }

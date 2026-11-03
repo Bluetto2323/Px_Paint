@@ -60,6 +60,11 @@ shot 11-layers-panel
 adb shell uiautomator dump /sdcard/ui11.xml > /dev/null 2>&1 && adb pull /sdcard/ui11.xml "$OUT/11-layout.xml" > /dev/null 2>&1 || true
 adb shell input swipe 540 1700 540 900 500; sleep 2
 shot 12-layers-panel-scrolled
+start --es pxpaint.demo history
+shot 13-history-panel
+adb shell uiautomator dump /sdcard/ui13.xml > /dev/null 2>&1 && adb pull /sdcard/ui13.xml "$OUT/13-layout.xml" > /dev/null 2>&1 || true
+adb shell input swipe 540 1700 540 900 500; sleep 2
+shot 14-history-panel-scrolled
 start --es pxpaint.demo settings
 shot 09-settings
 adb shell input swipe 540 1900 540 600 600; sleep 2

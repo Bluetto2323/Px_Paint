@@ -148,6 +148,24 @@ blends with. Status fields `canvasLayers`, `canvasCompositeTiles`,
 content tiles, `canvasRasterBytes` the CPU memory of layers + composite.
 Details: `docs/LAYERS.md`.
 
+## Undo / redo history (Block 7)
+
+| Call | Notes |
+|---|---|
+| `history(op, count)` | `UNDO` / `REDO` `count` steps (queued strokes are committed first), or `CLEAR`. Returns the steps done; -1 if a step was refused (the document was not in the recorded state: nothing changed, the history was cleared). |
+| `historyCounts()` | `(undo, redo)` steps available. Lock-free: for button states, callable from the UI thread. |
+| `historyTable()` | `history\tundo\tredo\tbytes\tbudget\tmaxSteps\tdropped\trefused`, then per step, oldest first, `kind\tundone\tlabel` (label = layer name, escaped). Parsed by `pxpaint.core.HistoryState.parse`. |
+| `setHistoryBudget(bytes, maxSteps)` | Memory budget and step limit (<= 0 keeps the value). Defaults: 128 MiB, 100 steps; the app uses `HistoryState.budgetForRam`. |
+
+Kinds: 0 stroke, 1 erase, 2 clear layer, 3 fill, 4 add layer, 5 delete layer,
+6 duplicate, 7 move, 8 rename, 9 visibility, 10 lock, 11 opacity, 12 blend,
+13 merge down, 14 flatten. Every layer operation of the table above is
+recorded except `ACTIVE`; failed operations and cancelled strokes are not.
+Opening, closing, loading a canvas and `importLayerTiles` clear the history.
+Status fields: `historyUndo`, `historyRedo`, `historyBytes`, `historyBudget`,
+`historyMaxSteps`, `historyDropped`, `historyRefused`, `historyLastUndoMs`,
+`historyLastRedoMs`, `historyLastRecordMs`. Details: `docs/HISTORY.md`.
+
 ## Canvas content and persistence
 
 The canvas pixels are a **CPU raster** (`canvas/RasterStore`): premultiplied
@@ -223,8 +241,8 @@ Invariants, checked by `pe_canvas_test`:
 ## Reserved for later blocks
 
 * Pressure / stylus (Block 4): `StrokePoint` already carries the sample time; pressure and tilt join it, and `BrushSettings` gains dynamics. The path and compositor do not change.
-* Layers: one `RasterStore` + `CanvasSurface` per layer, plus a compositor.
-* Undo: the stroke compositor already keeps the pre-stroke tiles (the "base"); an undo history keeps them after commit instead of recycling them.
+* Layers: done in Block 6 (`docs/LAYERS.md`).
+* Undo: done in Block 7 (`docs/HISTORY.md`).
 
 The UI already reserves the entry points (Undo/Redo, Layers, tool settings),
 shown disabled with an explanation.

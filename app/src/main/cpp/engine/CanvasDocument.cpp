@@ -46,9 +46,141 @@ const char* layerErrorName(LayerError e) {
     return "?";
 }
 
+CanvasDocument::CanvasDocument() {
+    // Every committed stroke becomes one history step (called under mutex_).
+    brush_.setCommitHook([this](const RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
+                                bool erase) { onStrokeCommitted(store, tiles, erase); });
+}
+
+void CanvasDocument::onStrokeCommitted(const RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
+                                       bool erase) {
+    const int64_t t0 = nowNs();
+    Layer* a = activeLayer();
+    if (!a || &a->store != &store) return;  // (always the active layer's store)
+    PixelPatch patch;
+    for (const auto& t : tiles) {
+        const RectI r = t.touched.intersect(store.tileRect(t.tx, t.ty));
+        patch.addTile(t.tx, t.ty, r, t.before, store.tile(t.tx, t.ty));
+    }
+    if (patch.empty()) return;
+    auto cmd = std::make_unique<PixelCommand>(erase ? HistoryKind::Erase : HistoryKind::Stroke, a->info.id, std::move(patch));
+    cmd->setLabel(a->info.name);
+    history_.push(std::move(cmd));
+    history_.noteRecordTime(static_cast<double>(nowNs() - t0) / 1e6);
+}
+
+// --- HistoryTarget ----------------------------------------------------------
+LayerData* CanvasDocument::findLayer(uint32_t id) {
+    const int32_t i = indexOf(id);
+    return i >= 0 ? layers_[static_cast<size_t>(i)].get() : nullptr;
+}
+
+void CanvasDocument::insertLayer(int32_t index, std::unique_ptr<LayerData> layer) {
+    if (!layer) return;
+    index = std::clamp<int32_t>(index, 0, static_cast<int32_t>(layers_.size()));
+    layer->store.markEverythingUnsaved();  // its file may be gone or hold other pixels
+    dirtyScratch_.clear();
+    layer->store.takeGpuDirty(dirtyScratch_);
+    markTilesOf(layer->store);
+    layers_.insert(layers_.begin() + index, std::move(layer));
+    refreshEditable();
+}
+
+std::unique_ptr<LayerData> CanvasDocument::removeLayer(uint32_t id) {
+    const int32_t i = indexOf(id);
+    if (i < 0) return nullptr;
+    markTilesOf(layers_[static_cast<size_t>(i)]->store);
+    std::unique_ptr<LayerData> l = std::move(layers_[static_cast<size_t>(i)]);
+    layers_.erase(layers_.begin() + i);
+    if (activeId_ == id && !layers_.empty()) activeId_ = layers_[static_cast<size_t>(std::max(0, i - 1))]->info.id;
+    refreshEditable();
+    return l;
+}
+
+void CanvasDocument::moveLayerTo(uint32_t id, int32_t index) {
+    const int32_t i = indexOf(id);
+    if (i < 0) return;
+    index = std::clamp<int32_t>(index, 0, static_cast<int32_t>(layers_.size()) - 1);
+    markTilesOf(layers_[static_cast<size_t>(i)]->store);
+    auto l = std::move(layers_[static_cast<size_t>(i)]);
+    layers_.erase(layers_.begin() + i);
+    layers_.insert(layers_.begin() + index, std::move(l));
+}
+
+void CanvasDocument::setActiveLayer(uint32_t id) {
+    if (indexOf(id) >= 0) activeId_ = id;
+    refreshEditable();
+}
+
+void CanvasDocument::layerPixelsChanged(uint32_t id, const RectI&) {
+    // The patch marked its rectangles changed: composited (and saved) from there.
+    const int32_t i = indexOf(id);
+    if (i >= 0 && layers_[static_cast<size_t>(i)]->info.id != activeId_) {
+        dirtyScratch_.clear();
+        layers_[static_cast<size_t>(i)]->store.takeGpuDirty(dirtyScratch_);
+        if (pending_.size() != composite_.tileCount()) pending_.assign(composite_.tileCount(), 0);
+        for (const auto& r : dirtyScratch_) {
+            uint8_t& p = pending_[composite_.index(r.x / RasterStore::kTile, r.y / RasterStore::kTile)];
+            if (!p) {
+                p = 1;
+                pendingCount_++;
+            }
+        }
+        pendingComposite_.store(pendingCount_ > 0, std::memory_order_release);
+    }
+}
+
+void CanvasDocument::layerPropertiesChanged(uint32_t id) {
+    const int32_t i = indexOf(id);
+    if (i >= 0) markTilesOf(layers_[static_cast<size_t>(i)]->store);
+    refreshEditable();
+}
+
+// --- History API --------------------------------------------------------------
+int CanvasDocument::undo() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!open_) return 0;
+    settleInputLocked();  // a stroke still in progress is committed (and is the step undone)
+    const int r = history_.undo(*this);
+    if (r != 0) bumpRevision();
+    return r;
+}
+
+int CanvasDocument::redo() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!open_) return 0;
+    settleInputLocked();
+    const int r = history_.redo(*this);
+    if (r != 0) bumpRevision();
+    return r;
+}
+
+void CanvasDocument::clearHistory() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    history_.clear();
+}
+
+void CanvasDocument::setHistoryBudget(uint64_t bytes, size_t maxSteps) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    history_.setBudget(bytes, maxSteps);
+}
+
+std::vector<HistoryEntry> CanvasDocument::historyEntries() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (Layer* a = activeLayer()) brush_.process(a->store);
+    return history_.entries();
+}
+
+HistoryStats CanvasDocument::historyStats() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (Layer* a = activeLayer()) brush_.process(a->store);
+    return history_.stats();
+}
+
 void CanvasDocument::open(uint32_t width, uint32_t height) {
     std::lock_guard<std::mutex> lock(mutex_);
     brush_.discard();
+    history_.clear();
     layers_.clear();
     auto l = std::make_unique<Layer>();
     l->info.id = 1;
@@ -69,6 +201,7 @@ void CanvasDocument::open(uint32_t width, uint32_t height) {
 void CanvasDocument::close() {
     std::lock_guard<std::mutex> lock(mutex_);
     brush_.discard();
+    history_.clear();
     layers_.clear();
     composite_.reset(0, 0);
     open_ = false;
@@ -84,13 +217,20 @@ LayerError CanvasDocument::clear() {
     Layer* a = activeLayer();
     if (!a) return LayerError::NotFound;
     if (a->info.locked) return LayerError::Locked;
+    PixelPatch patch;
     for (int32_t ty = 0; ty < a->store.rows(); ++ty)
         for (int32_t tx = 0; tx < a->store.columns(); ++tx)
-            if (a->store.tileAllocated(tx, ty)) {
+            if (const uint8_t* px = a->store.tile(tx, ty)) {
+                patch.addTile(tx, ty, a->store.tileRect(tx, ty), px, nullptr);
                 // Freed; marked changed, so the next save writes it as empty.
                 a->store.releaseTile(tx, ty);
                 a->store.markChanged(a->store.tileRect(tx, ty));
             }
+    if (!patch.empty()) {
+        auto cmd = std::make_unique<PixelCommand>(HistoryKind::Clear, a->info.id, std::move(patch));
+        cmd->setLabel(a->info.name);
+        history_.push(std::move(cmd));
+    }
     bumpRevision();
     return LayerError::None;
 }
@@ -236,7 +376,32 @@ void CanvasDocument::fill(const RectI& rect, uint32_t argb) {
     settleInputLocked();  // keep the order: queued strokes first
     Layer* a = activeLayer();
     if (!a) return;
-    a->store.fill(rect, canvas::Rgba8::fromArgb(argb));
+    const RectI r = rect.intersect(a->store.canvasRect());
+    int32_t tx0, ty0, tx1, ty1;
+    if (!a->store.tileRange(r, tx0, ty0, tx1, ty1)) return;
+    // Previous pixels of the tiles the fill touches, then the fill, then the patch.
+    std::vector<std::unique_ptr<uint8_t[]>> before;
+    for (int32_t ty = ty0; ty <= ty1; ++ty)
+        for (int32_t tx = tx0; tx <= tx1; ++tx) {
+            const uint8_t* px = a->store.tile(tx, ty);
+            std::unique_ptr<uint8_t[]> copy;
+            if (px) {
+                copy.reset(new uint8_t[RasterStore::kTileBytes]);
+                std::memcpy(copy.get(), px, RasterStore::kTileBytes);
+            }
+            before.push_back(std::move(copy));
+        }
+    a->store.fill(r, canvas::Rgba8::fromArgb(argb));
+    PixelPatch patch;
+    size_t k = 0;
+    for (int32_t ty = ty0; ty <= ty1; ++ty)
+        for (int32_t tx = tx0; tx <= tx1; ++tx, ++k)
+            patch.addTile(tx, ty, r.intersect(a->store.tileRect(tx, ty)), before[k].get(), a->store.tile(tx, ty));
+    if (!patch.empty()) {
+        auto cmd = std::make_unique<PixelCommand>(HistoryKind::Fill, a->info.id, std::move(patch));
+        cmd->setLabel(a->info.name);
+        history_.push(std::move(cmd));
+    }
     bumpRevision();
 }
 
@@ -244,6 +409,7 @@ size_t CanvasDocument::loadLegacy(const std::vector<ContentOp>& ops) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!open_) return 0;
     brush_.discard();
+    history_.clear();
     const uint32_t w = composite_.width(), h = composite_.height();
     layers_.clear();
     auto l = std::make_unique<Layer>();
@@ -321,7 +487,11 @@ LayerError CanvasDocument::addLayer(uint32_t aboveId, const std::string& name, u
     l->info.name = uniqueName(name.empty() ? "Layer " + std::to_string(l->info.id) : name);
     l->store.reset(composite_.width(), composite_.height());
     newId = l->info.id;
+    const std::string label = l->info.name;
     layers_.insert(layers_.begin() + at, std::move(l));
+    auto cmd = std::make_unique<InsertLayerCommand>(HistoryKind::AddLayer, newId, at, activeId_);
+    cmd->setLabel(label);
+    history_.push(std::move(cmd));
     activeId_ = newId;
     refreshEditable();
     bumpRevision();  // an empty layer changes no pixel: no recomposite
@@ -335,9 +505,12 @@ LayerError CanvasDocument::deleteLayer(uint32_t id) {
     if (i < 0) return LayerError::NotFound;
     if (layers_.size() <= 1) return LayerError::LastLayer;
     settleInputLocked();
-    markTilesOf(layers_[static_cast<size_t>(i)]->store);
-    layers_.erase(layers_.begin() + i);
-    if (activeId_ == id) activeId_ = layers_[static_cast<size_t>(std::max(0, i - 1))]->info.id;
+    const uint32_t activeBefore = activeId_;
+    std::unique_ptr<LayerData> gone = removeLayer(id);  // kept by the history: same layer on undo
+    const std::string label = gone->info.name;
+    auto cmd = std::make_unique<DeleteLayerCommand>(std::move(gone), i, activeBefore, activeId_);
+    cmd->setLabel(label);
+    history_.push(std::move(cmd));
     refreshEditable();
     bumpRevision();
     return LayerError::None;
@@ -362,7 +535,11 @@ LayerError CanvasDocument::duplicateLayer(uint32_t id, const std::string& name, 
     l->store.takeGpuDirty(dirtyScratch_);
     markTilesOf(l->store);         // recomposited progressively, not in one frame
     newId = l->info.id;
+    const std::string label = l->info.name;
     layers_.insert(layers_.begin() + i + 1, std::move(l));
+    auto cmd = std::make_unique<InsertLayerCommand>(HistoryKind::DuplicateLayer, newId, i + 1, activeId_);
+    cmd->setLabel(label);
+    history_.push(std::move(cmd));
     activeId_ = newId;
     refreshEditable();
     bumpRevision();
@@ -374,7 +551,9 @@ LayerError CanvasDocument::renameLayer(uint32_t id, const std::string& name) {
     const int32_t i = indexOf(id);
     if (i < 0) return open_ ? LayerError::NotFound : LayerError::NoCanvas;
     if (name.empty() || name.size() > 200) return LayerError::BadValue;
-    layers_[static_cast<size_t>(i)]->info.name = name;
+    Layer& l = *layers_[static_cast<size_t>(i)];
+    if (l.info.name == name) return LayerError::None;
+    recordProperty(HistoryKind::RenameLayer, l, [&] { l.info.name = name; });
     bumpRevision();
     return LayerError::None;
 }
@@ -386,10 +565,10 @@ LayerError CanvasDocument::moveLayer(uint32_t id, int32_t index) {
     if (index < 0 || index >= static_cast<int32_t>(layers_.size())) return LayerError::BadValue;
     if (index == i) return LayerError::None;
     settleInputLocked();
-    markTilesOf(layers_[static_cast<size_t>(i)]->store);  // order only matters where it has content
-    auto l = std::move(layers_[static_cast<size_t>(i)]);
-    layers_.erase(layers_.begin() + i);
-    layers_.insert(layers_.begin() + index, std::move(l));
+    moveLayerTo(id, index);  // marks the tiles where it has content: order only matters there
+    auto cmd = std::make_unique<MoveLayerCommand>(id, i, index);
+    cmd->setLabel(layers_[static_cast<size_t>(index)]->info.name);
+    history_.push(std::move(cmd));
     bumpRevision();
     return LayerError::None;
 }
@@ -401,7 +580,7 @@ LayerError CanvasDocument::setVisible(uint32_t id, bool visible) {
     Layer& l = *layers_[static_cast<size_t>(i)];
     if (l.info.visible == visible) return LayerError::None;
     settleInputLocked();
-    l.info.visible = visible;
+    recordProperty(HistoryKind::Visibility, l, [&] { l.info.visible = visible; });
     markTilesOf(l.store);
     refreshEditable();
     bumpRevision();
@@ -413,7 +592,9 @@ LayerError CanvasDocument::setLocked(uint32_t id, bool locked) {
     const int32_t i = indexOf(id);
     if (i < 0) return open_ ? LayerError::NotFound : LayerError::NoCanvas;
     settleInputLocked();
-    layers_[static_cast<size_t>(i)]->info.locked = locked;
+    Layer& l = *layers_[static_cast<size_t>(i)];
+    if (l.info.locked == locked) return LayerError::None;
+    recordProperty(HistoryKind::Lock, l, [&] { l.info.locked = locked; });
     refreshEditable();
     bumpRevision();
     return LayerError::None;
@@ -427,7 +608,7 @@ LayerError CanvasDocument::setOpacity(uint32_t id, float opacity) {
     Layer& l = *layers_[static_cast<size_t>(i)];
     opacity = std::clamp(opacity, 0.0f, 1.0f);
     if (l.info.opacity == opacity) return LayerError::None;
-    l.info.opacity = opacity;
+    recordProperty(HistoryKind::Opacity, l, [&] { l.info.opacity = opacity; });
     if (l.info.visible) markTilesOf(l.store);
     bumpRevision();
     return LayerError::None;
@@ -440,7 +621,7 @@ LayerError CanvasDocument::setBlend(uint32_t id, canvas::BlendMode mode) {
     if (static_cast<int>(mode) >= canvas::kBlendModeCount) return LayerError::BadValue;
     Layer& l = *layers_[static_cast<size_t>(i)];
     if (l.info.blend == mode) return LayerError::None;
-    l.info.blend = mode;
+    recordProperty(HistoryKind::Blend, l, [&] { l.info.blend = mode; });
     if (l.info.visible) markTilesOf(l.store);
     bumpRevision();
     return LayerError::None;
@@ -487,12 +668,22 @@ LayerError CanvasDocument::mergeDown(uint32_t id) {
     merged.markAllUnsaved();
     markTilesOf(upper.store);
     markTilesOf(lower.store);
-    std::swap(lower.store, merged);
+    const uint32_t activeBefore = activeId_;
+    const float lowerOpacity = lower.info.opacity;
+    const uint32_t lowerId = lower.info.id;
+    std::swap(lower.store, merged);  // `merged` now holds the lower layer's original pixels
+    dirtyScratch_.clear();
     lower.store.takeGpuDirty(dirtyScratch_);  // covered by the marks above
     dirtyScratch_.clear();
     lower.info.opacity = 1.0f;
     if (activeId_ == upper.info.id) activeId_ = lower.info.id;
+    std::unique_ptr<LayerData> upperLayer = std::move(layers_[static_cast<size_t>(i)]);
     layers_.erase(layers_.begin() + i);
+    const std::string label = upperLayer->info.name;
+    auto cmd = std::make_unique<MergeDownCommand>(std::move(upperLayer), i, lowerId, std::move(merged), lowerOpacity,
+                                                  activeBefore, activeId_);
+    cmd->setLabel(label);
+    history_.push(std::move(cmd));
     refreshEditable();
     bumpRevision();
     return LayerError::None;
@@ -519,7 +710,13 @@ LayerError CanvasDocument::flatten(const std::string& name) {
                 result->store.tileForWrite(tx, ty);
     result->store.markAllUnsaved();
     markAllContent();
+    const uint32_t activeBefore = activeId_;
+    const uint32_t resultId = result->info.id;
+    std::vector<std::unique_ptr<LayerData>> before = std::move(layers_);  // kept by the history
     layers_.clear();
+    auto cmd = std::make_unique<FlattenCommand>(std::move(before), resultId, activeBefore);
+    cmd->setLabel(result->info.name);
+    history_.push(std::move(cmd));
     activeId_ = result->info.id;
     dirtyScratch_.clear();
     result->store.takeGpuDirty(dirtyScratch_);
@@ -543,6 +740,7 @@ bool CanvasDocument::setLayerStack(const std::vector<LayerInfo>& stack, uint32_t
         activeFound |= stack[i].id == activeId;
     }
     brush_.discard();
+    history_.clear();  // a loaded document starts a new history
     layers_.clear();
     for (const auto& info : stack) {
         auto l = std::make_unique<Layer>();
@@ -622,6 +820,8 @@ long CanvasDocument::importLayerTiles(uint32_t id, const uint8_t* data, size_t s
     if (!open_) return 0;
     const int32_t li = indexOf(id);
     if (li < 0) return -1;
+    settleInputLocked();  // earlier strokes first, then they leave the history with the rest
+    history_.clear();  // pixels from outside the history: earlier steps no longer apply
     RasterStore& st = layers_[static_cast<size_t>(li)]->store;
     for (int32_t i = 0; i < count; ++i) {
         if (off + kRecordHeader > size) return -1;
@@ -759,6 +959,7 @@ DocumentStats CanvasDocument::stats() const {
     s.maxCompositeMs = maxCompositeMs_;
     s.compositedPixels = compositedPixels_;
     s.brush = brush_.stats();
+    s.history = history_.stats();
     return s;
 }
 
@@ -773,6 +974,39 @@ canvas::Rgba8 CanvasDocument::pixel(int32_t x, int32_t y) {
         return {c8(backdrop_.r), c8(backdrop_.g), c8(backdrop_.b), 255};
     }
     return composite_.pixel(x, y);
+}
+
+namespace {
+uint64_t storeChecksum(const RasterStore& st) {
+    uint64_t h = 1469598103934665603ull;
+    for (int32_t ty = 0; ty < st.rows(); ++ty)
+        for (int32_t tx = 0; tx < st.columns(); ++tx) {
+            const uint8_t* px = st.tile(tx, ty);
+            if (!px || st.tileEmpty(tx, ty)) continue;
+            h ^= static_cast<uint64_t>(ty * 65536 + tx);
+            h *= 1099511628211ull;
+            for (size_t i = 0; i < RasterStore::kTileBytes; i += 4) {
+                uint32_t w;
+                std::memcpy(&w, px + i, 4);
+                h ^= w;
+                h *= 1099511628211ull;
+            }
+        }
+    return h;
+}
+}  // namespace
+
+uint64_t CanvasDocument::layerChecksum(uint32_t id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (open_) updateLocked();
+    const int32_t i = indexOf(id);
+    return i >= 0 ? storeChecksum(layers_[static_cast<size_t>(i)]->store) : 0;
+}
+
+uint64_t CanvasDocument::compositeChecksum() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (open_) updateLocked();
+    return storeChecksum(composite_);
 }
 
 canvas::Rgba8 CanvasDocument::layerPixel(uint32_t id, int32_t x, int32_t y) {

@@ -421,6 +421,28 @@ LayerError Engine::layerOp(LayerOp op, uint32_t id, int32_t arg, float value, co
     return e;
 }
 
+int Engine::historyOp(HistoryOp op, int32_t count) {
+    int done = 0;
+    if (op == HistoryOp::Clear) {
+        doc_.clearHistory();
+    } else {
+        for (int32_t i = 0; i < std::max<int32_t>(1, count); ++i) {
+            const int r = op == HistoryOp::Undo ? doc_.undo() : doc_.redo();
+            if (r < 0) {
+                done = -1;
+                break;
+            }
+            if (r == 0) break;
+            done++;
+        }
+    }
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return done;
+}
+
 bool Engine::setLayerStack(const std::vector<LayerInfo>& stack, uint32_t activeId) {
     const bool ok = doc_.setLayerStack(stack, activeId);
     queue_.post([this] { scheduler_.requestFrame(); });

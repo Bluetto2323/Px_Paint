@@ -1357,6 +1357,90 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
             check(!engine.strokeBegin(brushOf(20, 1.0f, 0xFF000000u), smp), "S12: painting a locked layer is refused");
         }
 
+        section("S13 undo / redo on the GPU (Block 7): the display returns exactly to the earlier frames");
+        {
+            auto settled = [&] {
+                return brushIdle(engine) &&
+                       engine.waitForStatus([&](const EngineStatus&) { return !engine.document().hasPendingComposite(); }, 10s);
+            };
+            auto diff = [](const Cap& a, const Cap& b) {
+                if (a.c.width != b.c.width || a.c.height != b.c.height) return 999;
+                int worst = 0;
+                for (size_t i = 0; i < a.c.rgba.size(); ++i) worst = std::max(worst, std::abs(int(a.c.rgba[i]) - int(b.c.rgba[i])));
+                return worst;
+            };
+            // Undo / redo of the given action, compared full-frame with the captures before / after it.
+            auto roundTrip = [&](const char* what, const std::function<void()>& action, double* undoMs, double* redoMs) {
+                Cap before, after, undone, redone;
+                if (!settled() || !capture(engine, before)) return false;
+                action();
+                if (!settled() || !capture(engine, after)) return false;
+                const bool changed = diff(before, after) > 0;
+                auto timed = [&](pe::Engine::HistoryOp op, double* ms) {
+                    const uint64_t f0 = frames(engine);
+                    const auto t0 = std::chrono::steady_clock::now();
+                    const int r = engine.historyOp(op, 1);
+                    const bool shown = engine.waitForStatus([&](const EngineStatus& st) {
+                        return st.frames.framesPresented > f0 && !engine.document().hasPendingComposite();
+                    }, 10s);
+                    if (ms) *ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    return r == 1 && shown;
+                };
+                const bool u = timed(pe::Engine::HistoryOp::Undo, undoMs) && settled() && capture(engine, undone);
+                const bool r = timed(pe::Engine::HistoryOp::Redo, redoMs) && settled() && capture(engine, redone);
+                const int du = u ? diff(before, undone) : 999, dr = r ? diff(after, redone) : 999;
+                std::printf("    %s: changed %s, undo vs before: max diff %d, redo vs after: max diff %d\n", what, changed ? "yes" : "NO",
+                            du, dr);
+                return changed && du == 0 && dr == 0;
+            };
+            for (const auto& size : {std::pair<uint32_t, uint32_t>{1200, 800}, std::pair<uint32_t, uint32_t>{4096, 4096}}) {
+                const bool tiled = size.first > 2048;
+                const std::string tag = tiled ? "S13 4096x4096 (tiled GPU storage): " : "S13 1200x800: ";
+                check(engine.createCanvas({size.first, size.second, kPaper}).empty(), tag + "canvas");
+                engine.waitForStatus([](const EngineStatus& st) { return st.canvas.gpuReady; }, 10s);
+                engine.setCanvasColors(0xFF202020u, 0xFFE8D8B8u, false);
+                double fit[] = {0.0};
+                engine.viewportOp(pe::ViewOp::Fit, fit, 0);
+                const uint32_t live0 = engine.status().resources.totalLive();
+                double u1 = 0, r1 = 0, u2 = 0, r2 = 0;
+                check(roundTrip("stroke", [&] { screenStroke(engine, brushOf(60, 0.8f, 0xFF2050C0u), screenLine(150, 200, 750, 420, 60)); }, &u1, &r1),
+                      tag + "stroke: undo shows exactly the frame before it, redo exactly the frame after it");
+                check(roundTrip("eraser", [&] {
+                          auto b = brushOf(80, 1.0f, 0xFF000000u);
+                          b.erase = true;
+                          screenStroke(engine, b, screenLine(450, 100, 450, 500, 40));
+                      }, &u2, &r2),
+                      tag + "eraser: undo / redo exact on screen");
+                uint32_t lid = 0;
+                engine.layerOp(pe::Engine::LayerOp::Add, 0, 0, 0, "", lid);
+                screenStroke(engine, brushOf(120, 0.7f, 0xFFE07020u), screenLine(150, 450, 750, 150, 40));
+                engine.layerOp(pe::Engine::LayerOp::Blend, lid, static_cast<int32_t>(pe::canvas::BlendMode::Multiply), 0, "", lid);
+                double u3 = 0, r3 = 0, u4 = 0, r4 = 0;
+                check(roundTrip("delete a Multiply layer", [&] { engine.layerOp(pe::Engine::LayerOp::Delete, lid, 0, 0, "", lid); }, &u3, &r3),
+                      tag + "delete layer: undo restores it on screen exactly (same id), redo removes it again");
+                engine.historyOp(pe::Engine::HistoryOp::Undo, 1);  // the layer is back
+                check(roundTrip("merge down", [&] { engine.layerOp(pe::Engine::LayerOp::MergeDown, lid, 0, 0, "", lid); }, &u4, &r4),
+                      tag + "merge down: undo / redo exact on screen");
+                std::printf("    undo -> frame presented: stroke %.1f ms, eraser %.1f ms, delete %.1f ms, merge %.1f ms | "
+                            "redo: %.1f / %.1f / %.1f / %.1f ms\n", u1, u2, u3, u4, r1, r2, r3, r4);
+                // Back and forth 20 times: nothing leaks, nothing released early (the frames stay correct).
+                Cap end;
+                bool ok = settled() && capture(engine, end);
+                // (Tiled storage allocates GPU tiles where content is: compare with the state after the edits.)
+                const uint32_t liveEnd = engine.status().resources.totalLive();
+                for (int i = 0; i < 20 && ok; ++i) ok = engine.historyOp(pe::Engine::HistoryOp::Undo, 6) == 6 &&
+                                                        engine.historyOp(pe::Engine::HistoryOp::Redo, 6) == 6;
+                Cap again;
+                ok = ok && settled() && capture(engine, again) && diff(end, again) == 0;
+                const uint32_t live1 = engine.status().resources.totalLive();
+                std::printf("    GPU resources: %u on the empty canvas, %u after the edits, %u after 20 x (undo 6 + redo 6)\n", live0,
+                            liveEnd, live1);
+                check(ok && live1 == liveEnd, tag + "20 undo / redo cycles: identical final frame, no GPU resources added or lost");
+                engine.closeCanvas();
+                engine.waitForStatus([](const EngineStatus& st) { return !st.canvas.open; }, 5s);
+            }
+        }
+
         section("S9 close -> resources released");
         engine.closeCanvas();
         check(engine.waitForStatus([](const EngineStatus& s) { return !s.canvas.open; }, 5s), "S9: canvas closed");

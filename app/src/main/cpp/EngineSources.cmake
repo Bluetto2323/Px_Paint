@@ -50,6 +50,7 @@ set(PE_ENGINE_SOURCES
     # diagnostics + engine
     ${PE_CPP_DIR}/diagnostics/Diagnostics.cpp
     ${PE_CPP_DIR}/engine/TestScene.cpp
+    ${PE_CPP_DIR}/engine/History.cpp
     ${PE_CPP_DIR}/engine/CanvasDocument.cpp
     ${PE_CPP_DIR}/engine/CanvasController.cpp
     ${PE_CPP_DIR}/engine/Engine.cpp

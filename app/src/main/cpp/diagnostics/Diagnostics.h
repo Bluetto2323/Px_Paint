@@ -37,6 +37,11 @@ struct CanvasStatus {
     uint32_t layers = 0;                     // Block 6: layer count
     uint64_t compositeTiles = 0;
     double compositeLastMs = 0, compositeMaxMs = 0;
+    // Block 7: undo / redo history
+    uint32_t historyUndo = 0, historyRedo = 0;
+    uint64_t historyBytes = 0, historyBudget = 0, historyDropped = 0, historyRefused = 0;
+    uint32_t historyMaxSteps = 0;
+    double historyLastUndoMs = 0, historyLastRedoMs = 0, historyLastRecordMs = 0;
     uint64_t revision = 0;             // content revision (changes on every edit)
     uint64_t brushStrokes = 0, brushCancelled = 0;
     uint64_t brushSamplesReceived = 0, brushSamplesProcessed = 0, brushDabs = 0;

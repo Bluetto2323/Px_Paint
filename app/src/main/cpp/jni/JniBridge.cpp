@@ -592,6 +592,55 @@ JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeLayerOp(J
                  });
 }
 
+// --- Undo / redo history (Block 7) ---------------------------------------------
+// Returns the steps done (-1: refused, history cleared). op: pe::Engine::HistoryOp.
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeHistoryOp(JNIEnv*, jclass, jlong handle, jint op,
+                                                                               jint count) {
+    return guard("nativeHistoryOp", jint{0}, [&]() -> jint {
+        if (op < 0 || op > 2) return 0;
+        return fromHandle(handle)->historyOp(static_cast<pe::Engine::HistoryOp>(op), count);
+    });
+}
+
+// (undo steps << 32) | redo steps, lock-free: cheap enough to poll from the UI thread.
+JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeHistoryCounts(JNIEnv*, jclass, jlong handle) {
+    return guard("nativeHistoryCounts", jlong{0},
+                 [&]() -> jlong { return static_cast<jlong>(fromHandle(handle)->historyCounts()); });
+}
+
+// "history\t<undo>\t<redo>\t<bytes>\t<budget>\t<maxSteps>\t<dropped>\t<refused>\n" then one line
+// per step, oldest first: kind \t undone(0/1) \t label. Undone steps follow the
+// done ones, the next redo first.
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeHistory(JNIEnv* env, jclass, jlong handle) {
+    return guard("nativeHistory", static_cast<jstring>(nullptr), [&]() -> jstring {
+        pe::Engine* e = fromHandle(handle);
+        const auto list = e->historyEntries();
+        const auto st = e->historyStats();
+        char buf[200];
+        std::snprintf(buf, sizeof(buf), "history\t%zu\t%zu\t%llu\t%llu\t%zu\t%llu\t%llu\n", st.undoSteps, st.redoSteps,
+                      static_cast<unsigned long long>(st.bytes), static_cast<unsigned long long>(st.budget), st.maxSteps,
+                      static_cast<unsigned long long>(st.dropped), static_cast<unsigned long long>(st.refused));
+        std::string out = buf;
+        for (const auto& h : list) {
+            std::snprintf(buf, sizeof(buf), "%d\t%d\t", static_cast<int>(h.kind), h.undone ? 1 : 0);
+            out += buf;
+            out += escapeField(h.label);
+            out += "\n";
+        }
+        return env->NewStringUTF(out.c_str());
+    });
+}
+
+// bytes / maxSteps <= 0 keep the current value.
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeSetHistoryBudget(JNIEnv*, jclass, jlong handle,
+                                                                                      jlong bytes, jint maxSteps) {
+    guard("nativeSetHistoryBudget", 0, [&]() -> int {
+        fromHandle(handle)->setHistoryBudget(bytes > 0 ? static_cast<uint64_t>(bytes) : 0,
+                                             maxSteps > 0 ? static_cast<size_t>(maxSteps) : 0);
+        return 0;
+    });
+}
+
 // Project load: the layer stack (properties, no pixels yet). `flags`: 1 visible, 2 locked.
 JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeSetLayerStack(
     JNIEnv* env, jclass, jlong handle, jintArray ids, jobjectArray names, jintArray flags, jfloatArray opacity,

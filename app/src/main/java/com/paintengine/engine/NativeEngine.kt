@@ -217,6 +217,34 @@ class NativeEngine(config: Config) : AutoCloseable {
     @Synchronized
     fun layerThumbnail(id: Int, maxSide: Int): IntArray? = handle.let { if (it != 0L) nativeLayerThumbnail(it, id, maxSide) else null }
 
+    // --- Undo / redo history (Block 7) -----------------------------------------
+    /** History operations; codes = engine Engine::HistoryOp. */
+    enum class HistoryOp(val code: Int) { UNDO(0), REDO(1), CLEAR(2) }
+
+    /**
+     * Undoes / redoes [count] steps (queued strokes are committed first).
+     * Returns the steps done, or -1 if a step was refused (the document was
+     * not in the recorded state: nothing changed, the history was cleared).
+     */
+    @Synchronized
+    fun history(op: HistoryOp, count: Int = 1): Int = handle.let { if (it != 0L) nativeHistoryOp(it, op.code, count) else 0 }
+
+    /** Undo / redo steps available, lock-free (button states; UI thread, like [viewport]). */
+    fun historyCounts(): Pair<Int, Int> {
+        val h = handle
+        if (h == 0L) return 0 to 0
+        val c = nativeHistoryCounts(h)
+        return (c ushr 32).toInt() to (c and 0xFFFFFFFFL).toInt()
+    }
+
+    /** History table (see pxpaint.core.HistoryState.parse); null without an engine. */
+    @Synchronized
+    fun historyTable(): String? = handle.let { if (it != 0L) nativeHistory(it) else null }
+
+    /** Memory budget / step limit of the history (values <= 0 keep the current one). */
+    @Synchronized
+    fun setHistoryBudget(bytes: Long, maxSteps: Int) = withHandle { nativeSetHistoryBudget(it, bytes, maxSteps) }
+
     // --- Persistence (any thread; synchronized with [close]) -----------------
     /**
      * Up to [maxTiles] canvas tiles as records (little-endian): int count, then
@@ -311,6 +339,10 @@ class NativeEngine(config: Config) : AutoCloseable {
             handle: Long, sample: FloatArray, params: FloatArray, argb: Int, flags: Int, curve: FloatArray?,
         ): Boolean
         @JvmStatic private external fun nativeLayers(handle: Long): String?
+        @JvmStatic private external fun nativeHistoryOp(handle: Long, op: Int, count: Int): Int
+        @JvmStatic private external fun nativeHistoryCounts(handle: Long): Long
+        @JvmStatic private external fun nativeHistory(handle: Long): String?
+        @JvmStatic private external fun nativeSetHistoryBudget(handle: Long, bytes: Long, maxSteps: Int)
         @JvmStatic private external fun nativeLayerOp(handle: Long, op: Int, id: Int, arg: Int, value: Float, text: String?): Long
         @JvmStatic private external fun nativeSetLayerStack(
             handle: Long, ids: IntArray, names: Array<String>, flags: IntArray, opacity: FloatArray, blend: IntArray, activeId: Int,

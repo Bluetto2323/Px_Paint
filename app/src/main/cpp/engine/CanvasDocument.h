@@ -39,6 +39,8 @@
 #include "brush/BrushEngine.h"
 #include "canvas/Compositor.h"
 #include "canvas/RasterStore.h"
+#include "engine/History.h"
+#include "engine/LayerTypes.h"
 
 namespace pe {
 
@@ -49,34 +51,6 @@ struct ContentOp {
     uint32_t argb = 0;
 };
 
-struct LayerInfo {
-    uint32_t id = 0;
-    std::string name;
-    bool visible = true;
-    bool locked = false;
-    float opacity = 1.0f;
-    canvas::BlendMode blend = canvas::BlendMode::Normal;
-};
-
-struct LayerSummary {
-    LayerInfo info;
-    size_t tiles = 0;        // allocated tiles (content)
-    uint64_t version = 0;    // changes with the layer's pixels
-};
-
-enum class LayerError : int32_t {
-    None = 0,
-    NoCanvas = 1,
-    NotFound = 2,
-    LastLayer = 3,     // the only layer cannot be deleted
-    NoLayerBelow = 4,  // merge down of the bottom layer
-    Locked = 5,
-    Hidden = 6,
-    TooMany = 7,
-    Memory = 8,
-    BadValue = 9,
-};
-const char* layerErrorName(LayerError e);
 
 struct DocumentStats {
     bool open = false;
@@ -92,10 +66,13 @@ struct DocumentStats {
     double maxCompositeMs = 0;
     uint64_t compositedPixels = 0;
     brush::BrushStats brush;
+    HistoryStats history;
 };
 
-class CanvasDocument {
+class CanvasDocument : private HistoryTarget {
 public:
+    CanvasDocument();
+
     // Export / import record (little-endian):
     //   int32 count, then per tile: int32 tx, int32 ty, int32 flags,
     //   followed by RasterStore::kTileBytes of premultiplied RGBA8 unless
@@ -158,6 +135,23 @@ public:
     // load; content follows with importLayerTiles). False if invalid.
     bool setLayerStack(const std::vector<LayerInfo>& stack, uint32_t activeId);
 
+    // --- History (any thread; Block 7) ------------------------------------------
+    // Strokes, erasing, clear / fill and every layer operation are recorded
+    // when they complete (a stroke in progress, cancelled or refused is not).
+    // Selecting the active layer is not an edit and is not recorded. Loading
+    // or replacing content clears the history.
+    // 1 done, 0 nothing to undo / redo, -1 refused (history cleared).
+    int undo();
+    int redo();
+    void clearHistory();
+    void setHistoryBudget(uint64_t bytes, size_t maxSteps);
+    // Both consume queued input first (an ended stroke is a step as soon as it
+    // is queued); a stroke still in progress is not a step yet.
+    std::vector<HistoryEntry> historyEntries();
+    HistoryStats historyStats();
+    // (undo steps << 32) | redo steps; lock-free, does not consume input (UI buttons).
+    uint64_t historyCounts() const { return history_.counts(); }
+
     // --- Persistence (any thread) --------------------------------------------
     // Applies queued input, then appends up to `maxTiles` tiles of layer `id`
     // (changed since their last export if `changedOnly`, else every allocated
@@ -198,12 +192,13 @@ public:
     // a layer's own pixel (tests).
     canvas::Rgba8 pixel(int32_t x, int32_t y);
     canvas::Rgba8 layerPixel(uint32_t id, int32_t x, int32_t y);
+    // Exact fingerprint of a layer's pixels / of the composite (transparent
+    // tiles count as absent): equal checksums = identical pictures (tests).
+    uint64_t layerChecksum(uint32_t id);
+    uint64_t compositeChecksum();
 
 private:
-    struct Layer {
-        LayerInfo info;
-        canvas::RasterStore store;
-    };
+    using Layer = LayerData;
     void bumpRevision() { revision_.fetch_add(1, std::memory_order_acq_rel); }
     // Under mutex_: strokes into the active layer, then the composite. With
     // `complete` false, stale tiles are recomposited within a time budget
@@ -237,6 +232,29 @@ private:
     std::vector<canvas::RectI> dirtyScratch_;
     std::vector<canvas::LayerView> viewScratch_;
     brush::BrushEngine brush_;    // input side self-synchronised; processing under mutex_
+    History history_;             // guarded by mutex_
+
+    // HistoryTarget (called by history commands under mutex_).
+    LayerData* findLayer(uint32_t id) override;
+    int32_t layerIndex(uint32_t id) const override { return indexOf(id); }
+    void insertLayer(int32_t index, std::unique_ptr<LayerData> layer) override;
+    std::unique_ptr<LayerData> removeLayer(uint32_t id) override;
+    void moveLayerTo(uint32_t id, int32_t index) override;
+    void setActiveLayer(uint32_t id) override;
+    void layerPixelsChanged(uint32_t id, const canvas::RectI& rect) override;
+    void layerPropertiesChanged(uint32_t id) override;
+    void stackChanged() override { markAllContent(); }
+    // Records a property change of layer `id` made by `apply`.
+    template <typename Fn>
+    void recordProperty(HistoryKind kind, Layer& l, Fn&& apply) {
+        const LayerInfo before = l.info;
+        apply();
+        auto cmd = std::make_unique<PropertyCommand>(kind, before, l.info);
+        cmd->setLabel(l.info.name);
+        history_.push(std::move(cmd));
+    }
+    void onStrokeCommitted(const canvas::RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
+                           bool erase);
     std::atomic<bool> activeEditable_{false};
     std::atomic<bool> pendingComposite_{false};
     std::atomic<uint64_t> generation_{0};

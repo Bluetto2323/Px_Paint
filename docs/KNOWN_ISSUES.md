@@ -221,11 +221,48 @@ be found on the A33, this was why; the REPORT for KI-1 can now be opened from
 * **Flatten deletes hidden layers.** The confirmation says how many.
 * **Reordering uses Move up / Move down** (buttons and menu); there is no
   drag-and-drop yet.
-* **No undo** (out of scope so far): delete, merge, flatten and clear are
-  confirmed or reversible only by hand.
+* ~~No undo~~: added in Block 7 (KI-12).
 * **Memory.** Each layer stores only the tiles it uses (256 KiB per tile).
   Duplicate and merge are refused beyond the canvas memory budget (¼ of RAM).
   Many full layers on very large canvases can still use a lot of RAM:
   50 overlapping layers on 4096² measured about 1.1 GiB.
 * **Blending is done on sRGB values**, as in common painting apps, not in linear
   light.
+
+## KI-12 — Undo / redo: limits of the Block 7 implementation
+
+* **Not tested by hand on a phone yet.** It is verified by:
+  * the CPU history suite (exact restoration, memory, saves, interruptions);
+  * GPU tests on Mesa GLES and lavapipe Vulkan (S13: the frame after undo /
+    redo equals the earlier frames bit for bit);
+  * JVM tests;
+  * emulator screenshots.
+
+  Undo latency on the A33 is unmeasured.
+* **The history lasts for the session.** It is lost when the canvas is
+  closed, the app is killed, or the project is reloaded. The saved project
+  is always the current picture. Persistence across restarts was examined and
+  left out (see `docs/HISTORY.md`).
+* **Recording a stroke costs time when the stroke ends**, on the render
+  thread (the hashes and XOR of the touched tiles). On the host it averages
+  0.6 ms, and a 500 px stroke across a 4096² canvas takes about 11 ms (one
+  frame). It costs nothing while drawing. The phone figure is unmeasured.
+* **Old steps are dropped beyond the budget** (1/32 of RAM, 32–192 MiB,
+  100 steps). Big steps hold a lot of memory:
+  * a deleted, merged or flattened layer keeps its tiles in the history;
+  * a flatten of 50 full layers on 2048×1536 holds about 250 MiB.
+
+  The newest step is always kept even beyond the budget.
+* **A step can be refused.** If pixels changed outside the history, the step
+  is refused and the history cleared, with a message; the picture is not
+  changed. No path in the app does that today (imports clear the history),
+  and the check is the safety net.
+* **Not recorded:**
+  * selecting a layer;
+  * the paper / background colour (a project setting, not layer content);
+  * the view (zoom, rotation).
+* **Opacity drags are merged into one step**, but separate drags are separate
+  steps.
+* **The history list is not live while drawing.** It refreshes after each
+  stroke and operation. The buttons follow within about 50 ms of a stroke's
+  end.

@@ -93,6 +93,9 @@ public:
     void unsavedTiles(std::vector<TileCoord>& out) const;
     void markSaved(int32_t tx, int32_t ty);
     void markAllUnsaved();  // e.g. after a legacy import
+    // Every tile position unsaved, allocated or not: the next save rewrites
+    // the whole layer (empty records drop what a file had there).
+    void markEverythingUnsaved();
     bool tileEmpty(int32_t tx, int32_t ty) const;  // unallocated or all alpha == 0
     // Replaces a tile with `rgba` (kTileBytes, premultiplied). Pixels outside
     // the canvas are cleared. Does not mark it unsaved (it came from disk).

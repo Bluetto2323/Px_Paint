@@ -301,6 +301,16 @@ std::string statusJson(const EngineStatus& s) {
     num("canvasCompositeTiles", static_cast<double>(c.compositeTiles));
     num("compositeLastMs", c.compositeLastMs);
     num("compositeMaxMs", c.compositeMaxMs);
+    num("historyUndo", c.historyUndo);
+    num("historyRedo", c.historyRedo);
+    num("historyBytes", static_cast<double>(c.historyBytes));
+    num("historyBudget", static_cast<double>(c.historyBudget));
+    num("historyMaxSteps", c.historyMaxSteps);
+    num("historyDropped", static_cast<double>(c.historyDropped));
+    num("historyRefused", static_cast<double>(c.historyRefused));
+    num("historyLastUndoMs", c.historyLastUndoMs);
+    num("historyLastRedoMs", c.historyLastRedoMs);
+    num("historyLastRecordMs", c.historyLastRecordMs);
     num("canvasRevision", static_cast<double>(c.revision));
     num("brushStrokes", static_cast<double>(c.brushStrokes));
     num("brushCancelled", static_cast<double>(c.brushCancelled));
