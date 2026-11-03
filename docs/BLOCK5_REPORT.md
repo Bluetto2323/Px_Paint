@@ -106,10 +106,25 @@ only). The images are on the `ci-screenshots` branch.
 
 ## 7. Vulkan and GLES
 
-See section 10 for the CI run. S11 was 0.000 % GPU/CPU ink difference locally
-on Mesa GLES.
+CI (Mesa llvmpipe GLES + lavapipe Vulkan): every suite passed on both backends.
+
+| Suite | GLES | Vulkan |
+|---|---|---|
+| basic / lifecycle | 33/33 · 42/42 | 31/31 · 42/42 |
+| canvas | 66/66 | 66/66 |
+| brush (incl. S11) | 57/57 | 57/57 |
+| faults / perf | 15/15 · 3/3 | 15/15 · 3/3 |
+
+In S11 the displayed ink matched the CPU raster with a 0.000 % difference for
+all 12 presets on both backends, and the chalk grain is visible on screen.
 
 ## 8. Performance (host / CI, informational)
+
+* CI per 8-sample frame at default sizes:
+  * round 0.15 ms, hard 0.07, airbrush 1.28, pencil 0.13, graphite 0.22, ink 0.36;
+  * fine liner 0.11, marker 0.30, charcoal 0.42, chalk 0.81, textured 1.66, watercolor 0.64.
+* CI input → present (perf suite): GLES 20.5 ms, Vulkan 18.5 ms on average.
+  Block 4 runs on CI machines measured 16.8–23.1 ms, so this is in the same range.
 
 * CPU per 8-sample frame at default sizes (host):
   * round 0.15 ms, hard 0.07, airbrush 1.02, pencil 0.12, graphite 0.21, ink 0.28;
@@ -120,6 +135,13 @@ on Mesa GLES.
 * Brush switching only selects data. Previews render on a background thread
   and are cached. Textures are built once.
 
-## 9 / 10. APK, CI, limitations
+## 9. APK and Actions
 
-See the chat report; known limitations in `docs/KNOWN_ISSUES.md` KI-9.
+All three jobs are green: Debug APK (`PxPaint-block5-debug-<sha>.apk`,
+0.5.0-block5), Engine host tests, and UI screenshots (emulator).
+
+## 10. Known limitations
+
+See `docs/KNOWN_ISSUES.md` KI-9 (no hand test on a phone yet, stylus behaviour
+synthetic only, Fine Liner = Hard Brush shape at equal size without pressure, no
+fluid simulation, 512 px grain repeat, CPU cost of large stamped brushes).
