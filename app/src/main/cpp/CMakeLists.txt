@@ -22,6 +22,19 @@ target_compile_definitions(pe_engine PUBLIC $<$<CONFIG:Debug>:PE_DEBUG=1>)
 # resolved through eglGetProcAddress.
 target_link_libraries(pe_engine PUBLIC EGL GLESv3 log dl)
 
+# The per-pixel paths (brush rasterisation, compositing, tile copies) are
+# always optimised, also in the debug APK: at -O0 they would be several
+# times slower and the device test would measure the build type, not the
+# engine. Everything else keeps the build type's flags.
+set_source_files_properties(
+    ${PE_CPP_DIR}/brush/StrokePath.cpp
+    ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
+    ${PE_CPP_DIR}/brush/BrushEngine.cpp
+    ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
+    ${PE_CPP_DIR}/engine/CanvasDocument.cpp
+    PROPERTIES COMPILE_OPTIONS "-O2")
+
 # ---------------------------------------------------------------------------
 # libpaintengine.so: JNI bridge + Android platform layer.
 # ---------------------------------------------------------------------------

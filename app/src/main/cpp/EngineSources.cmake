@@ -12,6 +12,11 @@ set(PE_ENGINE_SOURCES
     # canvas core (pure math, no GPU)
     ${PE_CPP_DIR}/canvas/Viewport.cpp
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
+    ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    # brush engine (CPU, no GPU, no UI)
+    ${PE_CPP_DIR}/brush/StrokePath.cpp
+    ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
+    ${PE_CPP_DIR}/brush/BrushEngine.cpp
     # canvas GPU (backend-neutral graphics API only)
     ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
     ${PE_CPP_DIR}/canvas/CanvasRenderer.cpp
@@ -41,6 +46,7 @@ set(PE_ENGINE_SOURCES
     # diagnostics + engine
     ${PE_CPP_DIR}/diagnostics/Diagnostics.cpp
     ${PE_CPP_DIR}/engine/TestScene.cpp
+    ${PE_CPP_DIR}/engine/CanvasDocument.cpp
     ${PE_CPP_DIR}/engine/CanvasController.cpp
     ${PE_CPP_DIR}/engine/Engine.cpp
 )
@@ -48,6 +54,14 @@ set(PE_ENGINE_SOURCES
 set(PE_CANVAS_CORE_SOURCES
     ${PE_CPP_DIR}/canvas/Viewport.cpp
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
+)
+
+set(PE_BRUSH_CORE_SOURCES
+    ${PE_CPP_DIR}/canvas/TileGrid.cpp
+    ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/brush/StrokePath.cpp
+    ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
+    ${PE_CPP_DIR}/brush/BrushEngine.cpp
 )
 
 set(PE_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter)

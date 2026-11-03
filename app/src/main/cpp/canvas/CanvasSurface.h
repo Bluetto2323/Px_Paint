@@ -8,7 +8,8 @@
 //     like CLAMP_TO_EDGE), so linear filtering is seamless across tiles.
 //
 // Writes are partial: only the textures (and texels) a rectangle touches are
-// uploaded. Untouched tiles are never allocated and draw nothing (fully
+// uploaded. The canvas content lives in the CPU RasterStore; this class is
+// its GPU copy, refreshed through upload(store, dirty rects). Untouched tiles are never allocated and draw nothing (fully
 // transparent). Block 2 has one surface per canvas; layers will own one each.
 #pragma once
 
@@ -17,18 +18,11 @@
 #include <vector>
 
 #include "canvas/CanvasMath.h"
+#include "canvas/RasterStore.h"
 #include "canvas/TileGrid.h"
 #include "graphics/abstraction/GraphicsDevice.h"
 
 namespace pe::canvas {
-
-// Premultiplied RGBA8.
-struct Rgba8 {
-    uint8_t r = 0, g = 0, b = 0, a = 0;
-    bool operator==(const Rgba8& o) const { return r == o.r && g == o.g && b == o.b && a == o.a; }
-    // Straight (non-premultiplied) 0xAARRGGBB, as used by Android.
-    static Rgba8 fromArgb(uint32_t argb);
-};
 
 struct SurfaceStats {
     StorageMode mode = StorageMode::SingleTexture;
@@ -76,6 +70,10 @@ public:
     // Must be called outside a render pass (before recording the frame).
     bool write(const RectI& rect, const uint8_t* rgba);
     bool fill(const RectI& rect, Rgba8 color);
+    // Refreshes the texels covering `dirty` (canvas rects) from the CPU store.
+    // Regions are merged per GPU texture first: one upload per touched
+    // texture, however many brush dabs or store tiles changed inside it.
+    bool upload(const RasterStore& store, const std::vector<RectI>& dirty);
 
     // Pieces intersecting `visible` (canvas space) that hold content.
     // Returns the number of grid tiles intersecting `visible` (for culling stats).
@@ -84,7 +82,14 @@ public:
 private:
     gfx::Ref<gfx::TextureResource> createTexture(uint32_t w, uint32_t h, const std::string& name);
     bool writeTile(TileCoord t, const RectI& clipped, const RectI& src, const uint8_t* rgba);
-
+    // Copies canvas `region` (may extend 1 px past the border: clamped) from the store.
+    static void readStore(const RasterStore& store, const RectI& region, uint8_t* dst);
+    RectI withBorderGutter(const RectI& clipped) const;
+    struct TileRegion {
+        size_t index;
+        RectI region;
+    };
+    std::vector<TileRegion> merged_;
     gfx::GraphicsDevice* device_ = nullptr;
     std::string name_;
     TileGrid grid_;

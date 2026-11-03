@@ -60,6 +60,7 @@
 #include "core/TaskQueue.h"
 #include "diagnostics/Diagnostics.h"
 #include "engine/CanvasController.h"
+#include "engine/CanvasDocument.h"
 #include "engine/TestScene.h"
 #include "graphics/BackendSelector.h"
 #include "graphics/abstraction/FrameScheduler.h"
@@ -142,17 +143,30 @@ public:
     void closeCanvas();
     void setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool transparentBackground);
     void clearCanvasContent();
-    // Diagnostic stamp (no brush engine yet): a square centred on the canvas
-    // point under (screenX, screenY). False if that point is off the canvas.
+    // Diagnostic stamp: a square centred on the canvas point under
+    // (screenX, screenY), replace semantics. False if that point is off the canvas.
     bool stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t argb, canvas::Vec2* canvasPoint);
-    // Content of the open canvas (UI-side mirror of the content journal, in
-    // write order). Used to persist projects and draw gallery thumbnails.
-    std::vector<ContentOp> canvasContent() const;
-    // Increases on every content change (stamp, load, clear, new canvas).
+    // Increases on every content change request (strokes, load, clear, new canvas).
     uint64_t canvasContentRevision() const;
-    // Replaces the content of the open canvas (call right after createCanvas).
+    // Legacy (Block 2) projects: replaces the content with rectangle fills.
     // Ops are clipped to the canvas; returns the number of ops kept.
     size_t loadCanvasContent(const std::vector<ContentOp>& ops);
+
+    // --- Brush strokes (any thread except the render thread; never block) ---
+    // Samples are SCREEN pixels, mapped to canvas pixels with the viewport at
+    // the time of the call; `t` in ms. Processed in order at the next frame.
+    void strokeBegin(const brush::BrushSettings& settings, double screenX, double screenY, double t);
+    // `xyt` holds `count` triples (x, y, t).
+    void strokeSamples(const float* xyt, size_t count);
+    void strokeEnd();
+    void strokeCancel();
+
+    // --- Persistence (any thread except the render thread) -----------------
+    // See CanvasDocument::exportTiles / importTiles / thumbnail.
+    size_t exportCanvasTiles(bool changedOnly, size_t maxTiles, std::vector<uint8_t>& out);
+    long importCanvasTiles(const uint8_t* data, size_t size);
+    bool canvasThumbnail(uint32_t maxSide, uint32_t& width, uint32_t& height, std::vector<uint32_t>& argb);
+    CanvasDocument& document() { return doc_; }
     void runCanvasSelfTest();
 
     // Viewport: applied immediately (thread-safe), drawn at the next frame.
@@ -168,6 +182,10 @@ public:
     std::string statusText() const;
     std::string statusJson() const;
     std::string capabilityReport() const;
+
+    // Tests / tooling: captures the next presented frame (backbuffer, RGBA8
+    // top-left). False if the surface cannot be read back or on timeout.
+    bool captureFrame(gfx::CaptureResult& out, std::chrono::milliseconds timeout);
 
     // Blocks until `predicate(status)` is true or timeout (tests / tooling).
     bool waitForStatus(const std::function<bool(const EngineStatus&)>& predicate,
@@ -215,8 +233,16 @@ private:
     bool paused_ = false;
     TestScene scene_;
     SceneMode sceneMode_ = SceneMode::Diagnostic;  // render-thread copy
+    CanvasDocument doc_;  // shared, self-synchronised (declared before canvas_, which refers to it)
     CanvasController canvas_;
     bool canvasCaptureInFlight_ = false;
+    bool debugCaptureRequested_ = false;  // render thread
+    bool debugCaptureInFlight_ = false;
+    std::mutex debugCaptureMutex_;
+    std::condition_variable debugCaptureCv_;
+    uint64_t debugCaptureSerial_ = 0;     // guarded by debugCaptureMutex_
+    bool debugCaptureOk_ = false;
+    gfx::CaptureResult debugCapture_;
     gfx::FrameScheduler scheduler_;
     std::vector<gfx::BackendType> failedBackends_;
     uint32_t backendFailures_[3] = {0, 0, 0};      // indexed by BackendType, decays over time
@@ -242,12 +268,6 @@ private:
     // Viewport (any thread, guarded)
     mutable std::mutex viewMutex_;
     canvas::Viewport view_;
-
-    // UI-side mirror of the canvas content (any thread, guarded). Updated in
-    // the same order as the tasks posted to the render thread.
-    mutable std::mutex contentMutex_;
-    std::vector<ContentOp> contentOps_;
-    uint64_t contentRevision_ = 0;
 
     // Published snapshot
     mutable std::mutex statusMutex_;

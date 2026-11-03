@@ -354,25 +354,98 @@ JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(
     });
 }
 
-// Content of the open canvas: 5 ints per op {x, y, w, h, argb}, in write order.
-JNIEXPORT jintArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeGetCanvasContent(JNIEnv* env, jclass,
-                                                                                          jlong handle) {
-    return guard("nativeGetCanvasContent", static_cast<jintArray>(nullptr), [&]() -> jintArray {
-        const auto ops = fromHandle(handle)->canvasContent();
-        const size_t n = ops.size() * 5;
-        if (n > static_cast<size_t>(INT32_MAX)) return nullptr;
-        jintArray out = env->NewIntArray(static_cast<jsize>(n));
-        if (!out) return nullptr;  // OutOfMemoryError pending in Java
-        std::vector<jint> flat;
-        flat.reserve(n);
-        for (const auto& op : ops) {
-            flat.push_back(op.x);
-            flat.push_back(op.y);
-            flat.push_back(op.w);
-            flat.push_back(op.h);
-            flat.push_back(static_cast<jint>(op.argb));
+// --- Brush strokes ------------------------------------------------------------
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeBegin(
+    JNIEnv*, jclass, jlong handle, jfloat x, jfloat y, jfloat t, jfloat diameter, jfloat opacity, jint argb,
+    jfloat spacing, jboolean erase) {
+    guard("nativeStrokeBegin", 0, [&] {
+        pe::brush::BrushSettings b;
+        b.diameter = diameter;
+        b.opacity = opacity;
+        b.argb = static_cast<uint32_t>(argb);
+        b.spacing = spacing;
+        b.erase = erase == JNI_TRUE;
+        fromHandle(handle)->strokeBegin(b, x, y, t);
+        return 0;
+    });
+}
+
+// `xyt`: `count` samples as (x, y, t) triples, screen pixels / ms, in time order.
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeSamples(JNIEnv* env, jclass, jlong handle,
+                                                                                    jfloatArray xyt, jint count) {
+    guard("nativeStrokeSamples", 0, [&] {
+        if (!xyt || count <= 0) return 0;
+        const jsize len = env->GetArrayLength(xyt);
+        const jsize n = std::min<jsize>(count, len / 3);
+        // Copied through a stack buffer: no allocation per touch event.
+        jfloat chunk[64 * 3];
+        for (jsize done = 0; done < n;) {
+            const jsize k = std::min<jsize>(64, n - done);
+            env->GetFloatArrayRegion(xyt, done * 3, k * 3, chunk);
+            fromHandle(handle)->strokeSamples(chunk, static_cast<size_t>(k));
+            done += k;
         }
-        if (n) env->SetIntArrayRegion(out, 0, static_cast<jsize>(n), flat.data());
+        return 0;
+    });
+}
+
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeEnd(JNIEnv*, jclass, jlong handle) {
+    guard("nativeStrokeEnd", 0, [&] {
+        fromHandle(handle)->strokeEnd();
+        return 0;
+    });
+}
+
+JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeCancel(JNIEnv*, jclass, jlong handle) {
+    guard("nativeStrokeCancel", 0, [&] {
+        fromHandle(handle)->strokeCancel();
+        return 0;
+    });
+}
+
+// --- Persistence ----------------------------------------------------------------
+// Tile records (see CanvasDocument): int32 count, then {tx, ty, flags, pixels?}.
+JNIEXPORT jbyteArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeExportCanvasTiles(
+    JNIEnv* env, jclass, jlong handle, jboolean changedOnly, jint maxTiles) {
+    return guard("nativeExportCanvasTiles", static_cast<jbyteArray>(nullptr), [&]() -> jbyteArray {
+        std::vector<uint8_t> out;
+        fromHandle(handle)->exportCanvasTiles(changedOnly == JNI_TRUE, static_cast<size_t>(std::max(0, maxTiles)), out);
+        if (out.size() > static_cast<size_t>(INT32_MAX)) return nullptr;
+        jbyteArray arr = env->NewByteArray(static_cast<jsize>(out.size()));
+        if (!arr) return nullptr;  // OutOfMemoryError pending in Java
+        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(out.size()), reinterpret_cast<const jbyte*>(out.data()));
+        return arr;
+    });
+}
+
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeImportCanvasTiles(JNIEnv* env, jclass,
+                                                                                       jlong handle, jbyteArray data) {
+    return guard("nativeImportCanvasTiles", jint{-1}, [&]() -> jint {
+        if (!data) return -1;
+        const jsize len = env->GetArrayLength(data);
+        jbyte* bytes = env->GetByteArrayElements(data, nullptr);
+        if (!bytes) return -1;
+        const long n = fromHandle(handle)->importCanvasTiles(reinterpret_cast<const uint8_t*>(bytes),
+                                                             static_cast<size_t>(len));
+        env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+        return static_cast<jint>(n);
+    });
+}
+
+// Straight ARGB thumbnail: {width, height, pixels...}; null if no canvas.
+JNIEXPORT jintArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeCanvasThumbnail(JNIEnv* env, jclass,
+                                                                                          jlong handle, jint maxSide) {
+    return guard("nativeCanvasThumbnail", static_cast<jintArray>(nullptr), [&]() -> jintArray {
+        uint32_t w = 0, h = 0;
+        std::vector<uint32_t> px;
+        if (!fromHandle(handle)->canvasThumbnail(static_cast<uint32_t>(std::max(1, maxSide)), w, h, px)) return nullptr;
+        const size_t n = px.size() + 2;
+        jintArray out = env->NewIntArray(static_cast<jsize>(n));
+        if (!out) return nullptr;
+        const jint head[2] = {static_cast<jint>(w), static_cast<jint>(h)};
+        env->SetIntArrayRegion(out, 0, 2, head);
+        if (!px.empty())
+            env->SetIntArrayRegion(out, 2, static_cast<jsize>(px.size()), reinterpret_cast<const jint*>(px.data()));
         return out;
     });
 }

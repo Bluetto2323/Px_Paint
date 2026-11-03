@@ -15,12 +15,6 @@ constexpr const char* kTag = "Canvas";
 double msSince(int64_t t0) { return static_cast<double>(nowNs() - t0) / 1e6; }
 }  // namespace
 
-Rgba8 Rgba8::fromArgb(uint32_t argb) {
-    const uint32_t a = (argb >> 24) & 0xFF;
-    auto pm = [a](uint32_t c) { return static_cast<uint8_t>((c * a + 127) / 255); };
-    return {pm((argb >> 16) & 0xFF), pm((argb >> 8) & 0xFF), pm(argb & 0xFF), static_cast<uint8_t>(a)};
-}
-
 gfx::Ref<gfx::TextureResource> CanvasSurface::createTexture(uint32_t w, uint32_t h, const std::string& name) {
     gfx::TextureDesc d;
     d.width = w;
@@ -130,12 +124,7 @@ bool CanvasSurface::write(const RectI& rect, const uint8_t* rgba) {
     } else {
         // Texels to write: the clipped rect, plus the outer gutter where it
         // touches the canvas border (clamp-to-edge emulation).
-        const RectI canvas = grid_.canvasRect();
-        RectI grown = clipped;
-        if (clipped.x == 0) { grown.x -= TileGrid::kGutter; grown.w += TileGrid::kGutter; }
-        if (clipped.y == 0) { grown.y -= TileGrid::kGutter; grown.h += TileGrid::kGutter; }
-        if (clipped.right() == canvas.right()) grown.w += TileGrid::kGutter;
-        if (clipped.bottom() == canvas.bottom()) grown.h += TileGrid::kGutter;
+        const RectI grown = withBorderGutter(clipped);
         for (const TileCoord t : grid_.tilesStoring(grown)) {
             if (!writeTile(t, grown, rect, rgba)) ok = false;
         }
@@ -187,6 +176,128 @@ bool CanvasSurface::writeTile(TileCoord t, const RectI& grown, const RectI& src,
         stats_.textureUploads++;
         stats_.bytesUploaded += static_cast<uint64_t>(region.area()) * 4u;
     }
+    return ok;
+}
+
+RectI CanvasSurface::withBorderGutter(const RectI& clipped) const {
+    const RectI canvas = grid_.canvasRect();
+    RectI grown = clipped;
+    if (clipped.x == 0) { grown.x -= TileGrid::kGutter; grown.w += TileGrid::kGutter; }
+    if (clipped.y == 0) { grown.y -= TileGrid::kGutter; grown.h += TileGrid::kGutter; }
+    if (clipped.right() == canvas.right()) grown.w += TileGrid::kGutter;
+    if (clipped.bottom() == canvas.bottom()) grown.h += TileGrid::kGutter;
+    return grown;
+}
+
+void CanvasSurface::readStore(const RasterStore& store, const RectI& region, uint8_t* dst) {
+    const int32_t maxX = static_cast<int32_t>(store.width()) - 1;
+    const int32_t maxY = static_cast<int32_t>(store.height()) - 1;
+    constexpr int32_t T = RasterStore::kTile;
+    for (int32_t y = 0; y < region.h; ++y) {
+        const int32_t cy = std::clamp(region.y + y, 0, maxY);
+        uint8_t* out = dst + static_cast<size_t>(y) * region.w * 4;
+        int32_t x = region.x;
+        const int32_t x1 = region.right();
+        while (x < x1) {
+            const int32_t cx = std::clamp(x, 0, maxX);
+            const uint8_t* tile = store.tile(cx / T, cy / T);
+            // Run of pixels inside one store tile (or a single clamped pixel).
+            int32_t run = 1;
+            if (x == cx) run = std::min(x1, std::min((cx / T + 1) * T, maxX + 1)) - x;
+            if (tile) {
+                const uint8_t* src = tile + static_cast<size_t>(cy % T) * RasterStore::kTileStride +
+                                     static_cast<size_t>(cx % T) * 4;
+                std::memcpy(out, src, static_cast<size_t>(run) * 4);
+            } else {
+                std::memset(out, 0, static_cast<size_t>(run) * 4);
+            }
+            out += static_cast<size_t>(run) * 4;
+            x += run;
+        }
+    }
+}
+
+bool CanvasSurface::upload(const RasterStore& store, const std::vector<RectI>& dirty) {
+    if (!valid()) return false;
+    if (dirty.empty()) return true;
+    const int64_t t0 = nowNs();
+    const uint64_t uploadsBefore = stats_.textureUploads;
+    bool ok = true;
+    merged_.clear();
+    const RectI canvas = grid_.canvasRect();
+    auto add = [this](size_t index, const RectI& r) {
+        for (auto& m : merged_) {
+            if (m.index != index) continue;
+            const int32_t l = std::min(m.region.x, r.x), t = std::min(m.region.y, r.y);
+            const int32_t rr = std::max(m.region.right(), r.right()), b = std::max(m.region.bottom(), r.bottom());
+            m.region = {l, t, rr - l, b - t};
+            return;
+        }
+        merged_.push_back({index, r});
+    };
+    for (const RectI& d : dirty) {
+        const RectI clipped = d.intersect(canvas);
+        if (clipped.empty()) continue;
+        if (stats_.mode == StorageMode::SingleTexture) {
+            add(0, clipped);
+        } else {
+            const RectI grown = withBorderGutter(clipped);
+            for (const TileCoord t : grid_.tilesStoring(grown)) add(grid_.index(t), grid_.tileStorageRect(t).intersect(grown));
+        }
+    }
+    for (const auto& m : merged_) {
+        gfx::TextureResource* tex = nullptr;
+        uint32_t ox = 0, oy = 0;
+        RectI uploadRegion = m.region;
+        if (stats_.mode == StorageMode::SingleTexture) {
+            tex = textures_[0].get();
+            ox = static_cast<uint32_t>(m.region.x);
+            oy = static_cast<uint32_t>(m.region.y);
+        } else {
+            const TileCoord t = grid_.coord(m.index);
+            auto& ref = textures_[m.index];
+            RectI region = m.region;
+            if (!ref) {
+                // A texture is only needed where the store has content of
+                // its own: a neighbour's gutter alone draws nothing.
+                const RectI own = grid_.tileRect(t);
+                int32_t sx0, sy0, sx1, sy1;
+                bool hasContent = false;
+                if (store.tileRange(own, sx0, sy0, sx1, sy1))
+                    for (int32_t sy = sy0; sy <= sy1 && !hasContent; ++sy)
+                        for (int32_t sx = sx0; sx <= sx1 && !hasContent; ++sx) hasContent = store.tileAllocated(sx, sy);
+                if (!hasContent) continue;
+                // New texture: fill all of it (own pixels + gutter from the
+                // neighbours), or its border would filter against nothing.
+                region = grid_.tileStorageRect(t);
+                char name[64];
+                std::snprintf(name, sizeof(name), ".tile[%d,%d]", t.tx, t.ty);
+                ref = createTexture(grid_.textureSize(), grid_.textureSize(), name_ + name);
+                if (!ref) {
+                    PE_LOGE(kTag, "Surface '%s': tile [%d,%d] allocation failed", name_.c_str(), t.tx, t.ty);
+                    ok = false;
+                    continue;
+                }
+            }
+            tex = ref.get();
+            const RectI storage = grid_.tileStorageRect(t);
+            ox = static_cast<uint32_t>(region.x - storage.x);
+            oy = static_cast<uint32_t>(region.y - storage.y);
+            uploadRegion = region;
+        }
+        scratch_.resize(static_cast<size_t>(uploadRegion.w) * uploadRegion.h * 4);
+        readStore(store, uploadRegion, scratch_.data());
+        if (device_->updateTexture(*tex, ox, oy, static_cast<uint32_t>(uploadRegion.w),
+                                   static_cast<uint32_t>(uploadRegion.h), scratch_.data())) {
+            stats_.textureUploads++;
+            stats_.bytesUploaded += static_cast<uint64_t>(uploadRegion.area()) * 4u;
+        } else {
+            ok = false;
+        }
+    }
+    if (stats_.textureUploads != uploadsBefore) stats_.writes++;
+    stats_.lastWriteMs = msSince(t0);
+    stats_.maxWriteMs = std::max(stats_.maxWriteMs, stats_.lastWriteMs);
     return ok;
 }
 

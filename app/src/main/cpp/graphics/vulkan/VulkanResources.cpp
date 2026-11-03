@@ -185,7 +185,9 @@ std::unique_ptr<VulkanTexture> VulkanTexture::create(VulkanDevice& device, const
         // update and draw expects: SHADER_READ_ONLY_OPTIMAL.
         VkImage image = t->image_;
         const uint32_t mips = desc.mipLevels;
-        const bool cleared = device.submitImmediate([&](VkCommandBuffer cmd) {
+        // In a frame this is recorded before the render pass (no GPU wait);
+        // a canvas tile created while painting therefore costs no stall.
+        const bool cleared = device.recordTransfer([&](VkCommandBuffer cmd) {
             VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             b.srcAccessMask = 0;
             b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;

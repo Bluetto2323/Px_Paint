@@ -1,14 +1,14 @@
 // PxPaint - canvas document + GPU canvas on the render thread.
 //
 // Owned by the Engine and used ONLY on the render thread. It holds:
-//   * the open canvas document (size, paper, content journal),
-//   * its GPU storage (CanvasSurface) and the renderer,
+//   * the appearance of the open canvas (paper, workspace colour),
+//   * the GPU copy of the document's pixels (CanvasSurface) and the renderer,
 //   * the canvas GPU self-test state machine.
 //
-// Content journal: every content write (Block 2: diagnostic stamps only) is
-// recorded as a small operation, so the GPU storage can be rebuilt after a
-// device loss, a backend switch or a GLES context loss. It is also the seed
-// of the future undo history (not implemented in Block 2).
+// The content itself lives in the CanvasDocument (CPU raster store + brush
+// engine). Every frame the controller lets the document apply queued stroke
+// input and uploads the dirty regions; after a device loss, a backend switch
+// or a GLES context loss it simply re-uploads every allocated tile.
 #pragma once
 
 #include <cstdint>
@@ -21,18 +21,10 @@
 #include "canvas/TileGrid.h"
 #include "canvas/Viewport.h"
 #include "diagnostics/Diagnostics.h"
+#include "engine/CanvasDocument.h"
 #include "graphics/abstraction/GraphicsDevice.h"
 
 namespace pe {
-
-// One content write: a rectangle filled (replaced, not blended) with a
-// straight ARGB colour. Block 2 content is a list of these (preview marker /
-// eraser stamps); it is also the persisted project format until raster
-// layers exist (see docs/ENGINE_API.md).
-struct ContentOp {
-    int32_t x = 0, y = 0, w = 0, h = 0;
-    uint32_t argb = 0;
-};
 
 struct CanvasSpec {
     uint32_t width = 0;
@@ -43,7 +35,7 @@ struct CanvasSpec {
 
 class CanvasController {
 public:
-    static constexpr size_t kMaxJournalOps = 100000;
+    explicit CanvasController(CanvasDocument& document) : doc_(document) {}
 
     // Storage limits of a device (real GPU limits + a memory budget).
     // `budgetOverride` (bytes, 0 = none) replaces the API-derived budget.
@@ -56,15 +48,15 @@ public:
     void setWorkspaceColor(uint32_t argb);
     void setPaper(uint32_t argb, bool transparentBackground);
     // Square of `sizePx` centred on a canvas point, clipped to the canvas
-    // (empty if it falls outside). Shared by the UI-side content mirror and
-    // the render thread so both compute exactly the same rectangle.
+    // (empty if it falls outside). Diagnostic stamps (Engine::stampAt).
     static canvas::RectI stampRect(double canvasX, double canvasY, uint32_t sizePx, uint32_t canvasWidth,
                                    uint32_t canvasHeight);
-    // Diagnostic content write (square stamp centred on a canvas point).
-    bool stamp(double canvasX, double canvasY, uint32_t sizePx, uint32_t argb);
-    // Content write of an already clipped rectangle (journal + GPU upload).
-    bool fill(const canvas::RectI& rect, uint32_t argb);
-    void clearContent();
+    // The last frame's GPU work may not have executed (submit failed, frame
+    // abandoned): rebuild the GPU copy and re-upload everything next frame.
+    void invalidateGpuContent() {
+        surface_.destroy();
+        needFullUpload_ = true;
+    }
 
     // GPU objects are bound to the current device: drop them before it goes.
     void releaseGpu();
@@ -87,18 +79,16 @@ public:
     void fillStatus(CanvasStatus& out) const;
 
 private:
-    struct FillOp {
-        canvas::RectI rect;
-        canvas::Rgba8 color;
-    };
     bool ensureGpu(gfx::GraphicsDevice& device, gfx::TextureFormat format);
     void finishSelfTest();
 
     uint64_t budgetOverride_ = 0;
     bool open_ = false;
     CanvasSpec spec_;
-    std::vector<FillOp> journal_;
-    std::vector<FillOp> pending_;  // written to the GPU at the next frame
+    CanvasDocument& doc_;
+    uint64_t surfaceGen_ = ~0ull;  // document generation the GPU copy belongs to
+    bool needFullUpload_ = true;
+    std::vector<canvas::RectI> dirty_;
     canvas::CanvasAppearance look_;
     canvas::CanvasSurface surface_;
     canvas::CanvasRenderer renderer_;

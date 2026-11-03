@@ -1,5 +1,6 @@
 #include "graphics/vulkan/VulkanDevice.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "core/Log.h"
@@ -30,6 +31,7 @@ VulkanDevice::~VulkanDevice() {
     destroyCaptureBuffer();
     resources_.shutdown();  // destroys retired objects, reports leaks
     for (auto& f : frames_) {
+        destroyStaging(f);
         if (f.fence) vkDestroyFence(device_, f.fence, nullptr);
         if (f.imageAvailable) vkDestroySemaphore(device_, f.imageAvailable, nullptr);
         if (f.pool) vkDestroyCommandPool(device_, f.pool, nullptr);
@@ -210,6 +212,41 @@ bool VulkanDevice::updateTexture(gfx::TextureResource& texture, uint32_t x, uint
         return false;
     }
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4;
+    if (recordingFrameTransfers()) {
+        // Fast path (every canvas / brush upload): staged into the frame's
+        // ring and recorded before the render pass. No submit, no wait.
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        if (!stage(rgba, bytes, buffer, offset)) return false;
+        VkCommandBuffer cmd = frames_[frameIndex_].cmd;
+        VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        // First scope: earlier frames sampling the image (fragment reads) and
+        // earlier transfers in this frame (initial clear, other uploads).
+        toDst.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toDst.image = t.image();
+        toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+        VkBufferImageCopy region{};
+        region.bufferOffset = offset;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageOffset = {static_cast<int32_t>(x), static_cast<int32_t>(y), 0};
+        region.imageExtent = {width, height, 1};
+        vkCmdCopyBufferToImage(cmd, buffer, t.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        VkImageMemoryBarrier toRead = toDst;
+        toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                             0, nullptr, 1, &toRead);
+        return true;
+    }
+    // Outside a frame (rare): one-off submission that waits for the queue.
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bci.size = bytes;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -331,6 +368,70 @@ bool VulkanDevice::submitImmediate(const std::function<void(VkCommandBuffer)>& r
     const bool ok = PE_VK_CHECK(vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE)) && PE_VK_CHECK(vkQueueWaitIdle(queue_));
     vkFreeCommandBuffers(device_, uploadPool_, 1, &cmd);
     return ok;
+}
+
+bool VulkanDevice::recordTransfer(const std::function<void(VkCommandBuffer)>& record) {
+    if (recordingFrameTransfers()) {
+        record(frames_[frameIndex_].cmd);
+        return true;
+    }
+    return submitImmediate(record);
+}
+
+bool VulkanDevice::stage(const void* data, VkDeviceSize bytes, VkBuffer& buffer, VkDeviceSize& offset) {
+    Frame& f = frames_[frameIndex_];
+    constexpr VkDeviceSize kAlign = 16;  // >= texel size, keeps copies aligned
+    for (auto& c : f.staging) {
+        const VkDeviceSize at = (c.used + kAlign - 1) & ~(kAlign - 1);
+        if (at + bytes <= c.alloc.size) {
+            std::memcpy(static_cast<uint8_t*>(c.alloc.mapped) + at, data, bytes);
+            c.used = at + bytes;
+            buffer = c.buffer;
+            offset = at;
+            return true;
+        }
+    }
+    // Grow: a new chunk for this slot (kept and reused by later frames).
+    StagingChunk c;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = std::max(kStagingChunkBytes, (bytes + kAlign - 1) & ~(kAlign - 1));
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (!PE_VK_CHECK(vkCreateBuffer(device_, &bci, nullptr, &c.buffer))) return false;
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device_, c.buffer, &req);
+    if (!allocate(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, c.alloc) ||
+        !PE_VK_CHECK(vkBindBufferMemory(device_, c.buffer, c.alloc.memory, 0)) || !c.alloc.mapped) {
+        vkDestroyBuffer(device_, c.buffer, nullptr);
+        free(c.alloc);
+        return false;
+    }
+    c.alloc.size = bci.size;  // usable bytes (allocation may be larger)
+    std::memcpy(c.alloc.mapped, data, bytes);
+    c.used = bytes;
+    buffer = c.buffer;
+    offset = 0;
+    f.staging.push_back(c);
+    PE_LOGI(kTag, "Upload staging for frame slot %u: %zu chunk(s), %.1f MiB", frameIndex_, f.staging.size(),
+            static_cast<double>(bci.size) / (1024.0 * 1024.0));
+    return true;
+}
+
+void VulkanDevice::flushStaging(Frame& f) {
+    for (auto& c : f.staging) {
+        if (c.used == 0 || c.alloc.coherent) continue;
+        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        range.memory = c.alloc.memory;
+        range.size = VK_WHOLE_SIZE;
+        vkFlushMappedMemoryRanges(device_, 1, &range);
+    }
+}
+
+void VulkanDevice::destroyStaging(Frame& f) {
+    for (auto& c : f.staging) {
+        if (c.buffer) vkDestroyBuffer(device_, c.buffer, nullptr);
+        free(c.alloc);
+    }
+    f.staging.clear();
 }
 
 VkRenderPass VulkanDevice::renderPass(VkFormat format, gfx::LoadOp load, VkImageLayout finalLayout) {
@@ -609,6 +710,23 @@ gfx::FrameStatus VulkanDevice::beginFrame(uint64_t serial, gfx::FrameContext& ou
     // single queue => every earlier submission is complete too.
     if (f.serial > completedSerial_) completedSerial_ = f.serial;
     resources_.collect(completedSerial_);
+    // This slot's previous copies have executed: its staging is free again.
+    // Keep at most kStagingKeepBytes (a bulk upload - e.g. opening a big
+    // project - may have grown it far beyond what painting needs).
+    {
+        VkDeviceSize kept = 0;
+        size_t keep = 0;
+        for (; keep < f.staging.size(); ++keep) {
+            if (keep > 0 && kept + f.staging[keep].alloc.size > kStagingKeepBytes) break;
+            kept += f.staging[keep].alloc.size;
+            f.staging[keep].used = 0;
+        }
+        for (size_t i = keep; i < f.staging.size(); ++i) {
+            vkDestroyBuffer(device_, f.staging[i].buffer, nullptr);
+            free(f.staging[i].alloc);
+        }
+        f.staging.resize(keep);
+    }
 
     r = swapchain_->acquire(f.imageAvailable, imageIndex_);
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
@@ -647,6 +765,7 @@ gfx::FrameStatus VulkanDevice::endFrame() {
     context_.endRenderPass();  // tolerate a forgotten endRenderPass()
 
     if (captureRequested_) recordCapture(f.cmd);
+    flushStaging(f);
 
     if (!PE_VK_CHECK(vkEndCommandBuffer(f.cmd))) {
         captureRecorded_ = false;

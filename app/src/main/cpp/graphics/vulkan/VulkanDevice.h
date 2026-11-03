@@ -65,6 +65,11 @@ public:
     // Records and submits a one-off command buffer, then waits for it.
     // Initialization-time uploads only.
     bool submitImmediate(const std::function<void(VkCommandBuffer)>& record);
+    // Transfer work (texture clears / uploads): recorded into the frame being
+    // built when no render pass is open, so it executes in order with the
+    // frame and nothing waits for the GPU; otherwise submitImmediate().
+    bool recordTransfer(const std::function<void(VkCommandBuffer)>& record);
+    bool recordingFrameTransfers() const { return inFrame_ && !context_.insideRenderPass(); }
     // Render passes are cached; all passes with the same format are
     // compatible, so pipelines / framebuffers can be built with any of them.
     VkRenderPass renderPass(VkFormat format, gfx::LoadOp load, VkImageLayout finalLayout);
@@ -77,13 +82,27 @@ public:
     void freeTextureSet(VkDescriptorSet set);
 
 private:
+    // Host-visible staging memory of one frame slot, reused once its fence
+    // has signalled (no allocation per upload once warmed up).
+    struct StagingChunk {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        Allocation alloc;
+        VkDeviceSize used = 0;
+    };
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
         uint64_t serial = 0;
+        std::vector<StagingChunk> staging;
     };
+    static constexpr VkDeviceSize kStagingChunkBytes = 4ull * 1024 * 1024;
+    static constexpr VkDeviceSize kStagingKeepBytes = 16ull * 1024 * 1024;
+    // Copies `bytes` into the current frame's staging memory.
+    bool stage(const void* data, VkDeviceSize bytes, VkBuffer& buffer, VkDeviceSize& offset);
+    void flushStaging(Frame& f);
+    void destroyStaging(Frame& f);
 
     void queryCapabilities();
     bool recycleFrameSync(Frame& f);

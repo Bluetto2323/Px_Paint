@@ -35,6 +35,16 @@ cmake -S "$ROOT/tools/host_test" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 ninja -C "$BUILD"
 export EGL_PLATFORM=surfaceless
 fail=0
+# Pure-CPU suites (no GPU): canvas math / tiles / storage, brush engine.
+for t in pe_canvas_test pe_brush_test; do
+  if "$BUILD/$t" > "$BUILD/$t.log" 2>&1; then
+    echo "PASS  $t  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$t.log"))"
+  else
+    echo "FAIL  $t  (see $BUILD/$t.log)"; fail=1
+    grep -E "\[FAIL\]" "$BUILD/$t.log" | head -25 | sed 's/^/      | /'
+  fi
+  grep -E "^    " "$BUILD/$t.log" | grep -E "ms|us/" | sed 's/^/      /' || true
+done
 run() { local name=$1 icd=$2; shift 2
   if VK_ICD_FILENAMES="$icd" timeout 600 "$BUILD/pe_host_test" "$@" > "$BUILD/$name.log" 2>&1; then
     echo "PASS  $name  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$name.log"))"

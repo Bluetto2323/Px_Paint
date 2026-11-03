@@ -174,6 +174,12 @@ std::string statusSummary(const EngineStatus& s) {
             std::snprintf(buf, sizeof(buf), "Draw      %u visible tiles, %u pieces, %u draw calls\n", c.tilesVisible,
                           c.piecesDrawn, c.drawCalls);
             o << buf;
+            std::snprintf(buf, sizeof(buf), "Brush     %llu strokes, %llu/%llu samples, %llu dabs, %.2f ms (max %.2f)\n",
+                          static_cast<unsigned long long>(c.brushStrokes),
+                          static_cast<unsigned long long>(c.brushSamplesProcessed),
+                          static_cast<unsigned long long>(c.brushSamplesReceived),
+                          static_cast<unsigned long long>(c.brushDabs), c.brushLastMs, c.brushMaxMs);
+            o << buf;
         } else {
             o << "Canvas    none open\n";
         }
@@ -283,8 +289,19 @@ std::string statusJson(const EngineStatus& s) {
     num("canvasBytesUploaded", static_cast<double>(c.bytesUploaded));
     num("canvasLastWriteMs", c.lastWriteMs);
     num("canvasMaxWriteMs", c.maxWriteMs);
-    num("canvasJournalOps", static_cast<double>(c.journalOps));
     num("canvasRestores", c.restores);
+    num("canvasRasterTiles", static_cast<double>(c.rasterTiles));
+    num("canvasRasterBytes", static_cast<double>(c.rasterBytes));
+    num("canvasRevision", static_cast<double>(c.revision));
+    num("brushStrokes", static_cast<double>(c.brushStrokes));
+    num("brushCancelled", static_cast<double>(c.brushCancelled));
+    num("brushSamplesReceived", static_cast<double>(c.brushSamplesReceived));
+    num("brushSamplesProcessed", static_cast<double>(c.brushSamplesProcessed));
+    num("brushDabs", static_cast<double>(c.brushDabs));
+    num("brushPending", c.brushPending);
+    num("brushStrokeTiles", c.brushStrokeTiles);
+    num("brushLastMs", c.brushLastMs);
+    num("brushMaxMs", c.brushMaxMs);
     num("canvasTilesVisible", c.tilesVisible);
     num("canvasPiecesDrawn", c.piecesDrawn);
     num("canvasDrawCalls", c.drawCalls);

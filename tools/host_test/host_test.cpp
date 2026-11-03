@@ -46,6 +46,8 @@ namespace {
 int gFailures = 0;
 int gChecks = 0;
 
+void check(bool ok, const char* what);
+void check(bool ok, const std::string& what) { check(ok, what.c_str()); }
 void check(bool ok, const char* what) {
     gChecks++;
     if (!ok) gFailures++;
@@ -691,15 +693,15 @@ int suiteCanvas(const std::string& pref, const std::string& expected, bool noFal
         c = canvasOf(engine);
         const uint64_t tileBytes = 258ull * 258 * 4;
         check(c.tilesAllocated == 1 && c.bytesAllocated == tileBytes && c.textureUploads == 1 &&
-                  c.bytesUploaded == 40ull * 40 * 4,
-              "C4: one tile allocated, only 40x40 texels uploaded (partial update)");
+                  c.bytesUploaded == tileBytes,
+              "C4: one tile allocated, filled once (own pixels + gutter)");
         const auto corner = engine.canvasToScreen({4096, 3072});  // shared by 4 tiles
         check(engine.stampAt(corner.x, corner.y, 20, 0xFF3060E0u, nullptr), "C4: stamp on a 4-tile corner");
         check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.writes >= 2; }, 5s),
               "C4: corner stamp written");
         c = canvasOf(engine);
-        check(c.tilesAllocated == 4 && c.textureUploads == 5,
-              "C4: corner stamp touched exactly 4 tiles (3 new), one upload each");
+        check(c.tilesAllocated == 4 && c.textureUploads == 5 && c.bytesUploaded < 5 * tileBytes,
+              "C4: corner stamp touched exactly 4 tiles (3 new), one upload each, partial for the existing tile");
         check(!engine.stampAt(2, 2, 10, 0xFF000000u, nullptr), "C4: stamp outside the canvas rejected");
         std::printf("    tiles %u/%u, %.2f MiB, uploads %llu (%llu bytes), last write %.2f ms, max %.2f ms\n",
                     c.tilesAllocated, c.tilesTotal, c.bytesAllocated / 1048576.0,
@@ -722,7 +724,7 @@ int suiteCanvas(const std::string& pref, const std::string& expected, bool noFal
                     c.tilesTotal, c.piecesDrawn, c.drawCalls);
         check(c.piecesDrawn == 0, "C5: content tiles off-screen are culled");
 
-        section("C6 device loss -> content rebuilt from the journal");
+        section("C6 device loss -> GPU copy rebuilt from the CPU raster");
         const uint32_t recoveries = engine.status().deviceRecoveries;
         const uint64_t errorsBeforeLoss = totalErrors();
         gHooks.deviceLostShots = 1;
@@ -733,39 +735,70 @@ int suiteCanvas(const std::string& pref, const std::string& expected, bool noFal
                   [](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.restores >= 1; }, 10s),
               "C6: canvas storage recreated");
         c = canvasOf(engine);
-        check(c.tilesAllocated == 4 && c.journalOps == 2, "C6: same 4 tiles restored from 2 journal operations");
+        check(c.tilesAllocated == 4 && c.rasterTiles == 4, "C6: the same 4 tiles re-uploaded from the 4 raster tiles");
         injectedErrors = totalErrors() - errorsBeforeLoss;  // "Injected device loss" + "Recovering ..."
         runs = c.selfTest.runs;
         engine.runCanvasSelfTest();
         check(canvasSelfTestPassedAfter(engine, runs), "C6: canvas self-test passes on the recreated device");
 
-        section("C6b content export / reload (project persistence)");
+        section("C6b content export / import (project persistence) and legacy import");
         {
-            const auto ops = engine.canvasContent();
-            check(ops.size() == 2, "C6b: content mirror holds the 2 stamps, in order");
-            const bool exact = ops.size() == 2 && ops[0].x == 3980 && ops[0].y == 2980 && ops[0].w == 40 &&
-                               ops[0].h == 40 && ops[0].argb == 0xFFE03030u && ops[1].w == 20 && ops[1].h == 20 &&
-                               ops[1].argb == 0xFF3060E0u;
-            check(exact, "C6b: exported rectangles/colours match the stamps exactly");
+            std::vector<uint8_t> all;
+            const size_t n = engine.exportCanvasTiles(false, 1000, all);
+            check(n == 4 && all.size() == 4 + 4 * (12 + pe::canvas::RasterStore::kTileBytes),
+                  "C6b: export of every tile: 4 records with pixels");
+            // Stamp centre (4000, 3000) lies in tile (15, 11) at (160, 184).
+            bool found = false;
+            for (size_t off = 4, i = 0; i < n; ++i) {
+                int32_t tx, ty, flags;
+                std::memcpy(&tx, &all[off], 4);
+                std::memcpy(&ty, &all[off + 4], 4);
+                std::memcpy(&flags, &all[off + 8], 4);
+                off += 12;
+                if (tx == 15 && ty == 11 && flags == 0) {
+                    const uint8_t* px = &all[off + (184 * 256 + 160) * 4];
+                    found = px[0] == 0xE0 && px[1] == 0x30 && px[2] == 0x30 && px[3] == 0xFF;
+                }
+                if (!(flags & 1)) off += pe::canvas::RasterStore::kTileBytes;
+            }
+            check(found, "C6b: exported pixels hold the stamp colour exactly");
+            std::vector<uint8_t> changed;
+            check(engine.exportCanvasTiles(true, 1000, changed) == 0, "C6b: nothing changed since that export");
             const uint64_t rev0 = engine.canvasContentRevision();
-            // Reopen the same canvas and reload: storage must end up identical.
-            check(engine.createCanvas({8000, 6000}).empty(), "C6b: canvas re-created");
-            std::vector<pe::ContentOp> withJunk = ops;
-            withJunk.push_back({-100, -100, 50, 50, 0xFF00FF00u});   // fully outside: dropped
-            withJunk.push_back({7990, 5990, 40, 40, 0xFF00FF00u});   // clipped to 10x10
-            const size_t kept = engine.loadCanvasContent(withJunk);
-            check(kept == 3, "C6b: load keeps in-canvas ops (outside dropped, edge clipped)");
+            check(engine.createCanvas({8000, 6000}).empty(), "C6b: canvas re-created (empty)");
+            check(engine.document().stats().tilesAllocated == 0, "C6b: new document has no tiles");
+            check(engine.importCanvasTiles(all.data(), all.size()) == 4, "C6b: 4 tiles imported");
+            check(engine.document().pixel(4000, 3000).toArgb() == 0xFFE03030u &&
+                      engine.document().pixel(4096, 3072).toArgb() == 0xFF3060E0u,
+                  "C6b: imported content identical (both stamps)");
             check(engine.canvasContentRevision() > rev0, "C6b: content revision advanced");
             check(engine.waitForStatus(
-                      [](const EngineStatus& s) { return s.canvas.width == 8000 && s.canvas.gpuReady && s.canvas.journalOps == 3; },
+                      [](const EngineStatus& s) { return s.canvas.width == 8000 && s.canvas.gpuReady && s.canvas.tilesAllocated == 4; },
                       10s),
-                  "C6b: reloaded content applied on the render thread (3 journal ops)");
-            c = canvasOf(engine);
-            check(c.tilesAllocated == 5, "C6b: same 4 tiles + the clipped edge tile allocated after reload");
-            const auto back = engine.canvasContent();
-            check(back.size() == 3 && back[2].w == 10 && back[2].h == 10, "C6b: clipped op stored clipped");
+                  "C6b: imported tiles uploaded to the GPU");
+            std::vector<uint8_t> bad(all.begin(), all.begin() + 100);
+            check(engine.importCanvasTiles(bad.data(), bad.size()) == -1, "C6b: truncated data rejected");
+            uint32_t tw = 0, th = 0;
+            std::vector<uint32_t> thumb;
+            check(engine.canvasThumbnail(480, tw, th, thumb) && tw == 480 && th == 360 && thumb.size() == 480u * 360u,
+                  "C6b: thumbnail 480x360 keeps the 4:3 aspect ratio");
+            check((thumb[180 * 480 + 240] >> 24) > 0 && (thumb[10 * 480 + 10] >> 24) == 0,
+                  "C6b: thumbnail shows the stamp, transparent elsewhere");
+            // Block 2 projects: rectangle ops become raster content.
+            std::vector<pe::ContentOp> legacy = {{3980, 2980, 40, 40, 0xFFE03030u}, {4086, 3062, 20, 20, 0xFF3060E0u},
+                                                 {-100, -100, 50, 50, 0xFF00FF00u}, {7990, 5990, 40, 40, 0xFF00FF00u}};
+            check(engine.loadCanvasContent(legacy) == 3, "C6b: legacy load keeps in-canvas ops (outside dropped)");
+            check(engine.document().pixel(7999, 5999).toArgb() == 0xFF00FF00u &&
+                      engine.document().pixel(4000, 3000).toArgb() == 0xFFE03030u,
+                  "C6b: legacy ops rasterised (edge op clipped)");
+            std::vector<uint8_t> legacyExport;
+            check(engine.exportCanvasTiles(true, 1000, legacyExport) == 5,
+                  "C6b: imported legacy content is unsaved in the new format (5 tiles)");
+            check(engine.waitForStatus(
+                      [](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.tilesAllocated == 5; }, 10s),
+                  "C6b: legacy content on the GPU (5 tiles)");
             engine.clearCanvasContent();
-            check(engine.canvasContent().empty(), "C6b: clear empties the content mirror");
+            check(engine.document().stats().tilesAllocated == 0, "C6b: clear empties the raster");
         }
 
         section("C7 maximum canvas and memory budget");
@@ -803,12 +836,331 @@ int suiteCanvas(const std::string& pref, const std::string& expected, bool noFal
         for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());
     return 0;
 }
+
+// =============================================================== suite: brush
+// Brush strokes through the real engine: screen samples -> viewport ->
+// CPU raster -> partial uploads -> GPU display, checked on the backbuffer.
+struct Cap {
+    pe::gfx::CaptureResult c;
+    const uint8_t* at(int x, int y) const { return &c.rgba[(static_cast<size_t>(y) * c.width + x) * 4]; }
+    int grey(int x, int y) const { return at(x, y)[0]; }
+};
+
+// Waits until the render thread consumed every queued stroke event (read
+// from the document directly: the published status may lag), then for the
+// status of a frame rendered after that.
+bool brushIdle(pe::Engine& e, std::chrono::milliseconds t = 10s) {
+    const auto end = std::chrono::steady_clock::now() + t;
+    for (;;) {
+        const auto b = e.document().stats().brush;
+        if (b.pendingEvents == 0 && b.samplesProcessed == b.samplesReceived) break;
+        if (std::chrono::steady_clock::now() > end) return false;
+        std::this_thread::sleep_for(1ms);
+    }
+    const uint64_t processed = e.document().stats().brush.samplesProcessed;
+    return e.waitForStatus([&](const EngineStatus& s) { return s.canvas.brushSamplesProcessed >= processed; }, t);
+}
+
+// Stroke along screen points; `perBatch` samples per call (like MotionEvent history).
+void screenStroke(pe::Engine& e, const pe::brush::BrushSettings& b, const std::vector<pe::canvas::Vec2>& pts,
+                  size_t perBatch = 4, bool finish = true) {
+    e.strokeBegin(b, pts[0].x, pts[0].y, 0.0);
+    std::vector<float> xyt;
+    for (size_t i = 1; i < pts.size(); i += perBatch) {
+        xyt.clear();
+        for (size_t k = i; k < std::min(pts.size(), i + perBatch); ++k) {
+            xyt.push_back(static_cast<float>(pts[k].x));
+            xyt.push_back(static_cast<float>(pts[k].y));
+            xyt.push_back(static_cast<float>(k * 4));
+        }
+        e.strokeSamples(xyt.data(), xyt.size() / 3);
+    }
+    if (finish) e.strokeEnd();
+}
+
+std::vector<pe::canvas::Vec2> screenLine(double x0, double y0, double x1, double y1, int n) {
+    std::vector<pe::canvas::Vec2> v;
+    for (int i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / (n - 1);
+        v.push_back({x0 + (x1 - x0) * t, y0 + (y1 - y0) * t});
+    }
+    return v;
+}
+
+pe::brush::BrushSettings brushOf(float d, float opacity, uint32_t argb, bool erase = false) {
+    pe::brush::BrushSettings b;
+    b.diameter = d;
+    b.opacity = opacity;
+    b.argb = argb;
+    b.erase = erase;
+    return b;
+}
+
+bool capture(pe::Engine& e, Cap& out) { return e.captureFrame(out.c, 10s) && out.c.width > 0; }
+
+int suiteBrush(const std::string& pref, const std::string& expected, bool noFallback) {
+    const BackendType want = expected == "vulkan" ? BackendType::Vulkan : BackendType::OpenGLES;
+    const uint64_t errorsAtStart = totalErrors();
+    std::shared_ptr<WindowProbe> probe;
+    {
+        pe::EngineConfig cfg = makeConfig(pref, noFallback, RenderMode::OnDemand);
+        cfg.scene = pe::SceneMode::Canvas;
+        pe::Engine engine(cfg);
+        engine.start();
+        constexpr uint32_t kW = 900, kH = 600;
+        engine.surfaceCreated(trackedWindow(kW, kH, probe));
+        engine.surfaceChanged(kW, kH);
+        check(waitRunning(engine) && engine.status().backend == want, "engine running on expected backend");
+        const uint32_t baseLive = engine.status().resources.totalLive();
+        const uint32_t kPaper = 0xFFFFFFFFu;
+
+        section("S1 stroke through the engine: screen samples -> canvas raster -> GPU display");
+        check(engine.createCanvas({1200, 800, kPaper}).empty(), "S1: 1200x800 canvas (single texture)");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady; }, 10s), "S1: storage ready");
+        const double zoom = engine.viewportOp(pe::ViewOp::Query, nullptr, 0).state.zoom;
+        screenStroke(engine, brushOf(40, 1.0f, 0xFF000000u), screenLine(200, 300, 700, 300, 60));
+        check(brushIdle(engine), "S1: every queued sample processed");
+        const auto bs1 = engine.document().stats().brush;
+        check(bs1.samplesReceived == 60 && bs1.samplesProcessed == 60 && bs1.strokesCommitted == 1,
+              "S1: 60 samples received = processed, 1 stroke committed");
+        const auto mid = engine.screenToCanvas({450, 300});
+        check(engine.document().pixel(static_cast<int>(mid.x), static_cast<int>(mid.y)).a == 255 &&
+                  engine.document().pixel(static_cast<int>(mid.x), static_cast<int>(mid.y) + 22).a == 0,
+              "S1: canvas raster: 40 px (canvas) stroke at the mapped position");
+        Cap cap;
+        check(capture(engine, cap), "S1: backbuffer captured");
+        if (cap.c.width) {
+            check(cap.grey(450, 300) <= 4 && cap.grey(250, 300) <= 4 && cap.grey(650, 300) <= 4,
+                  "S1: GPU shows the stroke (black along the centre line)");
+            const int edge = static_cast<int>(std::lround(20 * zoom));
+            check(cap.grey(450, 300 - edge - 3) >= 250 && cap.grey(450, 300 + edge + 3) >= 250,
+                  "S1: paper beyond the stroke edge (stroke width scaled by the zoom)");
+            int intermediate = 0;
+            for (int y = 300 - edge - 2; y <= 300 - edge + 2; ++y)
+                if (cap.grey(450, y) > 8 && cap.grey(450, y) < 247) intermediate++;
+            check(intermediate >= 1, "S1: antialiased edge on screen (intermediate values)");
+            std::printf("    zoom %.3f; edge profile:", zoom);
+            for (int y = 300 - edge - 3; y <= 300 - edge + 3; ++y) std::printf(" %d", cap.grey(450, y));
+            std::printf("\n");
+        }
+
+        section("S2 opacity on the GPU: a self-crossing 50% stroke stays 50%");
+        std::vector<pe::canvas::Vec2> loop;
+        for (int i = 0; i <= 80; ++i) {
+            const double a = 2 * pe::canvas::kPi * 1.5 * i / 80;
+            loop.push_back({450 + 120 * std::cos(a), 420 + 60 * std::sin(2 * a)});  // figure-eight, crosses itself
+        }
+        screenStroke(engine, brushOf(30, 0.5f, 0xFF000000u), loop, 3);
+        check(brushIdle(engine), "S2: processed");
+        if (capture(engine, cap)) {
+            int lo = 255, hi = 0;
+            for (int y = 340; y < 500; ++y)
+                for (int x = 300; x < 600; ++x) {
+                    const int g = cap.grey(x, y);
+                    if (g < 250) lo = std::min(lo, g), hi = std::max(hi, g);
+                }
+            check(std::abs(lo - 128) <= 3, "S2: darkest pixel ~128 (50% over white): no darkening where the stroke crosses itself");
+            std::printf("    darkest %d (expected ~128)\n", lo);
+        }
+
+        section("S3 tiled canvas, strokes across tile boundaries, zoomed in");
+        check(engine.createCanvas({3000, 2000, kPaper}).empty(), "S3: 3000x2000 canvas (tiled)");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.tileSize == 256; }, 10s),
+              "S3: tiled storage ready");
+        double z[] = {3.0, 0, 0};
+        auto anchor = engine.canvasToScreen({512, 512});
+        z[1] = anchor.x;
+        z[2] = anchor.y;
+        engine.viewportOp(pe::ViewOp::SetZoomAt, z, 3);
+        double pan[] = {450 - anchor.x, 300 - anchor.y};
+        engine.viewportOp(pe::ViewOp::PanBy, pan, 2);
+        const auto a0 = engine.canvasToScreen({400, 512}), a1 = engine.canvasToScreen({640, 512});
+        screenStroke(engine, brushOf(24, 1.0f, 0xFF2040A0u), screenLine(a0.x, a0.y, a1.x, a1.y, 25));
+        const auto b0 = engine.canvasToScreen({512, 420}), b1 = engine.canvasToScreen({512, 600});
+        screenStroke(engine, brushOf(24, 1.0f, 0xFF2040A0u), screenLine(b0.x, b0.y, b1.x, b1.y, 25));
+        check(brushIdle(engine), "S3: processed");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.rasterTiles == 4 && s.canvas.tilesAllocated == 4; }, 5s),
+              "S3: strokes crossing the 4-tile corner touched exactly 4 tiles (CPU and GPU)");
+        if (capture(engine, cap)) {
+            // Along the horizontal stroke's centre (canvas y = 512 = a tile row edge) and
+            // across the column edge at canvas x = 512: uniform colour, no seam.
+            bool uniform = true;
+            for (int x = 300; x <= 380; ++x)
+                uniform &= std::abs(cap.at(x, 300)[2] - 0xA0) <= 3 && std::abs(cap.at(x, 300)[0] - 0x20) <= 3;
+            for (int y = 220; y <= 290; ++y)
+                uniform &= std::abs(cap.at(450, y)[2] - 0xA0) <= 3;
+            check(uniform, "S3: stroke colour uniform across tile edges on screen (no seams)");
+            // Edge profile symmetric around the tile row edge (canvas y = 512 -> screen y = 300).
+            bool symmetric = true;
+            for (int d = 0; d < 45; ++d) symmetric &= std::abs(cap.grey(330, 300 - d) - cap.grey(330, 299 + d)) <= 6;
+            check(symmetric, "S3: stroke profile symmetric across the tile row boundary");
+        }
+
+        section("S4 rotated + zoomed view: brush size in canvas pixels, straight screen line");
+        check(engine.createCanvas({1600, 1200, kPaper}).empty(), "S4: canvas");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.width == 1600; }, 10s),
+              "S4: ready");
+        double r[] = {0.65, 450, 300};  // ~37 degrees
+        engine.viewportOp(pe::ViewOp::SetRotationAt, r, 3);
+        double zz[] = {2.0, 450, 300};
+        engine.viewportOp(pe::ViewOp::SetZoomAt, zz, 3);
+        const double zoomS4 = engine.viewportOp(pe::ViewOp::Query, nullptr, 0).state.zoom;
+        screenStroke(engine, brushOf(10, 1.0f, 0xFF000000u), screenLine(250, 300, 650, 300, 33));
+        check(brushIdle(engine), "S4: processed");
+        // In canvas space the stroke is a rotated straight line of width 10.
+        const auto c0 = engine.screenToCanvas({250, 300}), c1 = engine.screenToCanvas({650, 300});
+        const pe::canvas::Vec2 dir = (c1 - c0) * (1.0 / (c1 - c0).length());
+        const pe::canvas::Vec2 nrm{-dir.y, dir.x};
+        bool centre = true, outside = true;
+        for (int i = 1; i < 10; ++i) {
+            const pe::canvas::Vec2 p = c0 + (c1 - c0) * (i / 10.0);
+            centre &= engine.document().pixel(static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y))).a == 255;
+            const pe::canvas::Vec2 q = p + nrm * 7.0, q2 = p - nrm * 7.0;
+            outside &= engine.document().pixel(static_cast<int>(std::floor(q.x)), static_cast<int>(std::floor(q.y))).a == 0 &&
+                       engine.document().pixel(static_cast<int>(std::floor(q2.x)), static_cast<int>(std::floor(q2.y))).a == 0;
+        }
+        check(centre && outside, "S4: canvas raster: rotated straight stroke, 10 canvas px wide");
+        if (capture(engine, cap)) {
+            const int half = static_cast<int>(std::lround(5 * zoomS4));
+            bool onScreen = true;
+            for (int x = 300; x <= 600; x += 10) onScreen &= cap.grey(x, 300) <= 4 && cap.grey(x, 300 - half - 3) >= 250 &&
+                                                            cap.grey(x, 300 + half + 3) >= 250;
+            check(onScreen, "S4: on screen: horizontal line, width = 10 x zoom, under the finger path");
+        }
+
+        section("S5 stroke cancellation (pinch after starting a stroke)");
+        const uint64_t revBefore = engine.canvasContentRevision();
+        std::vector<uint8_t> before;
+        engine.exportCanvasTiles(false, 1000, before);
+        screenStroke(engine, brushOf(60, 1.0f, 0xFFFF0000u), screenLine(300, 100, 600, 500, 20), 4, false);
+        check(brushIdle(engine), "S5: in-progress stroke processed");
+        check(engine.document().stats().brush.strokeActive, "S5: stroke active and visible");
+        engine.strokeCancel();
+        check(brushIdle(engine) && engine.waitForStatus([](const EngineStatus& s) { return s.canvas.brushCancelled >= 1; }, 5s),
+              "S5: cancel processed");
+        std::vector<uint8_t> after;
+        engine.exportCanvasTiles(false, 1000, after);
+        // Same set of non-empty tiles with identical pixels (tiles the
+        // cancelled stroke created are exported as empty).
+        auto nonEmpty = [](const std::vector<uint8_t>& d) {
+            std::vector<std::vector<uint8_t>> out;
+            int32_t n;
+            std::memcpy(&n, d.data(), 4);
+            size_t off = 4;
+            for (int i = 0; i < n; ++i) {
+                int32_t flags;
+                std::memcpy(&flags, &d[off + 8], 4);
+                const size_t start = off;
+                off += 12;
+                if (!(flags & 1)) {
+                    out.emplace_back(d.begin() + start, d.begin() + off + pe::canvas::RasterStore::kTileBytes);
+                    off += pe::canvas::RasterStore::kTileBytes;
+                }
+            }
+            return out;
+        };
+        check(nonEmpty(before) == nonEmpty(after), "S5: canvas content identical to before the cancelled stroke");
+        check(engine.canvasContentRevision() > revBefore, "S5: revision moved (the UI saves the restored state)");
+        if (capture(engine, cap)) {
+            const auto p = engine.canvasToScreen(engine.screenToCanvas({450, 300}));
+            check(cap.at(static_cast<int>(p.x), static_cast<int>(p.y))[1] >= 200 || cap.grey(450, 300) <= 4,
+                  "S5: no red left on screen");
+        }
+
+        section("S6 eraser on the GPU");
+        screenStroke(engine, brushOf(30, 1.0f, 0xFF000000u, true), screenLine(400, 200, 400, 400, 10));
+        check(brushIdle(engine), "S6: processed");
+        if (capture(engine, cap)) check(cap.grey(400, 300) >= 250, "S6: erased area shows the paper again");
+
+        section("S7 persistence round trip shows the same image");
+        Cap before7, after7;
+        // New canvases open fitted with no rotation: compare in that view.
+        double r0[] = {0.0, 450, 300};
+        engine.viewportOp(pe::ViewOp::SetRotationAt, r0, 3);
+        engine.viewportOp(pe::ViewOp::Fit, nullptr, 0);
+        const bool c1ok = capture(engine, before7);
+        std::vector<uint8_t> all;
+        engine.exportCanvasTiles(false, 1000, all);
+        check(engine.createCanvas({1600, 1200, kPaper}).empty(), "S7: canvas re-created");
+        check(engine.importCanvasTiles(all.data(), all.size()) >= 1, "S7: tiles imported");
+        engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady; }, 10s);
+        const bool c2ok = capture(engine, after7);
+        int worst = 0;
+        if (c1ok && c2ok && before7.c.rgba.size() == after7.c.rgba.size())
+            for (size_t i = 0; i < before7.c.rgba.size(); ++i) worst = std::max(worst, std::abs(before7.c.rgba[i] - after7.c.rgba[i]));
+        check(c1ok && c2ok && worst <= 2, "S7: reloaded canvas renders identically (max diff " + std::to_string(worst) + ")");
+
+        section("S8 sustained drawing: input independent of rendering, nothing lost");
+        check(engine.createCanvas({4096, 4096, kPaper}).empty(), "S8: 4096x4096 canvas");
+        check(engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.width == 4096; }, 10s),
+              "S8: ready");
+        double zf[] = {1.0, 450, 300};
+        engine.viewportOp(pe::ViewOp::SetZoomAt, zf, 3);
+        const uint64_t framesBefore = frames(engine);
+        const auto rx0 = engine.status().canvas.brushSamplesReceived;
+        const int64_t t0 = pe::nowNs();
+        double worstLagMs = 0;
+        int strokes = 0;
+        // 40 fast strokes, samples every 4 ms in batches of 2 (like 240 Hz touch).
+        for (int sidx = 0; sidx < 40; ++sidx) {
+            const double y = 60 + (sidx % 12) * 40;
+            std::vector<pe::canvas::Vec2> pts;
+            for (int i = 0; i <= 60; ++i) pts.push_back({50 + i * 13.0, y + 25 * std::sin(i * 0.3)});
+            engine.strokeBegin(brushOf(sidx % 2 ? 48.0f : 6.0f, 0.8f, 0xFF203060u), pts[0].x, pts[0].y, 0);
+            for (size_t i = 1; i < pts.size(); i += 2) {
+                float xyt[6];
+                size_t n = 0;
+                for (size_t k = i; k < std::min(pts.size(), i + 2); ++k, ++n) {
+                    xyt[n * 3] = static_cast<float>(pts[k].x);
+                    xyt[n * 3 + 1] = static_cast<float>(pts[k].y);
+                    xyt[n * 3 + 2] = static_cast<float>(k * 4);
+                }
+                engine.strokeSamples(xyt, n);
+                std::this_thread::sleep_for(4ms);
+            }
+            engine.strokeEnd();
+            const int64_t tEnd = pe::nowNs();
+            brushIdle(engine, 5s);
+            worstLagMs = std::max(worstLagMs, msSince(tEnd));
+            strokes++;
+        }
+        const double totalMs = msSince(t0);
+        const auto s8 = engine.status();
+        const uint64_t received = s8.canvas.brushSamplesReceived - rx0;
+        check(s8.canvas.brushSamplesProcessed == s8.canvas.brushSamplesReceived && received == 40u * 61u,
+              "S8: all " + std::to_string(received) + " samples processed (none dropped)");
+        std::printf("    %d strokes in %.0f ms, %llu frames, brush work last %.2f ms / max %.2f ms per frame,\n"
+                    "    frame CPU work avg %.2f ms (record %.2f + submit %.2f), worst end-of-stroke -> processed %.1f ms\n",
+                    strokes, totalMs, static_cast<unsigned long long>(frames(engine) - framesBefore),
+                    s8.canvas.brushLastMs, s8.canvas.brushMaxMs, s8.frames.steadyAvgRecordMs + s8.frames.steadyAvgSubmitMs,
+                    s8.frames.steadyAvgRecordMs, s8.frames.steadyAvgSubmitMs, worstLagMs);
+        std::printf("    uploads %llu (%.1f MiB), raster tiles %llu, GPU tiles %u\n",
+                    static_cast<unsigned long long>(s8.canvas.textureUploads), s8.canvas.bytesUploaded / 1048576.0,
+                    static_cast<unsigned long long>(s8.canvas.rasterTiles), s8.canvas.tilesAllocated);
+        check(s8.canvas.bytesUploaded < 4096ull * 4096 * 4, "S8: partial uploads only (less than one full canvas uploaded in total)");
+
+        section("S9 close -> resources released");
+        engine.closeCanvas();
+        check(engine.waitForStatus([](const EngineStatus& s) { return !s.canvas.open; }, 5s), "S9: canvas closed");
+        check(engine.waitForStatus([&](const EngineStatus& s) { return s.resources.totalLive() <= baseLive; }, 5s),
+              "S9: live GPU resources back to the baseline");
+        engine.shutdown();
+        const auto report = pe::shutdown::last();
+        check(report.valid && report.clean() && report.resourcesCreated == report.resourcesDestroyed,
+              "S9: shutdown report: no leaked resources");
+    }
+    const uint64_t newErrors = totalErrors() - errorsAtStart;
+    check(newErrors == 0, "brush suite: no engine or validation errors logged");
+    if (newErrors)
+        for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());
+    return 0;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
-                     "usage: %s <auto|vulkan|gles> <vulkan|gles|none> [--no-fallback] [--suite basic|lifecycle|faults|canvas]\n",
+                     "usage: %s <auto|vulkan|gles> <vulkan|gles|none> [--no-fallback] [--suite basic|lifecycle|faults|canvas|brush]\n",
                      argv[0]);
         return 2;
     }
@@ -833,6 +1185,8 @@ int main(int argc, char** argv) {
         suiteFaults(pref, expected, noFallback);
     else if (suite == "canvas")
         suiteCanvas(pref, expected, noFallback);
+    else if (suite == "brush")
+        suiteBrush(pref, expected, noFallback);
     else {
         std::fprintf(stderr, "unknown suite %s\n", suite.c_str());
         return 2;

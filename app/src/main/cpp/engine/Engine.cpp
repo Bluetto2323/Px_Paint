@@ -23,7 +23,7 @@ constexpr int64_t kFailureWindowNs = 60'000'000'000;
 constexpr size_t kMaxRecoveriesPerWindow = 6;
 }  // namespace
 
-Engine::Engine(const EngineConfig& config) : config_(config), sceneMode_(config.scene) {
+Engine::Engine(const EngineConfig& config) : config_(config), sceneMode_(config.scene), canvas_(doc_) {
     scheduler_.setMode(config.renderMode);
     canvas_.setMemoryBudget(config.canvasMemoryBudgetBytes);
 }
@@ -242,11 +242,7 @@ std::string Engine::createCanvas(const CanvasSpec& spec) {
         view_.setRotationAt(0.0, {view_.screenWidth() * 0.5, view_.screenHeight() * 0.5});
         view_.fitToScreen();
     }
-    {
-        std::lock_guard<std::mutex> lock(contentMutex_);
-        contentOps_.clear();
-        contentRevision_++;
-    }
+    doc_.open(spec.width, spec.height);  // synchronous: imports may follow at once
     queue_.post([this, spec] {
         canvas_.open(spec);
         scheduler_.requestFrame();
@@ -273,11 +269,7 @@ void Engine::closeCanvas() {
         std::lock_guard<std::mutex> lock(viewMutex_);
         view_.setCanvasSize(0, 0);
     }
-    {
-        std::lock_guard<std::mutex> lock(contentMutex_);
-        contentOps_.clear();
-        contentRevision_++;
-    }
+    doc_.close();
     queue_.post([this] {
         canvas_.close();
         scheduler_.requestFrame();
@@ -294,13 +286,8 @@ void Engine::setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool tr
 }
 
 void Engine::clearCanvasContent() {
-    {
-        std::lock_guard<std::mutex> lock(contentMutex_);
-        contentOps_.clear();
-        contentRevision_++;
-    }
+    doc_.clear();
     queue_.post([this] {
-        canvas_.clearContent();
         scheduler_.requestFrame();
         publishStatus(true);
     });
@@ -319,63 +306,103 @@ bool Engine::stampAt(double screenX, double screenY, uint32_t sizePx, uint32_t a
     }
     if (canvasPoint) *canvasPoint = c;
     if (rect.empty()) return false;
-    const ContentOp op{rect.x, rect.y, rect.w, rect.h, argb};
-    // The mirror and the posted task are updated under the same lock so the
-    // render thread receives fills in exactly the mirror's order.
-    std::lock_guard<std::mutex> lock(contentMutex_);
-    if (contentOps_.size() >= CanvasController::kMaxJournalOps) {
-        PE_LOGW(kTag, "Canvas content full (%zu operations): stamp ignored", contentOps_.size());
-        return false;
-    }
-    const bool posted = queue_.post([this, rect, argb] {
-        canvas_.fill(rect, argb);
+    doc_.fill(rect, argb);
+    queue_.post([this] {
         scheduler_.requestFrame();
         publishStatus(false);
     });
-    if (posted) {
-        contentOps_.push_back(op);
-        contentRevision_++;
-    }
-    return posted;
+    return true;
 }
 
-std::vector<ContentOp> Engine::canvasContent() const {
-    std::lock_guard<std::mutex> lock(contentMutex_);
-    return contentOps_;
-}
-
-uint64_t Engine::canvasContentRevision() const {
-    std::lock_guard<std::mutex> lock(contentMutex_);
-    return contentRevision_;
-}
+uint64_t Engine::canvasContentRevision() const { return doc_.revision(); }
 
 size_t Engine::loadCanvasContent(const std::vector<ContentOp>& ops) {
-    uint32_t w = 0, h = 0;
-    {
-        std::lock_guard<std::mutex> lock(viewMutex_);
-        w = view_.canvasWidth();
-        h = view_.canvasHeight();
-    }
-    if (w == 0 || h == 0) return 0;
-    std::vector<ContentOp> kept;
-    kept.reserve(std::min(ops.size(), CanvasController::kMaxJournalOps));
-    for (const auto& op : ops) {
-        if (kept.size() >= CanvasController::kMaxJournalOps) break;
-        const canvas::RectI r = canvas::RectI{op.x, op.y, op.w, op.h}.intersect(
-            {0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)});
-        if (!r.empty()) kept.push_back({r.x, r.y, r.w, r.h, op.argb});
-    }
-    std::lock_guard<std::mutex> lock(contentMutex_);
-    contentOps_ = kept;
-    contentRevision_++;
-    queue_.post([this, kept = std::move(kept)] {
-        canvas_.clearContent();
-        for (const auto& op : kept) canvas_.fill({op.x, op.y, op.w, op.h}, op.argb);
-        PE_LOGI(kTag, "Canvas content loaded: %zu operations", kept.size());
+    const size_t kept = doc_.loadLegacy(ops);
+    PE_LOGI(kTag, "Legacy canvas content loaded: %zu of %zu operations", kept, ops.size());
+    queue_.post([this] {
         scheduler_.requestFrame();
         publishStatus(true);
     });
-    return contentOps_.size();
+    return kept;
+}
+
+void Engine::strokeBegin(const brush::BrushSettings& settings, double screenX, double screenY, double t) {
+    canvas::Vec2 c;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        if (!view_.valid()) return;
+        c = view_.toCanvas({screenX, screenY});
+    }
+    doc_.strokeBegin(settings, {c.x, c.y, t});
+    queue_.wake();
+}
+
+void Engine::strokeSamples(const float* xyt, size_t count) {
+    if (!xyt || count == 0) return;
+    // Converted in chunks on the stack: no allocation per touch event.
+    brush::StrokePoint chunk[64];
+    size_t done = 0;
+    while (done < count) {
+        const size_t n = std::min<size_t>(64, count - done);
+        {
+            std::lock_guard<std::mutex> lock(viewMutex_);
+            if (!view_.valid()) return;
+            for (size_t i = 0; i < n; ++i) {
+                const float* p = xyt + (done + i) * 3;
+                const canvas::Vec2 c = view_.toCanvas({p[0], p[1]});
+                chunk[i] = {c.x, c.y, p[2]};
+            }
+        }
+        doc_.strokeSamples(chunk, n);
+        done += n;
+    }
+    queue_.wake();
+}
+
+void Engine::strokeEnd() {
+    doc_.strokeEnd();
+    queue_.wake();
+}
+
+void Engine::strokeCancel() {
+    doc_.strokeCancel();
+    queue_.wake();
+}
+
+size_t Engine::exportCanvasTiles(bool changedOnly, size_t maxTiles, std::vector<uint8_t>& out) {
+    return doc_.exportTiles(changedOnly, maxTiles, out);
+}
+
+long Engine::importCanvasTiles(const uint8_t* data, size_t size) {
+    const long n = doc_.importTiles(data, size);
+    queue_.wake();
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return n;
+}
+
+bool Engine::captureFrame(gfx::CaptureResult& out, std::chrono::milliseconds timeout) {
+    uint64_t serial;
+    {
+        std::lock_guard<std::mutex> lock(debugCaptureMutex_);
+        serial = debugCaptureSerial_;
+    }
+    if (!queue_.post([this] {
+            debugCaptureRequested_ = true;
+            scheduler_.requestFrame();
+        }))
+        return false;
+    std::unique_lock<std::mutex> lock(debugCaptureMutex_);
+    if (!debugCaptureCv_.wait_for(lock, timeout, [&] { return debugCaptureSerial_ != serial; })) return false;
+    if (!debugCaptureOk_) return false;
+    out = debugCapture_;
+    return true;
+}
+
+bool Engine::canvasThumbnail(uint32_t maxSide, uint32_t& width, uint32_t& height, std::vector<uint32_t>& argb) {
+    return doc_.thumbnail(maxSide, width, height, argb);
 }
 
 void Engine::runCanvasSelfTest() {
@@ -526,7 +553,7 @@ void Engine::teardown() {
 bool Engine::canRender() const {
     return selection_ && surfaceAttached_ && !surfaceRevoked_.load() && !paused_ && !renderingDisabled_ &&
            (scheduler_.wantsFrame() || selection_.device->needsFrame() ||
-            (sceneMode_ == SceneMode::Canvas && canvas_.selfTestActive()));
+            (sceneMode_ == SceneMode::Canvas && (canvas_.selfTestActive() || doc_.hasPendingInput())));
 }
 
 void Engine::detachAndReleaseWindow() {
@@ -571,6 +598,7 @@ void Engine::releaseSurfaceForUi() {
 
 void Engine::onRenderThreadException(const char* what) {
     consecutiveExceptions_++;
+    canvas_.invalidateGpuContent();  // an abandoned frame may have lost recorded uploads
     PE_LOGE(kTag, "Render thread exception #%u: %s", consecutiveExceptions_, what);
     if (consecutiveExceptions_ >= kMaxConsecutiveExceptions) {
         PE_LOGE(kTag, "Too many consecutive exceptions: graphics disabled for this session");
@@ -708,7 +736,17 @@ void Engine::renderFrame() {
             view = view_;
         }
         sceneOk = canvas_.render(device, *frame.context, *frame.backbuffer, view);
-        if (canvas_.selfTestWantsCapture() && !canvasCaptureInFlight_) {
+        if (debugCaptureRequested_ && !canvas_.selfTestActive() && !canvasCaptureInFlight_) {
+            debugCaptureRequested_ = false;
+            debugCaptureInFlight_ = device.requestCapture();
+            if (!debugCaptureInFlight_) {
+                std::lock_guard<std::mutex> lock(debugCaptureMutex_);
+                debugCaptureOk_ = false;
+                debugCaptureSerial_++;
+                debugCaptureCv_.notify_all();
+            }
+        }
+        if (canvas_.selfTestWantsCapture() && !canvasCaptureInFlight_ && !debugCaptureInFlight_) {
             if (device.requestCapture())
                 canvasCaptureInFlight_ = true;
             else
@@ -756,6 +794,13 @@ void Engine::renderFrame() {
         state_ = sceneOk ? "Running"
                          : sceneMode_ == SceneMode::Canvas ? "Error: canvas pipeline creation failed"
                                                            : "Error: test scene creation failed";
+        if (debugCaptureInFlight_) {
+            debugCaptureInFlight_ = false;
+            std::lock_guard<std::mutex> lock(debugCaptureMutex_);
+            debugCaptureOk_ = device.takeCapture(debugCapture_);
+            debugCaptureSerial_++;
+            debugCaptureCv_.notify_all();
+        }
         if (canvasCaptureInFlight_) {
             canvasCaptureInFlight_ = false;
             gfx::CaptureResult capture;
@@ -784,6 +829,13 @@ void Engine::renderFrame() {
         logPerfIfDue();
     } else {
         selfTestCaptureInFlight_ = false;
+        if (debugCaptureInFlight_) {
+            debugCaptureInFlight_ = false;
+            debugCaptureRequested_ = true;  // try again on the next frame
+        }
+        // The frame's uploads may not have executed: rebuild the GPU copy.
+        if (status == gfx::FrameStatus::Error || status == gfx::FrameStatus::DeviceLost)
+            canvas_.invalidateGpuContent();
         if (canvasCaptureInFlight_) {
             canvasCaptureInFlight_ = false;
             canvas_.retrySelfTestStep();  // frame not presented: render this step again

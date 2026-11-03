@@ -43,8 +43,6 @@ void CanvasController::open(const CanvasSpec& spec) {
     surface_.destroy();
     open_ = true;
     spec_ = spec;
-    journal_.clear();
-    pending_.clear();
     gpuFailed_ = false;
     error_.clear();
     storageText_.clear();
@@ -59,8 +57,6 @@ void CanvasController::close() {
     if (!open_) return;
     surface_.destroy();
     open_ = false;
-    journal_.clear();
-    pending_.clear();
     error_.clear();
     storageText_.clear();
     frame_ = {};
@@ -85,32 +81,6 @@ canvas::RectI CanvasController::stampRect(double cx, double cy, uint32_t size, u
         .intersect(canvasRect);
 }
 
-bool CanvasController::stamp(double cx, double cy, uint32_t size, uint32_t argb) {
-    if (!open_) return false;
-    return fill(stampRect(cx, cy, size, spec_.width, spec_.height), argb);
-}
-
-bool CanvasController::fill(const canvas::RectI& rect, uint32_t argb) {
-    if (!open_) return false;
-    const canvas::RectI r =
-        rect.intersect({0, 0, static_cast<int32_t>(spec_.width), static_cast<int32_t>(spec_.height)});
-    if (r.empty()) return false;
-    if (journal_.size() >= kMaxJournalOps) {
-        PE_LOGW(kTag, "Content journal full (%zu operations): stamp ignored", journal_.size());
-        return false;
-    }
-    const FillOp op{r, canvas::Rgba8::fromArgb(argb)};
-    journal_.push_back(op);
-    pending_.push_back(op);
-    return true;
-}
-
-void CanvasController::clearContent() {
-    journal_.clear();
-    pending_.clear();
-    surface_.destroy();  // recreated empty (and with no texture allocated) at the next frame
-}
-
 void CanvasController::releaseGpu() {
     if (testStep_ >= 0) abortSelfTest("graphics device released");
     surface_.destroy();
@@ -122,12 +92,22 @@ void CanvasController::releaseGpu() {
 
 bool CanvasController::ensureGpu(gfx::GraphicsDevice& device, gfx::TextureFormat format) {
     if (!renderer_.isReadyFor(format) && !renderer_.create(device, format)) return false;
+    // A replaced/cleared document invalidates the GPU copy.
+    const uint64_t gen = doc_.generation();
+    if (gen != surfaceGen_) {
+        surface_.destroy();
+        surfaceGen_ = gen;
+        gpuFailed_ = false;
+        error_.clear();
+    }
     if (!open_ || surface_.valid() || gpuFailed_) return true;
+    uint32_t w = 0, h = 0;
+    if (!doc_.size(gen, w, h)) return true;  // replaced meanwhile: next frame
 
     const canvas::StoragePlan plan =
-        canvas::StoragePolicy::choose(spec_.width, spec_.height, limitsFor(device.capabilities(), budgetOverride_));
+        canvas::StoragePolicy::choose(w, h, limitsFor(device.capabilities(), budgetOverride_));
     storageText_ = plan.reason;
-    if (!plan.ok || !surface_.create(device, spec_.width, spec_.height, plan, "canvas")) {
+    if (!plan.ok || !surface_.create(device, w, h, plan, "canvas")) {
         gpuFailed_ = true;
         error_ = plan.ok ? "GPU storage allocation failed" : "canvas not supported on this device: " + plan.reason;
         // A refused size is a user-facing outcome, not an engine failure.
@@ -138,15 +118,7 @@ bool CanvasController::ensureGpu(gfx::GraphicsDevice& device, gfx::TextureFormat
         return true;  // the frame still renders (workspace + paper)
     }
     error_.clear();
-    if (!journal_.empty()) {
-        // New device / backend: rebuild the content from the journal.
-        const int64_t t0 = nowNs();
-        for (const auto& op : journal_) surface_.fill(op.rect, op.color);
-        restores_++;
-        PE_LOGI(kTag, "Canvas content restored from %zu journal operations in %.1f ms", journal_.size(),
-                static_cast<double>(nowNs() - t0) / 1e6);
-    }
-    pending_.clear();
+    needFullUpload_ = true;  // every allocated tile of the store goes up at once
     return true;
 }
 
@@ -160,11 +132,27 @@ bool CanvasController::render(gfx::GraphicsDevice& device, gfx::RenderingContext
         ctx.endRenderPass();
         return false;
     }
-    // Uploads happen before the render pass is recorded.
-    if (surface_.valid()) {
-        for (const auto& op : pending_) surface_.fill(op.rect, op.color);
-    }
-    pending_.clear();
+    // Queued stroke input is applied to the CPU store now (latest samples,
+    // after the frame's GPU wait), then the changed regions are uploaded -
+    // before the render pass is recorded.
+    const bool haveSurface = surface_.valid();
+    const bool current = doc_.syncGpu(surfaceGen_, [&](canvas::RasterStore& store) {
+        if (!haveSurface) return;  // keep the dirty regions for when storage exists
+        dirty_.clear();
+        if (needFullUpload_) {
+            store.markAllGpuDirty();
+            store.takeGpuDirty(dirty_);
+            if (!dirty_.empty()) {
+                restores_++;
+                PE_LOGI(kTag, "Canvas GPU copy rebuilt from %zu store tiles", dirty_.size());
+            }
+            needFullUpload_ = false;
+        } else {
+            store.takeGpuDirty(dirty_);
+        }
+        if (!dirty_.empty() && !surface_.upload(store, dirty_)) needFullUpload_ = true;
+    });
+    if (!current && haveSurface) surface_.destroy();  // document replaced: rebuilt next frame
 
     if (testStep_ >= 0) {
         using canvas::CanvasSelfTest;
@@ -295,8 +283,20 @@ void CanvasController::fillStatus(CanvasStatus& c) const {
     c.bytesUploaded = s.bytesUploaded;
     c.lastWriteMs = s.lastWriteMs;
     c.maxWriteMs = s.maxWriteMs;
-    c.journalOps = journal_.size();
     c.restores = restores_;
+    const DocumentStats d = doc_.stats();
+    c.rasterTiles = d.tilesAllocated;
+    c.rasterBytes = d.bytesAllocated;
+    c.revision = d.revision;
+    c.brushStrokes = d.brush.strokesCommitted;
+    c.brushCancelled = d.brush.strokesCancelled;
+    c.brushSamplesReceived = d.brush.samplesReceived;
+    c.brushSamplesProcessed = d.brush.samplesProcessed;
+    c.brushDabs = d.brush.dabs;
+    c.brushPending = d.brush.pendingEvents;
+    c.brushStrokeTiles = d.brush.strokeTiles;
+    c.brushLastMs = d.brush.lastProcessMs;
+    c.brushMaxMs = d.brush.maxProcessMs;
     c.tilesVisible = frame_.tilesVisible;
     c.piecesDrawn = frame_.piecesDrawn;
     c.drawCalls = frame_.drawCalls;

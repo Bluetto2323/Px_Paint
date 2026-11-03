@@ -31,8 +31,14 @@ struct CanvasStatus {
     uint64_t bytesAllocated = 0;
     uint64_t writes = 0, textureUploads = 0, bytesUploaded = 0;
     double lastWriteMs = 0.0, maxWriteMs = 0.0;
-    uint64_t journalOps = 0;           // replayable content operations (device recovery)
-    uint32_t restores = 0;             // GPU storage rebuilt from the journal
+    uint32_t restores = 0;             // GPU copy rebuilt from the CPU raster (new device / backend)
+    // CPU raster (authoritative content) and brush engine
+    uint64_t rasterTiles = 0, rasterBytes = 0;
+    uint64_t revision = 0;             // content revision (changes on every edit)
+    uint64_t brushStrokes = 0, brushCancelled = 0;
+    uint64_t brushSamplesReceived = 0, brushSamplesProcessed = 0, brushDabs = 0;
+    uint32_t brushPending = 0, brushStrokeTiles = 0;
+    double brushLastMs = 0.0, brushMaxMs = 0.0;
     // Last canvas frame
     uint32_t tilesVisible = 0, piecesDrawn = 0, drawCalls = 0;
     double zoom = 0.0, rotationDeg = 0.0;
