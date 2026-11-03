@@ -753,7 +753,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         // Never taller than the space between the top bar and the dock.
         val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 8 else 16)
         val reserved = ins.top + barH + theme.dp(24) + (if (s.dock == DockPlacement.BOTTOM) lp.bottomMargin else ins.bottom + theme.dp(16))
-        val capped = MaxHeight(context, (c.height - reserved).coerceAtLeast(theme.dp(240))).apply { addView(scroll) }
+        val available = if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()
+        val capped = MaxHeight(context, (available - reserved).coerceAtLeast(theme.dp(240))).apply { addView(scroll) }
         if (s.dock != DockPlacement.BOTTOM) lp.topMargin = ins.top + barH + theme.dp(12)
         panelView = capped
         c.addView(capped, lp)

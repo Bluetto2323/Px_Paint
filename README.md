@@ -1,4 +1,4 @@
-# PxPaint — Blocco 4 (stilo e pressione) sul motore Paint Engine
+# PxPaint — Blocco 5 (libreria pennelli) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -27,6 +27,14 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   palmo; modalità del dito (disegna / sposta / solo gesti); schermata
   *Stilo e pressione* con editor della curva e area di prova. Il dito
   disegna esattamente come nel Blocco 3. Dettagli: `docs/BLOCK4_REPORT.md`.
+* **Blocco 5**: **libreria pennelli**. 12 preset definiti come dati
+  (`assets/brushes/builtin.pxb`), resi dallo stesso motore con un modello
+  esteso: durezza, rotondità/angolo, punte procedurali (gesso, carboncino,
+  setole), grana della carta legata alla tela, variazioni casuali
+  deterministiche, accumulo, bordo bagnato. Libreria con categorie,
+  preferiti, recenti, ricerca, dimensione/opacità rapide; duplica, rinomina,
+  elimina, ripristina; editor con anteprime disegnate dal motore e area di
+  prova. Dettagli: `docs/BRUSHES.md`, `docs/BLOCK5_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).
