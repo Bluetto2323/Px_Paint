@@ -40,6 +40,7 @@ shot() {
 
 start --es pxpaint.demo workspace
 shot 01-workspace-brush-panel
+adb shell uiautomator dump /sdcard/ui01.xml > /dev/null 2>&1 && adb pull /sdcard/ui01.xml "$OUT/01-layout.xml" > /dev/null 2>&1 || true
 start --es pxpaint.demo library
 shot 02-library-all
 adb shell input swipe 540 1700 540 1000 600; sleep 2
