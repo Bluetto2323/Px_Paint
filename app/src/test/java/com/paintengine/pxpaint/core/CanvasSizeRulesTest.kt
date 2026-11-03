@@ -39,10 +39,11 @@ class CanvasSizeRulesTest {
 
     @Test
     fun bytesMatchTheEngineStoragePolicy() {
-        // Same numbers as pe_canvas_test ("4096x4096 worst case = 256 tiles x 258^2 x 4 B").
+        // Same numbers as pe_canvas_test: GPU copy (258^2 textures) + CPU raster (256^2 tiles).
         val e = CanvasSizeRules.estimate(4096, 4096, big, 0)
-        assertEquals(16L * 16 * 258 * 258 * 4, e.maxBytes)
-        assertEquals(1024L * 1024 * 4, CanvasSizeRules.estimate(1024, 1024, big, 0).maxBytes)
+        assertEquals(16L * 16 * 258 * 258 * 4 + 16L * 16 * 256 * 256 * 4, e.maxBytes)
+        assertEquals(1024L * 1024 * 4 * 2, CanvasSizeRules.estimate(1024, 1024, big, 0).maxBytes)
+        assertEquals(1000L * 600 * 4 + 4L * 3 * 256 * 256 * 4, CanvasSizeRules.estimate(1000, 600, big, 0).maxBytes)
     }
 
     @Test

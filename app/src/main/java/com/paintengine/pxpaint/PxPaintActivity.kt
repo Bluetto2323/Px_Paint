@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import com.paintengine.app.DiagnosticsActivity
 import com.paintengine.engine.NativeEngine
 import com.paintengine.pxpaint.core.AppSettings
+import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.CanvasSizeRules
 import com.paintengine.pxpaint.core.LanguagePref
 import com.paintengine.pxpaint.core.ProjectStore
@@ -55,6 +56,8 @@ class PxPaintActivity : Activity(), PxHost {
         private set
     override var settings: AppSettings = AppSettings()
         private set
+    override var brush: BrushState = BrushState()
+        private set
     override lateinit var overlays: OverlayHost
         private set
     override val insets = Rect()
@@ -87,6 +90,7 @@ class PxPaintActivity : Activity(), PxHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = SettingsStore.load(this)
+        brush = SettingsStore.loadBrush(this)
         store = ProjectStore(File(filesDir, "projects"))
         readConfiguration(resources.configuration)
         theme = makeTheme()
@@ -125,14 +129,15 @@ class PxPaintActivity : Activity(), PxHost {
     }
 
     override fun onDestroy() {
-        // Screens close their canvas (and save) first, then the engine goes.
+        // Screens close their canvas (queueing the last save) first; the disk
+        // work finishes (it reads the engine) before the engine goes.
         for (s in stack.asReversed()) runCatching { s.onRemoved() }
         stack.clear()
         views.clear()
+        io.shutdown()
+        runCatching { io.awaitTermination(10, TimeUnit.SECONDS) }
         engine?.close()
         engine = null
-        io.shutdown()
-        runCatching { io.awaitTermination(3, TimeUnit.SECONDS) }
         super.onDestroy()
     }
 
@@ -258,6 +263,12 @@ class PxPaintActivity : Activity(), PxHost {
         return PxTheme(this, effective)
     }
 
+    override fun updateBrush(state: BrushState) {
+        if (state == brush) return
+        brush = state
+        SettingsStore.saveBrush(this, state)
+    }
+
     override fun tipsShown(id: String): Boolean = tipPrefs().getBoolean(id, false)
     override fun markTipShown(id: String) { tipPrefs().edit().putBoolean(id, true).apply() }
     override fun resetTips() { tipPrefs().edit().clear().apply() }
@@ -375,6 +386,19 @@ object SettingsStore {
     fun load(context: Context): AppSettings {
         val all = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).all
         return AppSettings.decode(all.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap())
+    }
+
+    private const val BRUSH_PREFS = "pxpaint.brush"
+
+    fun loadBrush(context: Context): BrushState {
+        val all = context.getSharedPreferences(BRUSH_PREFS, Context.MODE_PRIVATE).all
+        return BrushState.decode(all.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap())
+    }
+
+    fun saveBrush(context: Context, state: BrushState) {
+        val e = context.getSharedPreferences(BRUSH_PREFS, Context.MODE_PRIVATE).edit()
+        for ((k, v) in state.encode()) e.putString(k, v)
+        e.apply()
     }
 
     fun save(context: Context, settings: AppSettings) {

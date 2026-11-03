@@ -42,7 +42,7 @@ object CanvasSizeRules {
         val tiled: Boolean,
         val tileColumns: Int,
         val tileRows: Int,
-        /** Worst case GPU bytes (every tile allocated) incl. gutters. */
+        /** Worst case bytes (every tile painted): GPU copy incl. gutters + CPU raster. */
         val maxBytes: Long,
         /** Pixels of the canvas itself (w*h*4). */
         val canvasBytes: Long,
@@ -61,9 +61,14 @@ object CanvasSizeRules {
         if (sideError != null) return Estimate(false, false, 0, 0, 0, maxOf(0, canvasBytes), sideError)
         val singleMax = minOf(maxTextureSize, SINGLE_TEXTURE_MAX_SIDE)
         val tiled = width > singleMax || height > singleMax
-        val cols = if (tiled) (width + TILE_SIZE - 1) / TILE_SIZE else 1
-        val rows = if (tiled) (height + TILE_SIZE - 1) / TILE_SIZE else 1
-        val maxBytes = if (tiled) cols.toLong() * rows * TILE_TEXTURE * TILE_TEXTURE * 4L else canvasBytes
+        val gridCols = (width + TILE_SIZE - 1) / TILE_SIZE
+        val gridRows = (height + TILE_SIZE - 1) / TILE_SIZE
+        val cols = if (tiled) gridCols else 1
+        val rows = if (tiled) gridRows else 1
+        val gpuBytes = if (tiled) cols.toLong() * rows * TILE_TEXTURE * TILE_TEXTURE * 4L else canvasBytes
+        // CPU raster (authoritative pixels): whole 256 px tiles, both strategies.
+        val cpuBytes = gridCols.toLong() * gridRows * TILE_SIZE * TILE_SIZE * 4L
+        val maxBytes = gpuBytes + cpuBytes
         val overBudget = memoryBudgetBytes in 1 until maxBytes
         return Estimate(!overBudget, tiled, cols, rows, maxBytes, canvasBytes, if (overBudget) SizeError.OVER_BUDGET else null)
     }

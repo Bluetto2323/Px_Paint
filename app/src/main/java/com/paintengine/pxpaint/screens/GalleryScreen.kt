@@ -286,8 +286,9 @@ class GalleryScreen(host: PxHost) : Screen(host) {
             val bmp = runCatching {
                 Thumbnails.load(host.store.thumbnailFile(p.id), p) ?: run {
                     // No thumbnail yet (e.g. created by a previous version): render it once.
-                    val ops = host.store.loadContent(p.id)
-                    Thumbnails.render(p, ops).also { host.store.saveThumbnail(p.id, Thumbnails.png(it)) }
+                    val tiles = host.store.loadTiles(p.id)
+                    val bmp = if (tiles != null) Thumbnails.fromTiles(p, tiles) else Thumbnails.render(p, host.store.loadContent(p.id))
+                    bmp.also { host.store.saveThumbnail(p.id, Thumbnails.png(it)) }
                 }
             }.getOrNull()
             host.runOnMain { if (image.isAttachedToWindow && bmp != null) apply(bmp) }

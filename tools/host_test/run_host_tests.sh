@@ -51,7 +51,9 @@ run() { local name=$1 icd=$2; shift 2
   else echo "FAIL  $name  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$name.log"); see $BUILD/$name.log)"; fail=1
     # Make failures readable from the CI job log itself.
     grep -E "\[FAIL\]|state=|attempt |E/" "$BUILD/$name.log" | head -25 | sed 's/^/      | /'
-  fi; }
+  fi
+  # Measurements (brush / canvas suites) straight into the job log.
+  case "$name" in brush_*|canvas_*) grep -E "^    " "$BUILD/$name.log" | grep -vE "^    \[" | head -14 | sed 's/^/      /' || true;; esac; }
 # backend selection / fallback matrix
 run basic_gles             "$ICD"               gles   gles   --suite basic
 run basic_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite basic
@@ -69,4 +71,7 @@ run faults_auto_fallback   "$ICD"               auto   vulkan --suite faults
 # PxPaint canvas engine (GPU canvas, tiles, viewport, self-test) on both backends
 run canvas_gles            "$ICD"               gles   gles   --suite canvas
 run canvas_vulkan          "$ICD"               vulkan vulkan --no-fallback --suite canvas
+# PxPaint brush engine end to end (screen samples -> raster -> uploads -> display)
+run brush_gles             "$ICD"               gles   gles   --suite brush
+run brush_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite brush
 exit $fail

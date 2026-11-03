@@ -5,7 +5,7 @@ import java.io.IOException
 import java.util.Properties
 import java.util.UUID
 
-/** Metadata of one project (one canvas in Block 2). */
+/** Metadata of one project (one canvas). `opCount`: stored content items (tiles since Block 3). */
 data class ProjectMeta(
     val id: String,
     val name: String,
@@ -24,7 +24,9 @@ data class ProjectMeta(
  * File-based project repository. Pure java.io (unit-tested on the JVM):
  *
  *   <root>/<id>/project.properties   metadata
- *   <root>/<id>/content.pxops        canvas content (ContentLog)
+ *   <root>/<id>/content.pxtiles      canvas pixels (TileContent, Block 3+)
+ *   <root>/<id>/content.pxops        legacy Block 2 content (ContentLog), read
+ *                                    only when no .pxtiles exists yet
  *   <root>/<id>/thumb.png            thumbnail (written by the UI layer)
  *
  * Every write goes to a temporary file first and is then renamed, so a crash
@@ -62,7 +64,7 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
         val dir = dirOf(meta.id)
         if (!dir.mkdirs()) throw StoreException("cannot create project directory")
         writeMeta(meta)
-        writeAtomically(contentFile(meta.id), ContentLog.encode(IntArray(0)))
+        writeAtomically(tilesFile(meta.id), TileContent(width, height).encode())
         return meta
     }
 
@@ -85,6 +87,7 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
         val dir = dirOf(copy.id)
         if (!dir.mkdirs()) throw StoreException("cannot create project directory")
         contentFile(id).takeIf { it.isFile }?.let { writeAtomically(contentFile(copy.id), it.readBytes()) }
+        tilesFile(id).takeIf { it.isFile }?.let { writeAtomically(tilesFile(copy.id), it.readBytes()) }
         thumbnailFile(id).takeIf { it.isFile }?.let { writeAtomically(thumbnailFile(copy.id), it.readBytes()) }
         writeMeta(copy)
         return copy
@@ -114,6 +117,34 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
         return updated
     }
 
+    /** Pixel content, or null for a legacy project that has none yet (use [loadContent]). */
+    fun loadTiles(id: String): TileContent? {
+        val meta = require(id)
+        val f = tilesFile(id)
+        if (!f.isFile) return null
+        val content = try {
+            TileContent.decode(f.readBytes())
+        } catch (e: IOException) {
+            throw StoreException("content of '$id' is damaged: ${e.message}", e)
+        }
+        if (content.width != meta.width || content.height != meta.height) {
+            throw StoreException("content of '$id' is ${content.width}x${content.height}, project is ${meta.width}x${meta.height}")
+        }
+        return content
+    }
+
+    /** Writes the pixel content atomically. The legacy file, if any, is kept but no longer read. */
+    fun saveTiles(id: String, content: TileContent): ProjectMeta {
+        val meta = require(id)
+        if (content.width != meta.width || content.height != meta.height) throw StoreException("content size mismatch")
+        writeAtomically(tilesFile(id), content.encode())
+        val updated = meta.copy(modifiedMs = clock(), opCount = content.tileCount)
+        writeMeta(updated)
+        return updated
+    }
+
+    fun hasTiles(id: String): Boolean = tilesFile(id).isFile
+
     fun updateAppearance(id: String, paperArgb: Int, transparentBackground: Boolean): ProjectMeta {
         val updated = require(id).copy(paperArgb = paperArgb, transparentBackground = transparentBackground, modifiedMs = clock())
         writeMeta(updated)
@@ -139,6 +170,7 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
     }
 
     private fun contentFile(id: String) = File(dirOf(id), "content.pxops")
+    private fun tilesFile(id: String) = File(dirOf(id), "content.pxtiles")
     private fun metaFile(id: String) = File(dirOf(id), "project.properties")
 
     private fun newId(): String = UUID.randomUUID().toString().replace("-", "").substring(0, 16)

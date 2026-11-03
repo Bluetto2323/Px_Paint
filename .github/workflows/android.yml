@@ -114,7 +114,7 @@ jobs:
         id: name
         run: |
           short="${GITHUB_SHA::7}"
-          out="PxPaint-block2-debug-${short}.apk"
+          out="PxPaint-block3-debug-${short}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
           echo "artifact=PxPaint-debug-apk-${short}" >> "$GITHUB_OUTPUT"
@@ -175,7 +175,7 @@ jobs:
             libegl-mesa0 libgles2 mesa-vulkan-drivers > /dev/null
           ls /usr/share/vulkan/icd.d/
 
-      - name: Run basic / lifecycle / faults suites
+      - name: Run CPU suites + basic / lifecycle / faults / canvas / brush suites
         env:
           BUILD: ${{ github.workspace }}/build-host
         run: |

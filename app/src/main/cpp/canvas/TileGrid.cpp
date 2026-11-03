@@ -59,16 +59,20 @@ StoragePlan StoragePolicy::choose(uint32_t width, uint32_t height, const Storage
         return plan;
     }
     const uint32_t singleMax = std::min(limits.maxTextureSize, kSingleTextureMaxSide);
+    const TileGrid grid(width, height, kTileSize);
+    // The CPU raster (authoritative pixels, see RasterStore) uses whole
+    // 256 px tiles whatever the GPU strategy.
+    plan.maxCpuBytes = static_cast<uint64_t>(grid.tileCount()) * kTileSize * kTileSize * 4u;
     if (width <= singleMax && height <= singleMax && !limits.forceTiled) {
         plan.mode = StorageMode::SingleTexture;
-        plan.maxAllocatedBytes = plan.fullCanvasBytes;
+        plan.maxGpuBytes = plan.fullCanvasBytes;
     } else {
         plan.mode = StorageMode::Tiled;
         plan.tileSize = kTileSize;
-        const TileGrid grid(width, height, kTileSize);
         const uint64_t tex = grid.textureSize();
-        plan.maxAllocatedBytes = static_cast<uint64_t>(grid.tileCount()) * tex * tex * 4u;
+        plan.maxGpuBytes = static_cast<uint64_t>(grid.tileCount()) * tex * tex * 4u;
     }
+    plan.maxAllocatedBytes = plan.maxGpuBytes + plan.maxCpuBytes;
     if (limits.memoryBudgetBytes > 0 && plan.maxAllocatedBytes > limits.memoryBudgetBytes) {
         plan.reason = "needs up to " + std::to_string(plan.maxAllocatedBytes >> 20) + " MiB, budget " +
                       std::to_string(limits.memoryBudgetBytes >> 20) + " MiB";

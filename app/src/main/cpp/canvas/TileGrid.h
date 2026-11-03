@@ -74,7 +74,9 @@ struct StoragePlan {
     StorageMode mode = StorageMode::SingleTexture;
     uint32_t tileSize = 0;              // tiled mode
     uint64_t fullCanvasBytes = 0;       // if every pixel were allocated
-    uint64_t maxAllocatedBytes = 0;     // worst case incl. tile gutters
+    uint64_t maxAllocatedBytes = 0;     // worst case: GPU copy (incl. gutters) + CPU raster
+    uint64_t maxGpuBytes = 0;           // GPU copy alone
+    uint64_t maxCpuBytes = 0;           // CPU raster (RasterStore, always 256 px tiles)
     std::string reason;
 };
 

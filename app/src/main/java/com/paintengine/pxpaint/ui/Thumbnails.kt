@@ -9,6 +9,9 @@ import android.graphics.PorterDuffXfermode
 import android.util.LruCache
 import com.paintengine.pxpaint.core.ContentLog
 import com.paintengine.pxpaint.core.ProjectMeta
+import com.paintengine.pxpaint.core.TileContent
+import android.graphics.Rect
+import java.nio.ByteBuffer
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.max
@@ -39,7 +42,61 @@ object Thumbnails {
         return bmp
     }
 
-    /** Renders the content layer only (transparent where nothing was painted). */
+    /**
+     * From the engine's preview (NativeEngine.canvasThumbnail: straight ARGB
+     * [w, h, pixels...]) over the paper / checkerboard.
+     */
+    fun fromEngine(meta: ProjectMeta, preview: IntArray?): Bitmap {
+        val (w, h, bmp, canvas) = base(meta)
+        if (preview != null && preview.size >= 2) {
+            val pw = preview[0]
+            val ph = preview[1]
+            if (pw > 0 && ph > 0 && preview.size >= 2 + pw * ph) {
+                val content = Bitmap.createBitmap(preview, 2, pw, pw, ph, Bitmap.Config.ARGB_8888)
+                canvas.drawBitmap(content, null, Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
+                content.recycle()
+            }
+        }
+        cache.put("${meta.id}@${meta.modifiedMs}", bmp)
+        return bmp
+    }
+
+    /** From stored tiles (gallery, when a project has no thumbnail file). */
+    fun fromTiles(meta: ProjectMeta, tiles: TileContent): Bitmap {
+        val (w, h, bmp, canvas) = base(meta)
+        val sx = w.toFloat() / meta.width
+        val sy = h.toFloat() / meta.height
+        val tile = Bitmap.createBitmap(TileContent.TILE, TileContent.TILE, Bitmap.Config.ARGB_8888)
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        val dst = android.graphics.RectF()
+        for (ty in 0 until tiles.rows) for (tx in 0 until tiles.columns) {
+            // ARGB_8888 bitmaps hold premultiplied RGBA bytes: the store's layout.
+            val px = tiles.tilePixels(tx, ty) ?: continue
+            tile.copyPixelsFromBuffer(ByteBuffer.wrap(px))
+            val x0 = tx * TileContent.TILE
+            val y0 = ty * TileContent.TILE
+            dst.set(x0 * sx, y0 * sy, (x0 + TileContent.TILE) * sx, (y0 + TileContent.TILE) * sy)
+            canvas.drawBitmap(tile, null, dst, paint)
+        }
+        tile.recycle()
+        cache.put("${meta.id}@${meta.modifiedMs}", bmp)
+        return bmp
+    }
+
+    private data class Base(val w: Int, val h: Int, val bmp: Bitmap, val canvas: Canvas)
+
+    private fun base(meta: ProjectMeta): Base {
+        val s = MAX_SIDE.toFloat() / max(meta.width, meta.height)
+        val scale = minOf(1f, s)
+        val w = max(1, (meta.width * scale).roundToInt())
+        val h = max(1, (meta.height * scale).roundToInt())
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        if (meta.transparentBackground) drawChecker(canvas, w, h) else canvas.drawColor(meta.paperArgb or 0xFF000000.toInt())
+        return Base(w, h, bmp, canvas)
+    }
+
+    /** Legacy (Block 2) content: rectangle ops over the paper. */
     fun render(meta: ProjectMeta, ops: IntArray): Bitmap {
         val s = MAX_SIDE.toFloat() / max(meta.width, meta.height)
         val scale = minOf(1f, s)

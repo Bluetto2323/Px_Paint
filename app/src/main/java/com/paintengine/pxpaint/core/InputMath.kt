@@ -10,45 +10,68 @@ import kotlin.math.roundToLong
 data class P(val x: Double, val y: Double)
 
 /**
- * Evenly spaced dabs along a drag: the distance left over from one segment
- * carries into the next, so the spacing is constant whatever the touch
- * event rate.
+ * Reusable buffer of stroke samples (x, y, tMs triples) handed to the
+ * engine once per touch event: all historical samples of the MotionEvent in
+ * chronological order, then the current one. It grows by doubling and is
+ * reused, so the per-event path does not allocate once warmed up.
  */
-class StrokeSampler(spacing: Double) {
-    var spacing: Double = spacing.coerceAtLeast(0.5)
-        set(value) {
-            field = value.coerceAtLeast(0.5)
-        }
-    private var last: P? = null
-    private var carry = 0.0
+class SampleBuffer(initialCapacity: Int = 64) {
+    var data = FloatArray(maxOf(1, initialCapacity) * 3)
+        private set
+    var count = 0
+        private set
 
-    fun begin(p: P): List<P> {
-        last = p
-        carry = 0.0
-        return listOf(p)
+    fun clear() {
+        count = 0
     }
 
-    fun moveTo(p: P): List<P> {
-        val from = last ?: return begin(p)
-        val dx = p.x - from.x
-        val dy = p.y - from.y
-        val len = hypot(dx, dy)
-        if (len == 0.0) return emptyList()
-        val out = ArrayList<P>()
-        var d = spacing - carry
-        while (d <= len) {
-            val t = d / len
-            out += P(from.x + dx * t, from.y + dy * t)
-            d += spacing
-        }
-        carry = len - (d - spacing)
-        last = p
-        return out
+    fun add(x: Float, y: Float, tMs: Float) {
+        if ((count + 1) * 3 > data.size) data = data.copyOf(data.size * 2)
+        val i = count * 3
+        data[i] = x
+        data[i + 1] = y
+        data[i + 2] = tMs
+        count++
+    }
+}
+
+/**
+ * Painting starts the moment a finger lands (no input delay). If a second
+ * finger joins shortly after, the touch was the start of a pinch, not a
+ * stroke: [onSecondPointer] then says CANCEL (the engine restores the canvas
+ * exactly). A stroke that has clearly been drawn is kept (COMMIT) and the
+ * gesture takes over from there.
+ */
+class StrokeGate(private val cancelWindowMs: Long = 250, private val slopPx: Double = 24.0) {
+    enum class Decision { CANCEL, COMMIT }
+
+    private var downTime = 0L
+    private var startX = 0.0
+    private var startY = 0.0
+    private var travelled = 0.0
+    var active = false
+        private set
+
+    fun down(timeMs: Long, p: P) {
+        active = true
+        downTime = timeMs
+        startX = p.x
+        startY = p.y
+        travelled = 0.0
+    }
+
+    fun move(p: P) {
+        if (active) travelled = maxOf(travelled, hypot(p.x - startX, p.y - startY))
+    }
+
+    fun onSecondPointer(timeMs: Long): Decision {
+        val decision = if (timeMs - downTime <= cancelWindowMs || travelled <= slopPx) Decision.CANCEL else Decision.COMMIT
+        active = false
+        return decision
     }
 
     fun end() {
-        last = null
-        carry = 0.0
+        active = false
     }
 }
 
@@ -89,71 +112,5 @@ object RotationSnap {
         val quarter = PI / 2
         val nearest = (rotation / quarter).roundToLong() * quarter
         return if (abs(rotation - nearest) <= THRESHOLD_RAD) TwoFinger.normalize(nearest) else null
-    }
-}
-
-/**
- * Decides when a one-finger touch becomes a stroke. Nothing is drawn while
- * PENDING: if a second finger lands in that window the touch was the start
- * of a pan/zoom, and no stray dab must appear (there is no undo yet).
- * A touch becomes a stroke when it moves past [slopPx], when it lasts
- * longer than [delayMs], or when it ends as a tap.
- */
-class DrawGate(private val slopPx: Double = 10.0, private val delayMs: Long = 90) {
-    enum class State { IDLE, PENDING, DRAWING, CANCELLED }
-
-    var state = State.IDLE
-        private set
-    private var downX = 0.0
-    private var downY = 0.0
-    private var downTime = 0L
-    private val buffered = ArrayList<P>()
-
-    fun down(timeMs: Long, p: P) {
-        state = State.PENDING
-        downX = p.x
-        downY = p.y
-        downTime = timeMs
-        buffered.clear()
-        buffered += p
-    }
-
-    /** Returns the points to draw now (buffered ones when the gate opens). */
-    fun move(timeMs: Long, p: P): List<P> = when (state) {
-        State.PENDING -> {
-            buffered += p
-            if (hypot(p.x - downX, p.y - downY) > slopPx || timeMs - downTime >= delayMs) open() else emptyList()
-        }
-        State.DRAWING -> listOf(p)
-        else -> emptyList()
-    }
-
-    /** Re-check on a timer tick without a move (a still finger becomes a stroke). */
-    fun tick(timeMs: Long): List<P> =
-        if (state == State.PENDING && timeMs - downTime >= delayMs) open() else emptyList()
-
-    /** Finger lifted: a pending touch is a tap (draws its dab). */
-    fun up(): List<P> {
-        val out = if (state == State.PENDING) open() else emptyList()
-        state = State.IDLE
-        return out
-    }
-
-    /** Another finger arrived: a pending touch is discarded; a stroke simply stops. */
-    fun secondPointer() {
-        state = if (state == State.PENDING || state == State.DRAWING) State.CANCELLED else state
-        buffered.clear()
-    }
-
-    fun reset() {
-        state = State.IDLE
-        buffered.clear()
-    }
-
-    private fun open(): List<P> {
-        state = State.DRAWING
-        val out = ArrayList(buffered)
-        buffered.clear()
-        return out
     }
 }

@@ -20,9 +20,9 @@ gfx::ClearColor clearFromArgb(uint32_t argb) {
 canvas::StorageLimits CanvasController::limitsFor(const gfx::GraphicsCapabilities& caps, uint64_t budgetOverride) {
     canvas::StorageLimits l;
     l.maxTextureSize = caps.limits.maxTextureSize2D;
-    // Budget for canvas pixels: a quarter of device-local memory (on phones
-    // this is shared system RAM), clamped; GLES cannot report memory, so a
-    // conservative fixed budget is used there.
+    // Budget for canvas pixels (GPU copy + CPU raster): a quarter of
+    // device-local memory (on phones this is shared system RAM), clamped;
+    // GLES cannot report memory, so a conservative fixed budget is used there.
     if (budgetOverride > 0)
         l.memoryBudgetBytes = budgetOverride;
     else if (caps.memory.known && caps.memory.deviceLocalBytes > 0)
@@ -32,8 +32,10 @@ canvas::StorageLimits CanvasController::limitsFor(const gfx::GraphicsCapabilitie
     // Vulkan: one VkDeviceMemory per texture in this version, so the tile
     // count must stay below maxMemoryAllocationCount (with a reserve).
     if (caps.limits.maxMemoryAllocationCount > 512) {
+        // The budget covers GPU textures + CPU raster tiles (one of each per tile).
         const uint64_t tex = canvas::StoragePolicy::kTileSize + 2u * canvas::TileGrid::kGutter;
-        const uint64_t byCount = static_cast<uint64_t>(caps.limits.maxMemoryAllocationCount - 256) * tex * tex * 4u;
+        const uint64_t cpu = static_cast<uint64_t>(canvas::StoragePolicy::kTileSize) * canvas::StoragePolicy::kTileSize * 4u;
+        const uint64_t byCount = static_cast<uint64_t>(caps.limits.maxMemoryAllocationCount - 256) * (tex * tex * 4u + cpu);
         l.memoryBudgetBytes = std::min(l.memoryBudgetBytes, byCount);
     }
     return l;

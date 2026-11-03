@@ -15,16 +15,18 @@ import android.widget.TextView
 import com.paintengine.engine.EngineSurfaceView
 import com.paintengine.engine.NativeEngine
 import com.paintengine.engine.NativeEngine.ViewOp
-import com.paintengine.pxpaint.core.ContentLog
+import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.DockPlacement
-import com.paintengine.pxpaint.core.DrawGate
 import com.paintengine.pxpaint.core.Format
 import com.paintengine.pxpaint.core.LayoutPolicy
 import com.paintengine.pxpaint.core.P
 import com.paintengine.pxpaint.core.ProjectMeta
 import com.paintengine.pxpaint.core.RotationSnap
 import com.paintengine.pxpaint.core.S
-import com.paintengine.pxpaint.core.StrokeSampler
+import com.paintengine.pxpaint.core.SampleBuffer
+import com.paintengine.pxpaint.core.StrokeGate
+import com.paintengine.pxpaint.core.TileContent
+import com.paintengine.pxpaint.core.ToolBrush
 import com.paintengine.pxpaint.core.TwoFinger
 import com.paintengine.pxpaint.core.WorkspaceSpec
 import com.paintengine.pxpaint.core.tr
@@ -40,8 +42,6 @@ import com.paintengine.pxpaint.ui.Thumbnails
 import com.paintengine.pxpaint.ui.Widgets
 import com.paintengine.pxpaint.ui.column
 import org.json.JSONObject
-import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.roundToInt
 
 /**
@@ -50,10 +50,20 @@ import kotlin.math.roundToInt
  * phones, side rail in landscape / on tablets, docked side panel on wide
  * tablets.
  *
- * Input: one finger paints with the active tool (after a short DrawGate so
- * a pinch never leaves a stray dab), two fingers pan/zoom/rotate the
- * viewport (exact, focal point under the fingers). The Move tool, or
- * "paint with a finger" off, makes one finger pan.
+ * Input: one finger paints with the active tool from the first touch (no
+ * delay). Every sample of every MotionEvent - historical ones first, in
+ * order - goes to the native brush engine in screen pixels; the engine maps
+ * them through the viewport and renders the stroke at the next frame. A
+ * second finger landing right after the first means a pinch: the stroke is
+ * cancelled and the canvas restored exactly (StrokeGate). Two fingers
+ * pan/zoom/rotate the viewport (focal point under the fingers). The Move
+ * tool, or "paint with a finger" off, makes one finger pan.
+ *
+ * Persistence: the canvas pixels are the engine's raster tiles. A save
+ * exports only the tiles changed since the last save, compresses them and
+ * rewrites content.pxtiles atomically (TileContent). Opening, saving,
+ * clearing and closing all run on the single io thread, so they happen in
+ * order and never see another canvas's content.
  */
 class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host) {
     enum class Tool(val icon: Icon, val label: S, val desc: S) {
@@ -76,14 +86,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var closed = false
     private var savedRevision = -1L
     private var lastAutosave = 0L
-    private var limitWarned = false
+    private var content: TileContent? = null   // io thread only
 
-    // Tools
+    // Tools (sizes / opacities / spacing / colour live in host.brush, persisted)
     private var tool = Tool.MARKER
-    private var markerSize = 24
-    private var eraserSize = 64
-    private var color = 0xFF2B3A67.toInt()
-    private val recentColors = ArrayList<Int>()
+    private val color: Int get() = host.brush.color
     private var panel = Panel.NONE
     private var view = NativeEngine.ViewportInfo.EMPTY
 
@@ -94,15 +101,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var colorButton: View? = null
 
     // Input
-    private val gate = DrawGate()
-    private val sampler = StrokeSampler(4.0)
+    private val gate = StrokeGate()
+    private val samples = SampleBuffer()
+    private var strokeT0 = 0L
+    private var stroking = false
     private var mode = Mode.IDLE
     private var idA = -1
     private var idB = -1
     private var prevA = P(0.0, 0.0)
     private var prevB = P(0.0, 0.0)
     private var panLast = P(0.0, 0.0)
-    private val tick = Runnable { onGateTick() }
 
     private enum class Mode { IDLE, DRAW, PAN, GESTURE, IGNORE }
 
@@ -145,11 +153,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     override fun onRemoved() {
         removed = true
         handler.removeCallbacks(poll)
-        handler.removeCallbacks(tick)
+        finishStroke()
         closeCanvas()
     }
 
     override fun onPause() {
+        finishStroke()   // a stroke interrupted by the system keeps what was drawn
         save()
     }
 
@@ -175,13 +184,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         opened = true
         e.setScene(NativeEngine.Scene.CANVAS)
         e.setCanvasColors(theme.workspace, meta.paperArgb, meta.transparentBackground)
-        val err = e.createCanvas(meta.width, meta.height, meta.paperArgb, meta.transparentBackground)
-        if (err != null) {
-            host.overlays.message(tr(S.CANVAS_OPEN_FAILED, err), long = true)
-            closed = true
-            leave()
-            return
-        }
         // If the SurfaceView already has a surface (rebuild), hand it to the engine.
         surfaceView?.let { sv ->
             if (sv.hasSurface && sv.holder.surface.isValid) {
@@ -189,13 +191,27 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 e.surfaceChanged(sv.surfaceWidth, sv.surfaceHeight)
             }
         }
-        val id = meta.id
+        val m = meta
         host.io.execute {
-            val ops = runCatching { host.store.loadContent(id) }
+            val result = runCatching {
+                e.createCanvas(m.width, m.height, m.paperArgb, m.transparentBackground)?.let { throw OpenFailure(it) }
+                val tiles = host.store.loadTiles(m.id)
+                if (tiles != null) {
+                    for (batch in tiles.importBatches()) {
+                        if (e.importCanvasTiles(batch) < 0) throw OpenFailure("tile import rejected")
+                    }
+                    tiles
+                } else {
+                    // Block 2 project: rectangle content, rasterised by the engine;
+                    // the first save writes it in the tile format.
+                    e.loadCanvasContent(host.store.loadContent(m.id))
+                    TileContent(m.width, m.height)
+                }
+            }
+            result.onSuccess { content = it }
             host.runOnMain {
                 if (closed) return@runOnMain
-                ops.onSuccess {
-                    e.loadCanvasContent(it)
+                result.onSuccess {
                     savedRevision = e.canvasContentRevision()
                     lastAutosave = SystemClock.uptimeMillis()
                     loaded = true
@@ -203,13 +219,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     // Never overwrite damaged content with an empty canvas.
                     host.overlays.message(tr(S.CANVAS_OPEN_FAILED, it.message ?: "?"), long = true)
                     closed = true
-                    e.closeCanvas()
+                    host.io.execute { e.closeCanvas() }
                     leave()
                 }
             }
         }
         if (!host.tipsShown(TIP_GESTURES)) handler.postDelayed({ showTip() }, 400)
     }
+
+    private class OpenFailure(message: String) : Exception(message)
 
     /** Leaves the workspace after the current callback (never re-enters the host's navigation). */
     private fun leave() {
@@ -222,29 +240,42 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (closed) return
         save()
         closed = true
-        engine?.closeCanvas()
-        surfaceView?.engine = engine   // keep forwarding the surface release
+        val e = engine ?: return
+        host.io.execute { e.closeCanvas() }   // after the save above has exported
+        surfaceView?.engine = e               // keep forwarding the surface release
     }
 
-    /** Persists content + thumbnail on the io thread if anything changed. */
-    private fun save() {
+    /**
+     * Persists changed tiles + thumbnail on the io thread. [force] also
+     * refreshes the thumbnail when only the appearance changed.
+     */
+    private fun save(force: Boolean = false) {
         val e = engine ?: return
         if (!loaded || closed) return
         val rev = e.canvasContentRevision()
-        if (rev == savedRevision) return
+        if (rev == savedRevision && !force) return
         savedRevision = rev
         lastAutosave = SystemClock.uptimeMillis()
-        val ops = e.canvasContent()
         val id = meta.id
         host.io.execute {
+            val c = content ?: return@execute
             val r = runCatching {
-                val updated = host.store.saveContent(id, ops)
-                val thumb = Thumbnails.render(updated, ContentLog.clip(ops, updated.width, updated.height))
+                // Only tiles changed since the last export, in bounded batches.
+                while (true) {
+                    val records = e.exportCanvasTiles(true, EXPORT_BATCH) ?: break
+                    if (c.applyExport(records) < EXPORT_BATCH) break
+                }
+                val updated = host.store.saveTiles(id, c)
+                val thumb = Thumbnails.fromEngine(updated, e.canvasThumbnail(Thumbnails.MAX_SIDE))
                 host.store.saveThumbnail(id, Thumbnails.png(thumb))
                 updated
             }
             host.runOnMain {
-                r.onSuccess { meta = it }.onFailure { host.overlays.message(tr(S.SAVE_FAILED, it.message ?: "?"), long = true) }
+                r.onSuccess { meta = it.copy(name = meta.name) }
+                    .onFailure {
+                        savedRevision = -1L   // retry at the next autosave
+                        host.overlays.message(tr(S.SAVE_FAILED, it.message ?: "?"), long = true)
+                    }
             }
         }
     }
@@ -266,10 +297,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         hud?.let { h ->
             val fps = if (s.optBoolean("rateValid")) String.format(java.util.Locale.US, " · %.0f fps", s.optDouble("fps")) else ""
             h.text = String.format(
-                java.util.Locale.US, "%s · work %.2f ms%s\ntiles %d/%d · %s · ops %d\ndraws %d · uploads %s",
+                java.util.Locale.US,
+                "%s · frame work %.2f ms%s\nbrush %.2f ms (max %.2f) · %d/%d samples\ntiles %d/%d · CPU %s · GPU %s\ndraws %d · uploads %s",
                 s.optString("backend"), s.optDouble("steadyAvgRecordMs") + s.optDouble("steadyAvgSubmitMs"), fps,
+                s.optDouble("brushLastMs"), s.optDouble("brushMaxMs"),
+                s.optLong("brushSamplesProcessed"), s.optLong("brushSamplesReceived"),
                 s.optInt("canvasTilesAllocated"), s.optInt("canvasTilesTotal"),
-                Format.bytes(s.optLong("canvasBytesAllocated")), s.optInt("canvasJournalOps"),
+                Format.bytes(s.optLong("canvasRasterBytes")), Format.bytes(s.optLong("canvasBytesAllocated")),
                 s.optInt("canvasDrawCalls"), Format.bytes(s.optLong("canvasBytesUploaded")),
             )
         }
@@ -306,30 +340,25 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 val p = P(e.x.toDouble(), e.y.toDouble())
                 val paints = tool != Tool.MOVE && host.settings.fingerDrawing
                 if (paints) {
+                    // Deliver MOVE events as they arrive, not batched per frame.
+                    surfaceView?.requestUnbufferedDispatch(e)
                     mode = Mode.DRAW
-                    endStroke()
-                    gate.down(e.eventTime, p)
-                    handler.postDelayed(tick, 100)
+                    beginStroke(e, p)
                 } else {
                     mode = Mode.PAN
                     panLast = p
                 }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
-                if (mode == Mode.DRAW) {
-                    gate.secondPointer()
-                    endStroke()
-                    handler.removeCallbacks(tick)
+                if (mode == Mode.DRAW && stroking) {
+                    if (gate.onSecondPointer(e.eventTime) == StrokeGate.Decision.CANCEL) engine?.strokeCancel()
+                    else engine?.strokeEnd()
+                    stroking = false
                 }
                 if (e.pointerCount >= 2) startGesture(e)
             }
             MotionEvent.ACTION_MOVE -> when (mode) {
-                Mode.DRAW -> {
-                    for (h in 0 until e.historySize) {
-                        draw(gate.move(e.getHistoricalEventTime(h), P(e.getHistoricalX(0, h).toDouble(), e.getHistoricalY(0, h).toDouble())))
-                    }
-                    draw(gate.move(e.eventTime, P(e.x.toDouble(), e.y.toDouble())))
-                }
+                Mode.DRAW -> sendSamples(e)
                 Mode.PAN -> {
                     val p = P(e.x.toDouble(), e.y.toDouble())
                     viewOp(ViewOp.PAN_BY, p.x - panLast.x, p.y - panLast.y)
@@ -356,20 +385,64 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 }
             }
             MotionEvent.ACTION_UP -> {
-                if (mode == Mode.DRAW) draw(gate.up())
-                handler.removeCallbacks(tick)
-                endStroke()
-                gate.reset()
+                if (mode == Mode.DRAW && stroking) {
+                    sendSamples(e)   // the final position (and its history) is part of the stroke
+                    engine?.strokeEnd()
+                    stroking = false
+                    gate.end()
+                }
                 mode = Mode.IDLE
             }
             MotionEvent.ACTION_CANCEL -> {
-                handler.removeCallbacks(tick)
-                endStroke()
-                gate.reset()
+                if (stroking) {
+                    engine?.strokeCancel()
+                    stroking = false
+                    gate.end()
+                }
                 if (mode == Mode.GESTURE) endGesture()
                 mode = Mode.IDLE
             }
         }
+    }
+
+    private fun beginStroke(e: MotionEvent, p: P) {
+        val engine = engine ?: return
+        val t = toolBrush(tool)
+        strokeT0 = e.eventTime
+        gate.down(e.eventTime, p)
+        engine.strokeBegin(
+            p.x.toFloat(), p.y.toFloat(), 0f, t.size, t.opacity,
+            if (tool == Tool.ERASER) 0xFF000000.toInt() else color, t.spacing, tool == Tool.ERASER,
+        )
+        stroking = true
+    }
+
+    /** Every sample of the event, oldest first: historical positions, then the current one. */
+    private fun sendSamples(e: MotionEvent) {
+        if (!stroking) return
+        samples.clear()
+        for (h in 0 until e.historySize) {
+            samples.add(e.getHistoricalX(0, h), e.getHistoricalY(0, h), (e.getHistoricalEventTime(h) - strokeT0).toFloat())
+        }
+        samples.add(e.x, e.y, (e.eventTime - strokeT0).toFloat())
+        gate.move(P(e.x.toDouble(), e.y.toDouble()))
+        engine?.strokeSamples(samples.data, samples.count)
+    }
+
+    /** Ends a stroke the system interrupted (pause, screen change): it is kept. */
+    private fun finishStroke() {
+        if (!stroking) return
+        engine?.strokeEnd()
+        stroking = false
+        gate.end()
+        mode = Mode.IGNORE
+    }
+
+    private fun toolBrush(t: Tool): ToolBrush = if (t == Tool.ERASER) host.brush.eraser else host.brush.marker
+
+    private fun setToolBrush(t: Tool, b: ToolBrush) {
+        val s = host.brush
+        host.updateBrush(if (t == Tool.ERASER) s.copy(eraser = b.sanitized()) else s.copy(marker = b.sanitized()))
     }
 
     private fun startGesture(e: MotionEvent, excludeId: Int = -1) {
@@ -393,45 +466,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     viewOp(ViewOp.SET_ROTATION_AT, target, f.x, f.y)
                 }
             }
-        }
-    }
-
-    private fun onGateTick() {
-        if (mode != Mode.DRAW) return
-        val pts = gate.tick(SystemClock.uptimeMillis())
-        if (pts.isNotEmpty()) draw(pts) else if (gate.state == DrawGate.State.PENDING) handler.postDelayed(tick, 30)
-    }
-
-    private fun draw(points: List<P>) {
-        if (points.isEmpty()) return
-        val e = engine ?: return
-        val size = if (tool == Tool.ERASER) eraserSize else markerSize
-        val argb = if (tool == Tool.ERASER) 0 else color
-        // Dab spacing is ~30% of the tip, measured on screen.
-        sampler.spacing = maxOf(1.0, size * 0.3 * view.zoom)
-        for (p in points) {
-            val dabs = if (strokeStarted) sampler.moveTo(p) else sampler.begin(p).also { strokeStarted = true }
-            for (d in dabs) {
-                if (!e.stamp(d.x, d.y, size, argb)) checkLimit(d)
-            }
-        }
-    }
-
-    /** Set by the first dab of a stroke; cleared whenever the sampler ends. */
-    private var strokeStarted = false
-
-    private fun endStroke() {
-        sampler.end()
-        strokeStarted = false
-    }
-
-    private fun checkLimit(d: P) {
-        val e = engine ?: return
-        val c = e.screenToCanvas(d.x, d.y)
-        val inside = c[0] >= 0 && c[1] >= 0 && c[0] < meta.width && c[1] < meta.height
-        if (inside && !limitWarned && ContentLog.opCount(e.canvasContent()) >= ContentLog.MAX_OPS) {
-            limitWarned = true
-            host.overlays.message(tr(S.CANVAS_FULL, ContentLog.MAX_OPS), long = true)
         }
     }
 
@@ -651,43 +685,45 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private fun toolSettings(): View = column(context, theme, horizontalPadding = false) {
         val t = if (tool == Tool.MOVE) Tool.MARKER else tool
         addView(theme.text(context, tr(t.label), PxTheme.Type.HEADLINE))
-        addView(theme.text(context, tr(t.desc), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(10)) })
-        val current = if (t == Tool.ERASER) eraserSize else markerSize
-        val sizeLabel = theme.text(context, "$current px", PxTheme.Type.LABEL, theme.textSecondary)
-        addView(LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(theme.text(context, tr(S.SIZE), PxTheme.Type.LABEL), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(sizeLabel)
+        addView(theme.text(context, tr(t.desc), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(6)) })
+        val b = toolBrush(t)
+        val percent = { f: Float -> "${(f * 100).roundToInt()}%" }
+        addView(sliderRow(tr(S.SIZE), BrushState.sizeToSlider(b.size), { BrushState.sizeLabel(BrushState.sliderToSize(it)) }) {
+            setToolBrush(t, toolBrush(t).copy(size = BrushState.sliderToSize(it)))
         })
-        addView(PxSlider(context, theme, tr(S.SIZE)).apply {
-            valueText = { "${sizeFor(it)} px" }
-            setValue(sliderFor(current))
-            onChange = { v, _ ->
-                val px = sizeFor(v)
-                if (t == Tool.ERASER) eraserSize = px else markerSize = px
-                sizeLabel.text = "$px px"
-            }
+        addView(sliderRow(tr(S.OPACITY), b.opacity, { percent(BrushState.sliderToOpacity(it)) }) {
+            setToolBrush(t, toolBrush(t).copy(opacity = BrushState.sliderToOpacity(it)))
         })
-        addView(LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, theme.dp(8), 0, 0)
-            addView(theme.text(context, tr(S.OPACITY), PxTheme.Type.LABEL, theme.textTertiary), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(theme.text(context, "100%", PxTheme.Type.LABEL, theme.textTertiary))
+        addView(sliderRow(tr(S.SPACING), BrushState.spacingToSlider(b.spacing), { percent(BrushState.sliderToSpacing(it)) }) {
+            setToolBrush(t, toolBrush(t).copy(spacing = BrushState.sliderToSpacing(it)))
         })
-        addView(PxSlider(context, theme, "${tr(S.OPACITY)} — ${tr(S.OPACITY_SOON)}").apply {
-            setValue(1f)
-            isEnabled = false
-        })
-        addView(theme.text(context, tr(S.OPACITY_SOON), PxTheme.Type.CAPTION, theme.textTertiary))
+        addView(theme.text(context, tr(S.SPACING_HINT), PxTheme.Type.CAPTION, theme.textTertiary).apply { setPadding(0, theme.dp(4), 0, 0) })
     }
 
-    private fun sizeFor(v: Float): Int = exp(v * ln(MAX_SIZE.toDouble())).roundToInt().coerceIn(1, MAX_SIZE)
-    private fun sliderFor(px: Int): Float = (ln(px.toDouble()) / ln(MAX_SIZE.toDouble())).toFloat()
+    /** Label and current value above a slider. */
+    private fun sliderRow(label: String, initial: Float, format: (Float) -> String, apply: (Float) -> Unit): View =
+        column(context, theme, horizontalPadding = false) {
+            setPadding(0, theme.dp(8), 0, 0)
+            val value = theme.text(context, format(initial), PxTheme.Type.LABEL, theme.textSecondary)
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(theme.text(context, label, PxTheme.Type.LABEL), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(value)
+            })
+            addView(PxSlider(context, theme, label).apply {
+                valueText = format
+                setValue(initial)
+                onChange = { v, fromUser ->
+                    value.text = format(v)
+                    if (fromUser) apply(v)
+                }
+            })
+        }
 
     private fun colorPicker(): View = column(context, theme, horizontalPadding = false) {
         addView(theme.text(context, tr(S.COLOR), PxTheme.Type.HEADLINE).apply { setPadding(0, 0, 0, theme.dp(12)) })
-        addView(ColorPicker(context, theme, color, recentColors) { c ->
-            color = c
+        addView(ColorPicker(context, theme, color, host.brush.recentColors) { c ->
+            host.updateBrush(host.brush.copy(color = c))
             if (tool == Tool.ERASER || tool == Tool.MOVE) tool = Tool.MARKER
             remember(c)
             refreshDock()
@@ -702,11 +738,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private var pendingRecent = 0
-    private val rememberColor = Runnable {
-        recentColors.remove(pendingRecent)
-        recentColors.add(0, pendingRecent)
-        while (recentColors.size > 8) recentColors.removeAt(recentColors.lastIndex)
-    }
+    private val rememberColor = Runnable { host.updateBrush(host.brush.withRecent(pendingRecent)) }
 
     private fun layersPanel(): View = column(context, theme, horizontalPadding = false) {
         addView(theme.text(context, tr(S.LAYERS), PxTheme.Type.HEADLINE).apply { setPadding(0, 0, 0, theme.dp(10)) })
@@ -763,13 +795,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         meta = meta.copy(paperArgb = argb, transparentBackground = transparent)
         engine?.setCanvasColors(theme.workspace, argb, transparent)
         val id = meta.id
-        host.io.execute {
-            runCatching {
-                val updated = host.store.updateAppearance(id, argb, transparent)
-                val ops = host.store.loadContent(id)
-                host.store.saveThumbnail(id, Thumbnails.png(Thumbnails.render(updated, ops)))
-            }
-        }
+        host.io.execute { runCatching { host.store.updateAppearance(id, argb, transparent) } }
+        save(force = true)   // thumbnail with the new paper
         showPanel(Panel.LAYERS)
     }
 
@@ -790,9 +817,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private fun confirmClear() {
         host.overlays.confirm(tr(S.CLEAR_CANVAS), tr(S.CLEAR_CONFIRM), tr(S.ACTION_CLEAR), tr(S.ACTION_CANCEL), true) {
-            engine?.clearCanvas()
-            limitWarned = false
-            save()
+            val e = engine
+            if (e != null) host.io.execute {
+                e.clearCanvas()
+                content?.clear()   // the tile file is rewritten empty by the save below
+            }
+            save(force = true)
         }
     }
 
@@ -802,7 +832,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             tr(S.INFO_SIZE) to Format.dimensions(meta.width, meta.height),
             tr(S.INFO_STORAGE) to s.optString("canvasStorage"),
             tr(S.INFO_TILES) to "${s.optInt("canvasTilesAllocated")} / ${s.optInt("canvasTilesTotal")} · ${Format.bytes(s.optLong("canvasBytesAllocated"))}",
-            tr(S.INFO_CONTENT) to s.optInt("canvasJournalOps").toString(),
+            tr(S.INFO_CONTENT) to "${s.optLong("canvasRasterTiles")} · ${Format.bytes(s.optLong("canvasRasterBytes"))}",
             tr(S.INFO_GRAPHICS) to "${s.optString("backend")} · ${s.optString("gpu")}",
         )
         val content = column(context, theme) {
@@ -876,6 +906,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     companion object {
         const val TIP_GESTURES = "workspace.gestures"
         private const val AUTOSAVE_MS = 20_000L
-        private const val MAX_SIZE = 256
+        private const val EXPORT_BATCH = 32
     }
 }

@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.view.View
 import com.paintengine.engine.NativeEngine
 import com.paintengine.pxpaint.core.AppSettings
+import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.ProjectStore
 import com.paintengine.pxpaint.ui.OverlayHost
 import com.paintengine.pxpaint.ui.PxTheme
@@ -38,6 +39,9 @@ interface PxHost {
     fun pop()
     fun replaceTop(screen: Screen)
     fun updateSettings(newSettings: AppSettings)
+    /** Brush setup (sizes, opacities, spacing, colour), persisted across sessions. */
+    val brush: BrushState
+    fun updateBrush(state: BrushState)
     fun openDiagnostics()
     fun tipsShown(id: String): Boolean
     fun markTipShown(id: String)

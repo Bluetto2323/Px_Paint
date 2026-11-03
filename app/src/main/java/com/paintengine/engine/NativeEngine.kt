@@ -134,20 +134,53 @@ class NativeEngine(config: Config) : AutoCloseable {
         handle.let { if (it != 0L) nativeMapPoint(it, false, x, y) ?: doubleArrayOf(0.0, 0.0) else doubleArrayOf(0.0, 0.0) }
 
     /**
-     * Content of the open canvas as flat ops {x, y, w, h, argb} (5 ints each), in
-     * write order. Thread-safe snapshot; empty array if no canvas is open.
+     * Legacy (Block 2) projects: replaces the content of the open canvas with
+     * rectangle fills, flat ops {x, y, w, h, argb} (5 ints each). Call right
+     * after [createCanvas]. Returns the number of ops kept.
      */
-    fun canvasContent(): IntArray = handle.let { if (it != 0L) nativeGetCanvasContent(it) ?: IntArray(0) else IntArray(0) }
-
-    /** Replaces the content of the open canvas (call right after [createCanvas]). Returns ops kept. */
     fun loadCanvasContent(ops: IntArray): Int = handle.let { if (it != 0L) nativeLoadCanvasContent(it, ops) else 0 }
 
-    /** Changes on every content change (stamp, load, clear, new canvas): cheap "is it dirty?" check. */
+    /** Changes on every content change request (strokes, load, clear, new canvas): cheap "is it dirty?" check. */
     fun canvasContentRevision(): Long = handle.let { if (it != 0L) nativeCanvasContentRevision(it) else 0L }
 
-    /** Diagnostic square stamp under a screen point (no brush engine yet). False if off the canvas. */
+    /** Diagnostic square stamp under a screen point (replace semantics). False if off the canvas. */
     fun stamp(x: Double, y: Double, sizePx: Int, argb: Int): Boolean =
         handle.let { it != 0L && nativeStamp(it, x, y, sizePx, argb) }
+
+    // --- Brush strokes (UI thread; never block, processed at the next frame) -
+    /**
+     * Starts a stroke at a SCREEN point (view pixels; mapped through the
+     * current viewport). [diameter] is in CANVAS pixels, [opacity] 0..1,
+     * [argb] straight colour, [spacing] = dab distance / diameter.
+     */
+    fun strokeBegin(x: Float, y: Float, tMs: Float, diameter: Float, opacity: Float, argb: Int, spacing: Float, erase: Boolean) =
+        withHandle { nativeStrokeBegin(it, x, y, tMs, diameter, opacity, argb, spacing, erase) }
+
+    /** [xyt]: [count] samples as (x, y, tMs) triples, screen pixels, oldest first. */
+    fun strokeSamples(xyt: FloatArray, count: Int) = withHandle { nativeStrokeSamples(it, xyt, count) }
+    fun strokeEnd() = withHandle { nativeStrokeEnd(it) }
+    /** Removes the stroke in progress; the canvas returns exactly to its previous state. */
+    fun strokeCancel() = withHandle { nativeStrokeCancel(it) }
+
+    // --- Persistence (any thread; synchronized with [close]) -----------------
+    /**
+     * Up to [maxTiles] canvas tiles as records (little-endian): int count, then
+     * per tile int tx, int ty, int flags (1 = empty), then 256*256*4 bytes of
+     * premultiplied RGBA unless empty. [changedOnly]: tiles changed since their
+     * last export (they are marked saved); else every allocated tile.
+     */
+    @Synchronized
+    fun exportCanvasTiles(changedOnly: Boolean, maxTiles: Int): ByteArray? =
+        handle.let { if (it != 0L) nativeExportCanvasTiles(it, changedOnly, maxTiles) else null }
+
+    /** Imports records produced by [exportCanvasTiles]. Tiles imported, or -1 if malformed. */
+    @Synchronized
+    fun importCanvasTiles(records: ByteArray): Int = handle.let { if (it != 0L) nativeImportCanvasTiles(it, records) else -1 }
+
+    /** Straight ARGB preview: [width, height, pixels...], or null without a canvas. */
+    @Synchronized
+    fun canvasThumbnail(maxSide: Int): IntArray? = handle.let { if (it != 0L) nativeCanvasThumbnail(it, maxSide) else null }
+
     @Synchronized
     fun statusText(): String = handle.let { if (it != 0L) nativeStatusText(it) else "engine not running" }
 
@@ -214,7 +247,15 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeMapPoint(handle: Long, toCanvas: Boolean, x: Double, y: Double): DoubleArray?
         @JvmStatic private external fun nativeStamp(handle: Long, x: Double, y: Double, size: Int, argb: Int): Boolean
         @JvmStatic private external fun nativeRunCanvasSelfTest(handle: Long)
-        @JvmStatic private external fun nativeGetCanvasContent(handle: Long): IntArray?
+        @JvmStatic private external fun nativeStrokeBegin(
+            handle: Long, x: Float, y: Float, t: Float, diameter: Float, opacity: Float, argb: Int, spacing: Float, erase: Boolean,
+        )
+        @JvmStatic private external fun nativeStrokeSamples(handle: Long, xyt: FloatArray, count: Int)
+        @JvmStatic private external fun nativeStrokeEnd(handle: Long)
+        @JvmStatic private external fun nativeStrokeCancel(handle: Long)
+        @JvmStatic private external fun nativeExportCanvasTiles(handle: Long, changedOnly: Boolean, maxTiles: Int): ByteArray?
+        @JvmStatic private external fun nativeImportCanvasTiles(handle: Long, records: ByteArray): Int
+        @JvmStatic private external fun nativeCanvasThumbnail(handle: Long, maxSide: Int): IntArray?
         @JvmStatic private external fun nativeLoadCanvasContent(handle: Long, ops: IntArray): Int
         @JvmStatic private external fun nativeCanvasContentRevision(handle: Long): Long
 

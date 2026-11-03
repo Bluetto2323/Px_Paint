@@ -1,6 +1,7 @@
 package com.paintengine.pxpaint.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,24 +12,20 @@ class InputMathTest {
     private val eps = 1e-9
 
     @Test
-    fun strokeSpacingIsConstantAcrossSegments() {
-        val s = StrokeSampler(10.0)
-        val pts = ArrayList<P>()
-        pts += s.begin(P(0.0, 0.0))
-        // Irregular event spacing: 3, 7, 25, 1, 64 px along x.
-        for (x in listOf(3.0, 10.0, 35.0, 36.0, 100.0)) pts += s.moveTo(P(x, 0.0))
-        assertEquals(11, pts.size)                       // 0, 10, ..., 100
-        for (i in pts.indices) assertEquals(i * 10.0, pts[i].x, eps)
-    }
-
-    @Test
-    fun strokeFollowsDiagonalsAndIgnoresZeroMoves() {
-        val s = StrokeSampler(5.0)
-        s.begin(P(0.0, 0.0))
-        assertTrue(s.moveTo(P(0.0, 0.0)).isEmpty())
-        val pts = s.moveTo(P(30.0, 40.0))                // length 50
-        assertEquals(10, pts.size)
-        assertEquals(50.0, hypot(pts.last().x, pts.last().y), eps)
+    fun sampleBufferKeepsEverySampleInOrderAndIsReused() {
+        val b = SampleBuffer(2)
+        for (i in 0 until 100) b.add(i.toFloat(), -i.toFloat(), i * 4f)
+        assertEquals(100, b.count)
+        for (i in 0 until 100) {
+            assertEquals(i.toDouble(), b.data[i * 3].toDouble(), 0.0)
+            assertEquals(-i.toDouble(), b.data[i * 3 + 1].toDouble(), 0.0)
+            assertEquals(i * 4.0, b.data[i * 3 + 2].toDouble(), 0.0)
+        }
+        val grown = b.data
+        b.clear()
+        b.add(1f, 2f, 3f)
+        assertEquals(1, b.count)
+        assertTrue("buffer reused, no new allocation", grown === b.data)
     }
 
     @Test
@@ -59,36 +56,27 @@ class InputMathTest {
     }
 
     @Test
-    fun drawGateTapDrawsOneDab() {
-        val g = DrawGate()
-        g.down(0, P(5.0, 5.0))
-        assertEquals(listOf(P(5.0, 5.0)), g.up())
+    fun quickSecondFingerCancelsTheStroke() {
+        val g = StrokeGate(cancelWindowMs = 250, slopPx = 24.0)
+        g.down(1000, P(100.0, 100.0))
+        g.move(P(160.0, 100.0))
+        assertEquals(StrokeGate.Decision.CANCEL, g.onSecondPointer(1200))  // within 250 ms: a pinch
+        assertFalse(g.active)
     }
 
     @Test
-    fun drawGateOpensOnSlopOrDelay() {
-        val g = DrawGate(slopPx = 10.0, delayMs = 90)
-        g.down(0, P(0.0, 0.0))
-        assertTrue(g.move(10, P(3.0, 0.0)).isEmpty())
-        val opened = g.move(20, P(12.0, 0.0))
-        assertEquals(3, opened.size)                     // buffered points flushed in order
-        assertEquals(DrawGate.State.DRAWING, g.state)
-        assertEquals(listOf(P(20.0, 0.0)), g.move(30, P(20.0, 0.0)))
-
-        val still = DrawGate(slopPx = 10.0, delayMs = 90)
-        still.down(0, P(0.0, 0.0))
-        assertTrue(still.tick(50).isEmpty())
-        assertEquals(1, still.tick(95).size)
+    fun drawnStrokeIsKeptWhenAGestureFollows() {
+        val g = StrokeGate(cancelWindowMs = 250, slopPx = 24.0)
+        g.down(1000, P(100.0, 100.0))
+        g.move(P(400.0, 120.0))
+        assertEquals(StrokeGate.Decision.COMMIT, g.onSecondPointer(1800))
     }
 
     @Test
-    fun secondFingerCancelsAPendingTouch() {
-        val g = DrawGate()
-        g.down(0, P(0.0, 0.0))
-        g.move(10, P(2.0, 0.0))
-        g.secondPointer()
-        assertEquals(DrawGate.State.CANCELLED, g.state)
-        assertTrue(g.move(200, P(50.0, 0.0)).isEmpty())
-        assertTrue(g.up().isEmpty())
+    fun restingFingerThenPinchCancels() {
+        val g = StrokeGate(cancelWindowMs = 250, slopPx = 24.0)
+        g.down(1000, P(100.0, 100.0))
+        g.move(P(110.0, 104.0))
+        assertEquals(StrokeGate.Decision.CANCEL, g.onSecondPointer(3000))  // never really moved
     }
 }

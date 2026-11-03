@@ -249,9 +249,15 @@ void testStorage() {
     p = StoragePolicy::choose(8192, 8192, {16384, 64ull << 20});
     check(!p.ok, "8192x8192 rejected with a 64 MiB budget: " + p.reason);
     p = StoragePolicy::choose(4096, 4096, big);
-    const uint64_t expected = 16ull * 16 * 258 * 258 * 4;
-    check(p.ok && p.maxAllocatedBytes == expected, "4096x4096 worst case = 256 tiles x 258^2 x 4 B (" +
-                                                       std::to_string(p.maxAllocatedBytes >> 20) + " MiB)");
+    const uint64_t expectedGpu = 16ull * 16 * 258 * 258 * 4;
+    const uint64_t expectedCpu = 16ull * 16 * 256 * 256 * 4;
+    check(p.ok && p.maxGpuBytes == expectedGpu && p.maxCpuBytes == expectedCpu &&
+              p.maxAllocatedBytes == expectedGpu + expectedCpu,
+          "4096x4096 worst case = GPU 256 tiles x 258^2 x 4 B + CPU raster 256 x 256^2 x 4 B (" +
+              std::to_string(p.maxAllocatedBytes >> 20) + " MiB)");
+    p = StoragePolicy::choose(1000, 600, big);
+    check(p.ok && p.maxGpuBytes == 1000ull * 600 * 4 && p.maxCpuBytes == 4ull * 3 * 256 * 256 * 4,
+          "1000x600 single texture: GPU = w*h*4, CPU raster = 4x3 whole tiles");
     p = StoragePolicy::choose(100, 100, {200, 0});
     check(!p.ok, "GPU limit smaller than one tile rejected");
 }
