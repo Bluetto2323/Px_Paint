@@ -58,6 +58,7 @@ private:
         double carry = 0.0;    // distance travelled since the last dab
         canvas::Vec2 lastDab;
         SampleAxes lastAxes;
+        float dir = kNoValue;  // direction of the last piece walked
     };
     // Appends dabs along the spline segment p1->p2 (p0, p3: neighbours);
     // the axes go linearly from the walker's to `a2`.
@@ -71,6 +72,7 @@ private:
     const SampleAxes& ax(size_t fromEnd) const { return ax_[(head_ + 4 - 1 - fromEnd) % 4]; }
 
     bool active_ = false;
+    bool firstPending_ = false;  // first dab deferred until the stroke has a direction
     double spacing_ = 1.0;
     canvas::Vec2 pts_[4];  // ring of the last 4 accepted points
     SampleAxes ax_[4];     // their axes

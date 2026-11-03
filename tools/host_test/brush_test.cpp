@@ -19,9 +19,17 @@
 #include <string>
 #include <vector>
 
+#include "PresetFile.h"
 #include "brush/BrushEngine.h"
+#include "brush/BrushPreview.h"
+#include "brush/BrushTextures.h"
+#include "brush/StrokeCompositor.h"
 #include "canvas/RasterStore.h"
 #include "core/Time.h"
+
+#ifndef PE_BRUSH_ASSET
+#define PE_BRUSH_ASSET "app/src/main/assets/brushes/builtin.pxb"
+#endif
 
 using pe::brush::BrushEngine;
 using pe::brush::BrushSettings;
@@ -920,6 +928,492 @@ void testPerf() {
     check(true, "B15: timings printed");
 }
 
+
+// ------------------------------------------------------------ Block 5
+std::vector<pxtest::TestPreset> gPresets;
+double gPrewarmMs = 0.0;
+
+const char* kExpectedPresets[] = {"builtin.round",     "builtin.hard",   "builtin.airbrush", "builtin.pencil",
+                                  "builtin.graphite",  "builtin.ink",    "builtin.fineliner", "builtin.marker",
+                                  "builtin.charcoal",  "builtin.chalk",  "builtin.textured", "builtin.watercolor"};
+
+BrushSettings preset(const char* id, float d = 0.0f) {
+    const pxtest::TestPreset* p = pxtest::find(gPresets, id);
+    BrushSettings s = p ? p->s : BrushSettings{};
+    s.argb = 0xFF000000u;
+    if (d > 0.0f) s.diameter = d;
+    return s;
+}
+
+Path sCurve(double x0, double y0, double w, double amp, int samples) {
+    Path p;
+    for (int i = 0; i < samples; ++i) {
+        const double t = static_cast<double>(i) / (samples - 1);
+        p.push_back({x0 + w * t, y0 + amp * std::sin(t * 2 * kPi), t * 400});
+    }
+    return p;
+}
+
+double meanAlpha(const RasterStore& s, int x0, int y0, int x1, int y1) {
+    double sum = 0;
+    int n = 0;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x, ++n) sum += alpha(s, x, y);
+    return n ? sum / n : 0.0;
+}
+
+double meanAbsDiff(const RasterStore& a, const RasterStore& b) {
+    double sum = 0;
+    for (int y = 0; y < static_cast<int>(a.height()); ++y)
+        for (int x = 0; x < static_cast<int>(a.width()); ++x) sum += std::abs(alpha(a, x, y) - alpha(b, x, y));
+    return sum / (static_cast<double>(a.width()) * a.height());
+}
+
+double totalInk(const RasterStore& s) { return meanAlpha(s, 0, 0, s.width() - 1, s.height() - 1) * s.width() * s.height(); }
+
+void testPresetFile() {
+    section("L1 shipped preset file: parsed, complete, valid");
+    const int64_t t0 = pe::nowNs();
+    pe::brush::prewarmBrushTextures();
+    gPrewarmMs = (pe::nowNs() - t0) / 1e6;
+    bool header = false;
+    gPresets = pxtest::loadPresets(PE_BRUSH_ASSET, &header);
+    check(header, "L1: format header 'pxbrushes 1'");
+    check(gPresets.size() == 12, fmt("L1: 12 built-in presets (%.0f)", static_cast<double>(gPresets.size())));
+    int found = 0;
+    for (const char* id : kExpectedPresets) found += pxtest::find(gPresets, id) ? 1 : 0;
+    check(found == 12, "L1: every required preset is present (round, hard, airbrush, pencil, graphite, ink, fine liner, marker, charcoal, chalk, textured, watercolour)");
+    bool unique = true, named = true, valid = true;
+    for (size_t i = 0; i < gPresets.size(); ++i) {
+        for (size_t j = i + 1; j < gPresets.size(); ++j) unique &= gPresets[i].id != gPresets[j].id;
+        named &= !gPresets[i].name.empty() && !gPresets[i].category.empty();
+        const BrushSettings& a = gPresets[i].s;
+        const BrushSettings b = a.sanitized();
+        valid &= a.diameter == b.diameter && a.opacity == b.opacity && a.flow == b.flow && a.spacing == b.spacing &&
+                 a.hardness == b.hardness && a.roundness == b.roundness && a.grainDepth == b.grainDepth &&
+                 a.wetEdge == b.wetEdge && a.minSizeFraction == b.minSizeFraction && a.scatter == b.scatter;
+    }
+    check(unique && named, "L1: ids unique, every preset has a name and a category");
+    check(valid, "L1: every value already inside its valid range (sanitizing changes nothing)");
+    int classic = 0;
+    for (const auto& p : gPresets) classic += p.s.classicRound() ? 1 : 0;
+    check(preset("builtin.hard").classicRound() && preset("builtin.fineliner").classicRound() && classic == 2,
+          "L1: only Hard Brush and Fine Liner use the classic (Block 3/4) rasteriser; 10 presets use the Block 5 model");
+    check(BrushSettings{}.classicRound(), "L1: default BrushSettings = classic round (old callers unchanged)");
+}
+
+void testClassicCompat() {
+    section("L2 Hard Brush preset == Block 3/4 brush, pixel for pixel");
+    RasterStore a, b;
+    a.reset(600, 400);
+    b.reset(600, 400);
+    BrushEngine e1, e2;
+    Path p = sCurve(60, 200, 480, 120, 60);
+    draw(e1, a, preset("builtin.hard", 32), p, 4);
+    draw(e2, b, brush(32), p, 4);
+    int worst = 0;
+    check(sameStore(a, b, 0, &worst), fmt("L2: identical (max diff %.0f)", worst));
+    Path q = withPressure(sCurve(60, 200, 480, 120, 60), 0.1f, 1.0f);
+    RasterStore c, d;
+    c.reset(600, 400);
+    d.reset(600, 400);
+    BrushSettings old = brush(32);
+    old.pressureSize = true;
+    old.minSizeFraction = 0.25f;
+    draw(e1, c, preset("builtin.hard", 32), q, 4);
+    draw(e2, d, old, q, 4);
+    check(sameStore(c, d, 0, &worst), fmt("L2: identical with stylus pressure too (max diff %.0f)", worst));
+}
+
+void testHardness() {
+    section("L3 hardness: soft edge band grows as hardness falls, centre stays solid, width kept");
+    double band[3], ink[3], centre[3];
+    const float hs[3] = {1.0f, 0.5f, 0.0f};
+    for (int i = 0; i < 3; ++i) {
+        RasterStore s;
+        s.reset(400, 200);
+        BrushEngine e;
+        BrushSettings b = brush(40);
+        b.hardness = hs[i];
+        draw(e, s, b, line(50, 100, 350, 100, 30));
+        int n = 0;
+        for (int y = 60; y <= 140; ++y) {
+            const double a = alpha(s, 200, y);
+            if (a > 0.1 && a < 0.9) n++;
+        }
+        band[i] = n / 2.0;
+        ink[i] = columnInk(s, 200, 60, 140);
+        centre[i] = alpha(s, 200, 100);
+    }
+    check(band[0] <= 1.0 && band[1] > band[0] + 3 && band[2] > band[1] + 3,
+          fmt("L3: 10-90 %% edge band %.1f / %.1f / %.1f px (hardness 1 / 0.5 / 0)", band[0], band[1], band[2]));
+    check(centre[0] == 1.0 && centre[1] == 1.0 && centre[2] > 0.95, fmt("L3: centre coverage %.2f / %.2f / %.3f", centre[0], centre[1], centre[2]));
+    check(ink[1] > 0.6 * ink[0] && ink[2] > 0.4 * ink[0], fmt("L3: integrated width %.1f / %.1f / %.1f px (soft brushes stay substantial)", ink[0], ink[1], ink[2]));
+}
+
+void renderPreset(RasterStore& s, const BrushSettings& b, const Path& p, size_t batch = 4) {
+    s.reset(420, 240);
+    BrushEngine e;
+    draw(e, s, b, p, batch);
+}
+
+void testDistinct() {
+    section("L4 every preset renders, deterministically, and differently from every other");
+    const Path finger = sCurve(50, 120, 320, 60, 80);
+    const Path stylus = withPressure(sCurve(50, 120, 320, 60, 80), 0.05f, 1.0f);
+    const size_t n = gPresets.size();
+    std::vector<RasterStore> f(n), st(n);
+    bool deterministic = true, inked = true;
+    for (size_t i = 0; i < n; ++i) {
+        BrushSettings b = gPresets[i].s;
+        b.argb = 0xFF000000u;
+        b.diameter = 40;
+        renderPreset(f[i], b, finger);
+        renderPreset(st[i], b, stylus);
+        RasterStore again;
+        renderPreset(again, b, finger);
+        deterministic &= sameStore(f[i], again, 0);
+        inked &= totalInk(f[i]) > 1000;
+    }
+    check(inked, "L4: every preset leaves ink (finger stroke, 40 px)");
+    check(deterministic, "L4: same input -> identical pixels for every preset (jitter is seeded, not random)");
+    int fingerPairs = 0, pressureOnly = 0, same = 0;
+    std::string pressurePairs;
+    for (size_t i = 0; i < n; ++i)
+        for (size_t j = i + 1; j < n; ++j) {
+            const double df = meanAbsDiff(f[i], f[j]), ds = meanAbsDiff(st[i], st[j]);
+            if (df > 0.005) fingerPairs++;
+            else if (ds > 0.005) {
+                pressureOnly++;
+                pressurePairs += " " + gPresets[i].id.substr(8) + "/" + gPresets[j].id.substr(8);
+            } else {
+                same++;
+                std::printf("    identical: %s %s\n", gPresets[i].id.c_str(), gPresets[j].id.c_str());
+            }
+        }
+    std::printf("    %d of %zu pairs differ with a finger at equal size; %d only with pressure:%s\n", fingerPairs,
+                n * (n - 1) / 2, pressureOnly, pressurePairs.c_str());
+    check(same == 0, "L4: no two presets render the same (at equal size, finger or stylus)");
+}
+
+void testJitterBatching() {
+    section("L5 jitter / textures: batching and the provisional tail do not change the result");
+    for (const char* id : {"builtin.charcoal", "builtin.chalk", "builtin.textured", "builtin.watercolor", "builtin.airbrush"}) {
+        RasterStore a, b, c;
+        renderPreset(a, preset(id, 40), sCurve(50, 120, 320, 60, 47), 0);
+        renderPreset(b, preset(id, 40), sCurve(50, 120, 320, 60, 47), 3);
+        renderPreset(c, preset(id, 40), sCurve(50, 120, 320, 60, 47), 1);
+        int w1 = 0, w2 = 0;
+        check(sameStore(a, b, 0, &w1) && sameStore(a, c, 0, &w2),
+              std::string("L5: ") + id + fmt(" identical all at once / 3 / 1 per frame (max diff %.0f, %.0f)", w1, w2));
+    }
+}
+
+void testPresetCancel() {
+    section("L6 cancelling a stroke restores the canvas bit for bit, every preset");
+    bool all = true;
+    for (const auto& p : gPresets) {
+        RasterStore s, ref;
+        s.reset(420, 240);
+        ref.reset(420, 240);
+        for (RasterStore* r : {&s, &ref}) {
+            r->fill({0, 0, 420, 120}, Rgba8::fromArgb(0xFF80C040u));
+            r->fill({100, 60, 200, 140}, Rgba8::fromArgb(0x80204080u));
+        }
+        BrushEngine e;
+        BrushSettings b = p.s;
+        b.argb = 0xFFE02020u;
+        draw(e, s, b, sCurve(40, 120, 340, 70, 50), 5, false);
+        e.cancel();
+        e.process(s);
+        BrushSettings er = b;
+        er.erase = true;
+        draw(e, s, er, sCurve(40, 100, 340, 70, 50), 5, false);
+        e.cancel();
+        e.process(s);
+        const bool ok = sameStore(s, ref, 0);
+        if (!ok) std::printf("    not restored: %s\n", p.id.c_str());
+        all &= ok;
+    }
+    check(all, "L6: paint and erase strokes of all 12 presets cancel exactly");
+}
+
+void testBuildup() {
+    section("L7 accumulation: buildup darkens where a stroke overlaps itself, stroke-max never does");
+    auto overlapGain = [](const BrushSettings& b) {
+        RasterStore once, twice;
+        once.reset(420, 200);
+        twice.reset(420, 200);
+        BrushEngine e;
+        draw(e, once, b, line(60, 100, 360, 100, 30));
+        Path back = line(60, 100, 360, 100, 30);
+        Path rev(back.rbegin(), back.rend());
+        for (size_t i = 0; i < rev.size(); ++i) rev[i].t = 200 + i * 4.0;
+        Path both = back;
+        both.insert(both.end(), rev.begin() + 1, rev.end());
+        draw(e, twice, b, both);
+        return std::make_pair(alpha(once, 210, 100), alpha(twice, 210, 100));
+    };
+    const auto air = overlapGain(preset("builtin.airbrush", 60));
+    const auto hard = overlapGain(preset("builtin.hard", 30));
+    check(air.second > air.first * 1.3, fmt("L7: airbrush centre %.3f -> %.3f going back over the same line", air.first, air.second));
+    check(hard.second == hard.first, fmt("L7: hard brush centre %.3f -> %.3f (never darkens itself)", hard.first, hard.second));
+    check(air.first < 0.9, fmt("L7: one airbrush pass is translucent (%.2f): low flow builds up gradually", air.first));
+}
+
+void testWetEdge() {
+    section("L8 wet edge (watercolour): pigment collects at the border of the stroke");
+    using pe::brush::StrokeCompositor;
+    bool identity = true, bounded = true;
+    for (int i = 0; i <= 100; ++i) {
+        const double m = i / 100.0;
+        identity &= std::abs(StrokeCompositor::wetEdgeTransfer(m, 0.0) - m) < 1e-12;
+        for (double e : {0.25, 0.5, 0.9, 1.0}) {
+            const double t = StrokeCompositor::wetEdgeTransfer(m, e);
+            bounded &= t >= 0.0 && t <= 1.0;
+        }
+    }
+    check(identity && bounded, "L8: transfer = identity at wet edge 0, always within [0, 1]");
+    check(StrokeCompositor::wetEdgeTransfer(0.0, 0.9) == 0.0, "L8: no coverage stays no coverage (no halo outside the stroke)");
+    BrushSettings w = preset("builtin.watercolor", 60);
+    w.grainDepth = 0;
+    w.sizeJitter = 0;
+    RasterStore s;
+    s.reset(400, 200);
+    BrushEngine e;
+    draw(e, s, w, line(50, 100, 350, 100, 30));
+    double peak = 0, centre = alpha(s, 200, 100);
+    int peakY = 100;
+    for (int y = 60; y <= 100; ++y)
+        if (alpha(s, 200, y) > peak) { peak = alpha(s, 200, y); peakY = y; }
+    check(peak > centre * 1.4 && peakY < 90,
+          fmt("L8: edge %.2f (at %.0f px from the centre) vs centre %.2f", peak, 100.0 - peakY, centre));
+}
+
+void testGrain() {
+    section("L9 grain: paper texture in the stroke, anchored to the canvas, filled by pressure");
+    auto stats = [](const RasterStore& s, int y0, int y1, double& mean, double& sd) {
+        double sum = 0, sum2 = 0;
+        int n = 0;
+        for (int y = y0; y <= y1; ++y)
+            for (int x = 150; x <= 350; ++x, ++n) {
+                const double a = alpha(s, x, y);
+                sum += a;
+                sum2 += a * a;
+            }
+        mean = sum / n;
+        sd = std::sqrt(std::max(0.0, sum2 / n - mean * mean));
+    };
+    RasterStore g, flat;
+    g.reset(700, 800);
+    flat.reset(700, 800);
+    BrushEngine e;
+    BrushSettings pencil = preset("builtin.pencil", 16);
+    pencil.opacity = 1.0f;
+    draw(e, g, pencil, line(100, 100, 600, 100, 40));
+    draw(e, g, pencil, line(100, 612, 600, 612, 40));  // 512 px lower: same grain
+    BrushSettings plain = pencil;
+    plain.grainDepth = 0;
+    draw(e, flat, plain, line(100, 100, 600, 100, 40));
+    double m1, sd1, m0, sd0;
+    stats(g, 97, 103, m1, sd1);
+    stats(flat, 97, 103, m0, sd0);
+    check(sd1 > 0.08 && sd0 < 0.01, fmt("L9: pencil interior varies (sd %.3f) - without grain flat (sd %.4f)", sd1, sd0));
+    int worst = 0;
+    for (int y = 97; y <= 103; ++y)
+        for (int x = 150; x <= 550; ++x) worst = std::max(worst, std::abs(g.pixel(x, y).a - g.pixel(x, y + 512).a));
+    check(worst <= 1, fmt("L9: the grain is fixed to the canvas (strokes 512 px apart match, max diff %.0f)", worst));
+    auto meanAt = [&](float p) {
+        RasterStore s;
+        s.reset(700, 200);
+        BrushEngine en;
+        BrushSettings b = preset("builtin.pencil", 16);
+        b.pressureSize = b.pressureOpacity = false;
+        Path q = withPressure(line(100, 100, 600, 100, 40), p, p);
+        draw(en, s, b, q);
+        double m, sd;
+        stats(s, 97, 103, m, sd);
+        return m;
+    };
+    const double light = meanAt(0.2f), heavy = meanAt(1.0f);
+    check(heavy > light * 1.1, fmt("L9: heavy pressure fills the grain (mean coverage %.2f vs %.2f light)", heavy, light));
+}
+
+void testFollowStroke() {
+    section("L10 bristle tip follows the stroke: streaks run along the stroke in any direction");
+    auto anisotropy = [](bool horizontal) {
+        RasterStore s;
+        s.reset(500, 500);
+        BrushEngine e;
+        BrushSettings b = preset("builtin.textured", 48);
+        b.grainDepth = 0;  // isolate the tip
+        b.sizeJitter = 0;
+        draw(e, s, b, horizontal ? line(50, 250, 450, 250, 40) : line(250, 50, 250, 450, 40));
+        // Variance across the streaks vs along them, centre window.
+        double across = 0, along = 0;
+        std::vector<double> means;
+        for (int k = -14; k <= 14; ++k) {
+            double sum = 0, sum2 = 0;
+            for (int t = 150; t <= 350; ++t) {
+                const double a = horizontal ? alpha(s, t, 250 + k) : alpha(s, 250 + k, t);
+                sum += a;
+                sum2 += a * a;
+            }
+            const double m = sum / 201;
+            means.push_back(m);
+            along += sum2 / 201 - m * m;
+        }
+        along /= means.size();
+        double mm = 0;
+        for (double m : means) mm += m;
+        mm /= means.size();
+        for (double m : means) across += (m - mm) * (m - mm);
+        across /= means.size();
+        return std::make_pair(across, along);
+    };
+    const auto h = anisotropy(true), v = anisotropy(false);
+    check(h.first > 5 * h.second, fmt("L10: horizontal stroke: variance across %.4f >> along %.4f", h.first, h.second));
+    check(v.first > 5 * v.second, fmt("L10: vertical stroke: variance across %.4f >> along %.4f", v.first, v.second));
+}
+
+void testNib() {
+    section("L11 ink pen nib (roundness 0.4 at 35 deg): thin along the nib, thick across it");
+    auto width = [](double angleDeg) {
+        RasterStore s;
+        s.reset(600, 600);
+        BrushEngine e;
+        const double a = angleDeg * kPi / 180.0, L = 300;
+        draw(e, s, preset("builtin.ink", 20), line(300 - L / 2 * std::cos(a), 300 - L / 2 * std::sin(a),
+                                                   300 + L / 2 * std::cos(a), 300 + L / 2 * std::sin(a), 30));
+        return totalInk(s) / L;
+    };
+    const double thin = width(35), thick = width(125);
+    check(thick > 1.8 * thin, fmt("L11: stroke width %.1f px along the nib vs %.1f px across it", thin, thick));
+}
+
+void testPresetPressure() {
+    section("L12 pressure integration: every preset responds to pressure as configured and never vanishes");
+    bool sizeOk = true, opacityOk = true, visible = true;
+    for (const auto& p : gPresets) {
+        auto ink = [&](float pr) {
+            RasterStore s;
+            s.reset(500, 200);
+            BrushEngine e;
+            BrushSettings b = p.s;
+            b.argb = 0xFF000000u;
+            b.diameter = 30;
+            draw(e, s, b, withPressure(line(60, 100, 440, 100, 40), pr, pr));
+            return totalInk(s);
+        };
+        const double lo = ink(0.0f), mid = ink(0.3f), hi = ink(1.0f);
+        if (p.s.pressureSize || p.s.pressureOpacity) {
+            const bool ok = hi > mid * 1.1 && mid > lo;
+            (p.s.pressureSize ? sizeOk : opacityOk) &= ok;
+            if (!ok) std::printf("    %s: ink %.0f / %.0f / %.0f\n", p.id.c_str(), lo, mid, hi);
+        } else {
+            sizeOk &= std::abs(hi - lo) < 1e-6 * std::max(1.0, hi);  // constant (fine liner, marker)
+        }
+        visible &= lo > 100;
+    }
+    check(sizeOk, "L12: pressure -> size presets get wider with pressure; constant-width presets stay constant");
+    check(opacityOk, "L12: pressure -> opacity presets get denser with pressure");
+    check(visible, "L12: zero pressure still leaves a visible stroke for every preset");
+}
+
+void testTexturedEraser() {
+    section("L13 textured presets as erasers");
+    RasterStore s;
+    s.reset(500, 200);
+    fillOpaque(s, 0xFF3060A0u);
+    BrushEngine e;
+    BrushSettings b = preset("builtin.chalk", 40);
+    b.erase = true;
+    draw(e, s, b, line(60, 100, 440, 100, 40));
+    const double in = meanAlpha(s, 150, 92, 350, 108), out = meanAlpha(s, 150, 160, 350, 190);
+    check(in < 0.85 && in > 0.05, fmt("L13: chalk eraser removes paint unevenly (mean alpha %.2f in the stroke)", in));
+    check(out == 1.0, "L13: outside the stroke untouched");
+}
+
+void testPreviewConsistency() {
+    section("L14 previews use the real renderer: preview == canvas stroke");
+    bool all = true;
+    const Path p = sCurve(30, 60, 240, 30, 50);
+    for (const auto& pr : gPresets) {
+        BrushSettings b = pr.s;
+        b.argb = 0xFF1E2A44u;
+        b.diameter = 24;
+        RasterStore s;
+        s.reset(300, 120);
+        BrushEngine e;
+        draw(e, s, b, p, 0);
+        std::vector<uint32_t> px(300 * 120);
+        pe::brush::PreviewStroke ps{p.data(), p.size(), 0.0f, -1.0f};
+        const bool ok = pe::brush::renderBrushPreview(b, &ps, 1, 300, 120, 0xFFFFFFFFu, px.data());
+        int worst = 0;
+        for (int y = 0; y < 120; ++y)
+            for (int x = 0; x < 300; ++x) {
+                const Rgba8 q = s.pixel(x, y);
+                const int expect = static_cast<int>(std::lround(q.r + 255.0 * (1.0 - q.a / 255.0)));
+                worst = std::max(worst, std::abs(static_cast<int>((px[y * 300 + x] >> 16) & 0xFF) - expect));
+            }
+        if (!ok || worst > 1) {
+            std::printf("    %s: preview differs by %d\n", pr.id.c_str(), worst);
+            all = false;
+        }
+    }
+    check(all, "L14: for all 12 presets the preview equals the canvas stroke over white (<= 1/255)");
+    std::vector<uint32_t> px(16);
+    check(!pe::brush::renderBrushPreview(BrushSettings{}, nullptr, 0, 0, 4, 0, px.data()) &&
+              !pe::brush::renderBrushPreview(BrushSettings{}, nullptr, 0, 4, 99999, 0, px.data()),
+          "L14: invalid preview sizes rejected");
+}
+
+void testTextures() {
+    section("L15 procedural textures: built once, tileable, sane");
+    using namespace pe::brush;
+    bool sizes = true, means = true, tileable = true;
+    for (BrushGrain g : {BrushGrain::Paper, BrushGrain::Rough, BrushGrain::Canvas, BrushGrain::Wash}) {
+        const Texture8& t = grainTexture(g);
+        sizes &= t.size == kGrainSize && t.px.size() == static_cast<size_t>(kGrainSize) * kGrainSize;
+        means &= t.mean() > 0.3 && t.mean() < 0.75;
+        double seam = 0, inner = 0;
+        for (int y = 0; y < kGrainSize; ++y) {
+            seam += std::abs(t.wrap(kGrainSize - 1, y) - t.wrap(kGrainSize, y));
+            inner += std::abs(t.wrap(255, y) - t.wrap(256, y));
+        }
+        tileable &= seam < 1.5 * inner + kGrainSize;
+    }
+    check(sizes && means, "L15: 4 grains of 512 x 512, mean coverage 0.3 .. 0.75");
+    check(tileable, "L15: grains wrap without a seam (edge difference ~ interior difference)");
+    bool tips = true;
+    for (BrushTip tp : {BrushTip::Chalk, BrushTip::Charcoal, BrushTip::Bristle}) {
+        const Texture8& t = tipTexture(tp);
+        tips &= t.size == kTipSize && t.px[0] == 0 && t.px.back() == 0 && t.wrap(64, 64) + t.wrap(60, 64) + t.wrap(64, 60) > 0;
+    }
+    check(tips, "L15: tip stamps are 128 x 128, empty outside the disc, inked inside");
+    check(&grainTexture(BrushGrain::Paper) == &grainTexture(BrushGrain::Paper), "L15: cached (one instance per texture)");
+    check(grainTexture(BrushGrain::None).empty() && tipTexture(BrushTip::Round).empty(), "L15: none / round need no texture");
+    std::printf("    all textures built in %.1f ms (once per process, at engine start)\n", gPrewarmMs);
+}
+
+void testPresetPerf() {
+    section("L16 timing per preset at its default size (informational, this machine)");
+    for (const auto& p : gPresets) {
+        RasterStore s;
+        s.reset(4096, 4096);
+        BrushEngine e;
+        BrushSettings b = p.s;
+        b.argb = 0xFF204080u;
+        Path q = withPressure(line(1000, 2000, 3000, 2000, 250), 0.3f, 1.0f);
+        for (size_t i = 0; i < q.size(); ++i) q[i].t = i * 4.0;
+        const int64_t t0 = pe::nowNs();
+        draw(e, s, b, q, 8);
+        const double ms = (pe::nowNs() - t0) / 1e6;
+        std::printf("    %-20s %5.0f px  %6.3f ms per 8-sample frame, worst frame %.3f ms\n", p.id.c_str(),
+                    static_cast<double>(p.size), ms / (250 / 8.0), e.stats().maxProcessMs);
+    }
+    check(true, "L16: timings printed");
+}
 }  // namespace
 
 int main() {
@@ -948,6 +1442,22 @@ int main() {
     testTilt();
     testTransitions();
     testPerf();
+    testPresetFile();
+    testClassicCompat();
+    testHardness();
+    testDistinct();
+    testJitterBatching();
+    testPresetCancel();
+    testBuildup();
+    testWetEdge();
+    testGrain();
+    testFollowStroke();
+    testNib();
+    testPresetPressure();
+    testTexturedEraser();
+    testPreviewConsistency();
+    testTextures();
+    testPresetPerf();
     std::printf("=== %d/%d checks passed ===\n", gChecks - gFailures, gChecks);
     return gFailures == 0 ? 0 : 1;
 }

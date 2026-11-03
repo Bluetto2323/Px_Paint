@@ -41,6 +41,32 @@ struct PressureLut {
     }
 };
 
+// Block 5 brush model. Every field has a default that reproduces the Block 3
+// round brush exactly (BrushSettings::classicRound()).
+enum class BrushTip : uint8_t {
+    Round = 0,     // analytic round / elliptical dab (hardness, roundness)
+    Chalk = 1,     // procedural stamp: speckled disc with a broken edge
+    Charcoal = 2,  // procedural stamp: irregular blob, soft dense core
+    Bristle = 3,   // procedural stamp: row of bristle marks across the stroke
+};
+constexpr int kBrushTipCount = 4;
+
+// Canvas-anchored paper texture that modulates dab coverage (the "tooth").
+enum class BrushGrain : uint8_t {
+    None = 0,
+    Paper = 1,   // fine drawing paper
+    Rough = 2,   // coarse, high-contrast tooth (pastel / charcoal paper)
+    Canvas = 3,  // woven canvas
+    Wash = 4,    // low-frequency pigment granulation (watercolour paper)
+};
+constexpr int kBrushGrainCount = 5;
+
+// How the dabs of ONE stroke combine in its coverage mask.
+enum class Accumulation : uint8_t {
+    StrokeMax = 0,  // max: a stroke never darkens itself (Block 3)
+    Buildup = 1,    // over: overlapping dabs build up (airbrush, layered graphite)
+};
+
 struct BrushSettings {
     float diameter = 24.0f;     // canvas px
     float opacity = 1.0f;       // stroke opacity [0, 1] (overlapping dabs never exceed it)
@@ -59,6 +85,24 @@ struct BrushSettings {
     float tiltStrength = 1.0f;        // 0..1: major axis up to 1 + 1.5 * strength at full tilt
     float pressureSmoothing = 0.35f;  // 0 = raw .. 1 = strongest (adaptive, see PressureFilter)
     std::shared_ptr<const PressureLut> pressureCurve;  // null = linear
+
+    // --- Brush model (Block 5).
+    BrushTip tip = BrushTip::Round;
+    float hardness = 1.0f;       // Round tip: 1 = 1 px antialiased edge (Block 3) .. 0 = fully soft
+    float flow = 1.0f;           // coverage of one dab (0.01..1); the stroke ceiling is `opacity`
+    float roundness = 1.0f;      // minor / major axis of the dab (0.05..1)
+    float angle = 0.0f;          // major axis direction, radians from +x (canvas space)
+    bool angleFollowsStroke = false;  // angle is relative to the stroke direction
+    float sizeJitter = 0.0f;     // 0..1: dab size varies by up to +-100 %
+    float scatter = 0.0f;        // 0..2: dab centre displaced by up to scatter * diameter
+    float angleJitter = 0.0f;    // 0..1: dab angle varies by up to +-180 deg
+    float flowJitter = 0.0f;     // 0..1: dab coverage reduced by up to 100 %
+    BrushGrain grain = BrushGrain::None;
+    float grainDepth = 0.0f;     // 0..1: how much of the coverage the texture can remove
+    float grainPressure = 0.0f;  // 0..1: stylus pressure fills the grain (needs pressure)
+    Accumulation accumulation = Accumulation::StrokeMax;
+    float wetEdge = 0.0f;        // 0..1: pigment collects at the stroke edge (watercolour look)
+    uint32_t seed = 0;           // jitter sequence (set per stroke from its first sample)
 
     // Floors that keep a stroke visible whatever the pressure.
     static constexpr float kMinSizeFraction = 0.02f;
@@ -82,7 +126,30 @@ struct BrushSettings {
         s.tiltStrength = std::clamp(finite(tiltStrength, 1.0f), 0.0f, 1.0f);
         s.pressureSmoothing = std::clamp(finite(pressureSmoothing, 0.35f), 0.0f, 1.0f);
         if (s.pressureCurve && !s.pressureCurve->valid()) s.pressureCurve.reset();
+        if (static_cast<int>(tip) < 0 || static_cast<int>(tip) >= kBrushTipCount) s.tip = BrushTip::Round;
+        if (static_cast<int>(grain) < 0 || static_cast<int>(grain) >= kBrushGrainCount) s.grain = BrushGrain::None;
+        if (accumulation != Accumulation::Buildup) s.accumulation = Accumulation::StrokeMax;
+        s.hardness = std::clamp(finite(hardness, 1.0f), 0.0f, 1.0f);
+        s.flow = std::clamp(finite(flow, 1.0f), 0.01f, 1.0f);
+        s.roundness = std::clamp(finite(roundness, 1.0f), 0.05f, 1.0f);
+        s.angle = finite(angle, 0.0f);
+        s.sizeJitter = std::clamp(finite(sizeJitter, 0.0f), 0.0f, 1.0f);
+        s.scatter = std::clamp(finite(scatter, 0.0f), 0.0f, 2.0f);
+        s.angleJitter = std::clamp(finite(angleJitter, 0.0f), 0.0f, 1.0f);
+        s.flowJitter = std::clamp(finite(flowJitter, 0.0f), 0.0f, 1.0f);
+        s.grainDepth = std::clamp(finite(grainDepth, 0.0f), 0.0f, 1.0f);
+        s.grainPressure = std::clamp(finite(grainPressure, 0.0f), 0.0f, 1.0f);
+        s.wetEdge = std::clamp(finite(wetEdge, 0.0f), 0.0f, 1.0f);
         return s;
+    }
+
+    // True when the Block 5 model adds nothing: the Block 3/4 rasteriser
+    // (exactly the same pixels) is used.
+    bool classicRound() const {
+        return tip == BrushTip::Round && hardness >= 1.0f && flow >= 1.0f && roundness >= 1.0f && sizeJitter == 0.0f &&
+               scatter == 0.0f && angleJitter == 0.0f && flowJitter == 0.0f &&
+               (grain == BrushGrain::None || grainDepth == 0.0f) && accumulation == Accumulation::StrokeMax &&
+               wetEdge == 0.0f;
     }
     // Spacing at or below this fraction means "a continuous stroke": the
     // engine then also keeps the edge ripple between dabs (sagitta s^2/8r)
@@ -124,7 +191,8 @@ struct StrokePoint {
 
 struct Dab {
     double x = 0.0, y = 0.0;
-    SampleAxes axes;  // interpolated between the samples around the dab
+    SampleAxes axes;    // interpolated between the samples around the dab
+    float dir = kNoValue;  // stroke direction at the dab (radians, canvas), NaN = unknown
 };
 
 // Linear interpolation of the axes (orientation along the shorter arc).

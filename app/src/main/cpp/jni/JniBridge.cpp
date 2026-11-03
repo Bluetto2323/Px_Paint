@@ -12,10 +12,15 @@
 #include <climits>
 #include <cstdint>
 #include <exception>
+#include <cmath>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "brush/BrushPreview.h"
+#include "brush/BrushTextures.h"
 #include "core/Log.h"
 #include "core/ShutdownReport.h"
 #include "diagnostics/Diagnostics.h"
@@ -87,6 +92,10 @@ JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeCreate(JN
         config.canvasMemoryBudgetBytes = canvasBudgetBytes > 0 ? static_cast<uint64_t>(canvasBudgetBytes) : 0;
         auto engine = std::make_unique<pe::Engine>(config);
         engine->start();
+        // Brush textures (~1.3 MiB, tens of ms) are built off the UI and render
+        // threads; a stroke that needs one before it is ready waits for it once.
+        static std::once_flag prewarm;
+        std::call_once(prewarm, [] { std::thread([] { pe::brush::prewarmBrushTextures(); }).detach(); });
         return reinterpret_cast<jlong>(engine.release());
     });
 }
@@ -359,36 +368,116 @@ JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(
 // params: diameter, opacity, spacing, minSizeFraction, minOpacityFraction, tiltStrength, pressureSmoothing
 // flags : 1 erase, 2 pressure->size, 4 pressure->opacity, 8 tilt shapes the dab
 // curve : PressureLut::kSize floats (pressure response), or null for linear
+namespace {
+// Brush parameters from Kotlin (NativeEngine.Brush.params / flags), see
+// docs/ENGINE_API.md. Shorter arrays (older callers) keep the defaults of
+// the missing fields.
+constexpr jsize kBrushParams = 21;
+
+bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatArray curve, pe::brush::BrushSettings& b) {
+    if (!params) return false;
+    const jsize n = std::min(env->GetArrayLength(params), kBrushParams);
+    if (n < 7) return false;
+    jfloat p[kBrushParams];
+    env->GetFloatArrayRegion(params, 0, n, p);
+    b.diameter = p[0];
+    b.opacity = p[1];
+    b.spacing = p[2];
+    b.minSizeFraction = p[3];
+    b.minOpacityFraction = p[4];
+    b.tiltStrength = p[5];
+    b.pressureSmoothing = p[6];
+    if (n >= kBrushParams) {
+        b.hardness = p[7];
+        b.flow = p[8];
+        b.roundness = p[9];
+        b.angle = static_cast<float>(p[10] * 3.14159265358979323846 / 180.0);
+        b.sizeJitter = p[11];
+        b.scatter = p[12];
+        b.angleJitter = p[13];
+        b.flowJitter = p[14];
+        b.grainDepth = p[15];
+        b.grainPressure = p[16];
+        b.wetEdge = p[17];
+        b.tip = static_cast<pe::brush::BrushTip>(std::clamp(static_cast<int>(p[18]), 0, pe::brush::kBrushTipCount - 1));
+        b.grain = static_cast<pe::brush::BrushGrain>(std::clamp(static_cast<int>(p[19]), 0, pe::brush::kBrushGrainCount - 1));
+        b.accumulation = p[20] >= 1.0f ? pe::brush::Accumulation::Buildup : pe::brush::Accumulation::StrokeMax;
+    }
+    b.argb = static_cast<uint32_t>(argb);
+    b.erase = (flags & 1) != 0;
+    b.pressureSize = (flags & 2) != 0;
+    b.pressureOpacity = (flags & 4) != 0;
+    b.tiltShape = (flags & 8) != 0;
+    b.angleFollowsStroke = (flags & 16) != 0;
+    if (curve && env->GetArrayLength(curve) == static_cast<jsize>(pe::brush::PressureLut::kSize)) {
+        auto lut = std::make_shared<pe::brush::PressureLut>();
+        env->GetFloatArrayRegion(curve, 0, static_cast<jsize>(pe::brush::PressureLut::kSize), lut->lut.data());
+        b.pressureCurve = lut;  // validated by BrushSettings::sanitized()
+    }
+    return true;
+}
+}  // namespace
+
 JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeBegin(
     JNIEnv* env, jclass, jlong handle, jfloatArray sample, jfloatArray params, jint argb, jint flags, jfloatArray curve) {
     guard("nativeStrokeBegin", 0, [&] {
-        if (!sample || !params || env->GetArrayLength(sample) < static_cast<jsize>(pe::Engine::kSampleFloats) ||
-            env->GetArrayLength(params) < 7)
-            return 0;
+        if (!sample || env->GetArrayLength(sample) < static_cast<jsize>(pe::Engine::kSampleFloats)) return 0;
         jfloat s[pe::Engine::kSampleFloats];
-        jfloat p[7];
         env->GetFloatArrayRegion(sample, 0, static_cast<jsize>(pe::Engine::kSampleFloats), s);
-        env->GetFloatArrayRegion(params, 0, 7, p);
         pe::brush::BrushSettings b;
-        b.diameter = p[0];
-        b.opacity = p[1];
-        b.spacing = p[2];
-        b.minSizeFraction = p[3];
-        b.minOpacityFraction = p[4];
-        b.tiltStrength = p[5];
-        b.pressureSmoothing = p[6];
-        b.argb = static_cast<uint32_t>(argb);
-        b.erase = (flags & 1) != 0;
-        b.pressureSize = (flags & 2) != 0;
-        b.pressureOpacity = (flags & 4) != 0;
-        b.tiltShape = (flags & 8) != 0;
-        if (curve && env->GetArrayLength(curve) == static_cast<jsize>(pe::brush::PressureLut::kSize)) {
-            auto lut = std::make_shared<pe::brush::PressureLut>();
-            env->GetFloatArrayRegion(curve, 0, static_cast<jsize>(pe::brush::PressureLut::kSize), lut->lut.data());
-            b.pressureCurve = lut;  // validated by BrushSettings::sanitized()
-        }
+        if (!decodeBrush(env, params, argb, flags, curve, b)) return 0;
         fromHandle(handle)->strokeBegin(b, s);
         return 0;
+    });
+}
+
+// Brush preview (no engine needed, any thread): `strokes` = [n, then per
+// stroke: count, diameter (<= 0: brush), opacity (< 0: brush), then count
+// samples of 6 floats in preview pixels]. Returns width * height ARGB or null.
+JNIEXPORT jintArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeRenderBrushPreview(
+    JNIEnv* env, jclass, jfloatArray params, jint argb, jint flags, jfloatArray curve, jint width, jint height,
+    jfloatArray strokes, jint background) {
+    return guard("nativeRenderBrushPreview", static_cast<jintArray>(nullptr), [&]() -> jintArray {
+        if (!strokes || width <= 0 || height <= 0 || width > pe::brush::kMaxPreviewSide || height > pe::brush::kMaxPreviewSide)
+            return nullptr;
+        pe::brush::BrushSettings b;
+        if (!decodeBrush(env, params, argb, flags, curve, b)) return nullptr;
+        const jsize len = env->GetArrayLength(strokes);
+        std::vector<jfloat> f(static_cast<size_t>(len));
+        env->GetFloatArrayRegion(strokes, 0, len, f.data());
+        std::vector<pe::brush::StrokePoint> pts;
+        std::vector<pe::brush::PreviewStroke> list;
+        std::vector<size_t> starts;
+        size_t i = 0;
+        const size_t n = len > 0 ? static_cast<size_t>(std::max(0.0f, f[0])) : 0;
+        i = 1;
+        pts.reserve(static_cast<size_t>(len) / 6);
+        for (size_t k = 0; k < n && i + 3 <= f.size(); ++k) {
+            const size_t count = static_cast<size_t>(std::max(0.0f, f[i]));
+            pe::brush::PreviewStroke ps;
+            ps.diameter = f[i + 1];
+            ps.opacity = f[i + 2];
+            i += 3;
+            if (i + count * 6 > f.size()) break;
+            starts.push_back(pts.size());
+            for (size_t j = 0; j < count; ++j, i += 6) {
+                pe::brush::StrokePoint p{f[i], f[i + 1], f[i + 2]};
+                p.axes.pressure = std::isfinite(f[i + 3]) ? f[i + 3] : pe::brush::kNoValue;
+                p.axes.tilt = std::isfinite(f[i + 4]) ? f[i + 4] : pe::brush::kNoValue;
+                p.axes.orientation = std::isfinite(f[i + 5]) ? f[i + 5] : pe::brush::kNoValue;
+                pts.push_back(p);
+            }
+            ps.count = count;
+            list.push_back(ps);
+        }
+        for (size_t k = 0; k < list.size(); ++k) list[k].points = pts.data() + starts[k];
+        std::vector<uint32_t> out(static_cast<size_t>(width) * height);
+        if (!pe::brush::renderBrushPreview(b, list.data(), list.size(), width, height, static_cast<uint32_t>(background),
+                                           out.data()))
+            return nullptr;
+        jintArray result = env->NewIntArray(width * height);
+        if (result) env->SetIntArrayRegion(result, 0, width * height, reinterpret_cast<const jint*>(out.data()));
+        return result;
     });
 }
 

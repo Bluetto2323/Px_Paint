@@ -1,0 +1,213 @@
+# PxPaint built-in brush presets (Block 5).
+#
+# Data, not code: the app parses this file (core/BrushPresets.kt), the engine
+# tests parse it too (tools/host_test), so what is tested is what ships.
+# Format and keys: docs/BRUSHES.md. Unknown keys are ignored, missing keys
+# take their defaults, every value is clamped to its valid range.
+pxbrushes 1
+
+[preset builtin.round]
+name = Basic Round
+name.it = Tondo base
+category = painting
+tags = round soft general paint
+tip = round
+size = 24
+opacity = 1
+spacing = 0.08
+hardness = 0.7
+pressure_size = true
+min_size = 0.25
+
+[preset builtin.hard]
+# Exactly the Block 3/4 brush (classic rasteriser, same pixels).
+name = Hard Brush
+name.it = Pennello duro
+category = painting
+tags = round hard solid fill classic
+tip = round
+size = 32
+opacity = 1
+spacing = 0.08
+hardness = 1
+pressure_size = true
+min_size = 0.25
+
+[preset builtin.airbrush]
+name = Soft Airbrush
+name.it = Aerografo morbido
+category = airbrush
+tags = soft spray gradient shading glow
+tip = round
+size = 120
+opacity = 1
+flow = 0.12
+spacing = 0.06
+hardness = 0
+accumulation = buildup
+pressure_size = false
+pressure_opacity = true
+min_opacity = 0.1
+
+[preset builtin.pencil]
+name = Pencil
+name.it = Matita
+category = sketching
+tags = sketch line draw paper grain
+tip = round
+size = 5
+opacity = 0.9
+spacing = 0.08
+hardness = 0.85
+grain = paper
+grain_depth = 0.55
+grain_pressure = 0.5
+pressure_size = true
+min_size = 0.6
+pressure_opacity = true
+min_opacity = 0.25
+
+[preset builtin.graphite]
+name = Graphite Pencil
+name.it = Matita grafite
+category = sketching
+tags = sketch shading soft lead layer grain
+tip = round
+size = 16
+opacity = 0.8
+flow = 0.3
+spacing = 0.1
+hardness = 0.45
+roundness = 0.55
+angle = 90
+angle_mode = stroke
+accumulation = buildup
+grain = paper
+grain_depth = 0.8
+grain_pressure = 0.6
+pressure_size = true
+min_size = 0.5
+pressure_opacity = true
+min_opacity = 0.15
+
+[preset builtin.ink]
+name = Ink Pen
+name.it = Penna a inchiostro
+category = inking
+tags = ink nib calligraphy line comic
+tip = round
+size = 10
+opacity = 1
+spacing = 0.05
+hardness = 1
+roundness = 0.4
+angle = 35
+angle_mode = fixed
+pressure_size = true
+min_size = 0.1
+
+[preset builtin.fineliner]
+name = Fine Liner
+name.it = Fineliner
+category = inking
+tags = ink technical line constant outline
+tip = round
+size = 3
+opacity = 1
+spacing = 0.04
+hardness = 1
+pressure_size = false
+pressure_opacity = false
+
+[preset builtin.marker]
+name = Marker
+name.it = Pennarello
+category = inking
+tags = felt chisel transparent layout
+tip = round
+size = 28
+opacity = 0.55
+spacing = 0.05
+hardness = 0.85
+roundness = 0.6
+angle = 30
+angle_mode = fixed
+wet_edge = 0.25
+pressure_size = false
+pressure_opacity = false
+
+[preset builtin.charcoal]
+name = Charcoal
+name.it = Carboncino
+category = dry
+tags = charcoal smudge dark rough grain
+tip = charcoal
+size = 36
+opacity = 1
+flow = 0.55
+spacing = 0.12
+angle_jitter = 1
+size_jitter = 0.15
+scatter = 0.04
+accumulation = buildup
+grain = rough
+grain_depth = 0.6
+grain_pressure = 0.5
+pressure_size = true
+min_size = 0.5
+pressure_opacity = true
+min_opacity = 0.2
+
+[preset builtin.chalk]
+name = Chalk
+name.it = Gessetto
+category = dry
+tags = chalk pastel dry rough grain
+tip = chalk
+size = 44
+opacity = 1
+spacing = 0.18
+angle_jitter = 1
+size_jitter = 0.1
+grain = rough
+grain_depth = 0.7
+grain_pressure = 0.6
+pressure_size = false
+pressure_opacity = true
+min_opacity = 0.3
+
+[preset builtin.textured]
+name = Textured Brush
+name.it = Pennello materico
+category = painting
+tags = bristle dry brush streak canvas oil
+tip = bristle
+size = 48
+opacity = 1
+spacing = 0.03
+angle = 0
+angle_mode = stroke
+size_jitter = 0.04
+grain = canvas
+grain_depth = 0.3
+pressure_size = true
+min_size = 0.4
+
+[preset builtin.watercolor]
+name = Watercolor
+name.it = Acquerello
+category = painting
+tags = watercolour wash wet edge granulation
+tip = round
+size = 64
+opacity = 0.6
+spacing = 0.06
+hardness = 0.5
+size_jitter = 0.06
+wet_edge = 0.9
+grain = wash
+grain_depth = 0.25
+pressure_size = true
+min_size = 0.6
+pressure_opacity = true
+min_opacity = 0.3

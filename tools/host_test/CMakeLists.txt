@@ -37,7 +37,9 @@ endif()
 
 # Pure-CPU brush engine tests (stroke path, dabs, compositing, raster store).
 add_executable(pe_brush_test brush_test.cpp ${PE_BRUSH_CORE_SOURCES})
-target_include_directories(pe_brush_test PRIVATE ${PE_CPP_DIR})
+target_include_directories(pe_brush_test PRIVATE ${PE_CPP_DIR} ${CMAKE_CURRENT_LIST_DIR})
+target_compile_definitions(pe_brush_test PRIVATE
+  PE_BRUSH_ASSET="${CMAKE_CURRENT_LIST_DIR}/../../app/src/main/assets/brushes/builtin.pxb")
 target_compile_options(pe_brush_test PRIVATE ${PE_WARNING_FLAGS} -Werror -O2)
 find_package(Threads REQUIRED)
 target_link_libraries(pe_brush_test PRIVATE Threads::Threads)

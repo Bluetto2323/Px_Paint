@@ -1,6 +1,7 @@
 #include "brush/BrushEngine.h"
 
 #include <algorithm>
+#include <cstring>
 
 #include "core/Time.h"
 
@@ -100,7 +101,8 @@ bool BrushEngine::process(canvas::RasterStore& store) {
                     st_.strokesCommitted++;
                 }
                 {
-                    const BrushSettings& bs = workSettings_[settingsIndex++];
+                    BrushSettings bs = workSettings_[settingsIndex++];
+                    bs.seed = strokeSeed(e.p);
                     strokeHasPressure_ = std::isfinite(e.p.axes.pressure);
                     strokeHasTilt_ = std::isfinite(e.p.axes.tilt) && std::isfinite(e.p.axes.orientation);
                     pressure_.reset(strokeHasPressure_ ? bs.pressureSmoothing : 0.0f);
@@ -166,6 +168,23 @@ bool BrushEngine::process(canvas::RasterStore& store) {
     st_.lastProcessMs = static_cast<double>(nowNs() - t0) / 1e6;
     st_.maxProcessMs = std::max(st_.maxProcessMs, st_.lastProcessMs);
     return true;
+}
+
+uint32_t BrushEngine::strokeSeed(const StrokePoint& p) {
+    // From the first sample: replaying the same input gives the same jitter.
+    auto bits = [](double v) {
+        const float f = static_cast<float>(v);
+        uint32_t u;
+        std::memcpy(&u, &f, sizeof u);
+        return u;
+    };
+    uint32_t h = 0x811C9DC5u;
+    for (uint32_t v : {bits(p.x), bits(p.y), bits(p.t)}) {
+        h ^= v;
+        h *= 0x01000193u;
+        h ^= h >> 15;
+    }
+    return h;
 }
 
 StrokePoint BrushEngine::prepare(const StrokePoint& in) {

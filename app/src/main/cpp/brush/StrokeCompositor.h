@@ -21,6 +21,14 @@
 //
 // The provisional tail of the path (see StrokePath) lives in a second mask
 // that is cleared and redrawn on every update.
+//
+// Block 5 brush model (BrushSettings::classicRound() == false): dabs go
+// through rasterGeneric() - hardness falloff, roundness / angle, procedural
+// tip stamps, canvas grain, per-dab jitter (deterministic: hash of the stroke
+// seed and the dab index, so a redrawn tail and its committed dabs match),
+// and "buildup" accumulation (mask = m + v * (1 - m)). Compositing can map
+// the mask through a wet-edge transfer curve (watercolour rim). Classic
+// round brushes keep the Block 3/4 rasteriser: same pixels, same cost.
 #pragma once
 
 #include <cstdint>
@@ -28,6 +36,7 @@
 #include <vector>
 
 #include "brush/BrushDynamics.h"
+#include "brush/BrushTextures.h"
 #include "brush/BrushTypes.h"
 #include "canvas/RasterStore.h"
 
@@ -74,6 +83,9 @@ public:
     bool active() const { return active_; }
     const Stats& stats() const { return stats_; }
     const BrushSettings& settings() const { return settings_; }
+    bool classic() const { return classic_; }
+    // Wet-edge transfer at mask value m (0..1), exposed for tests.
+    static double wetEdgeTransfer(double m, double wetEdge);
 
     static constexpr size_t kMaxPooledTiles = 48;  // ~24 MiB kept for the next stroke
 
@@ -89,8 +101,9 @@ private:
         canvas::RectI tailRect;                 // canvas coords covered by the tail mask
     };
     StrokeTile* tileFor(canvas::RasterStore& store, int32_t tx, int32_t ty, bool create);
-    void rasterDab(canvas::RasterStore& store, const Dab& d, bool toTail);
+    void rasterDab(canvas::RasterStore& store, const Dab& d, bool toTail, uint32_t index);
     void rasterEllipse(canvas::RasterStore& store, const Dab& d, const DabGeometry& g, bool toTail);
+    void rasterGeneric(canvas::RasterStore& store, const Dab& d, bool toTail, uint32_t index);
     void composite(canvas::RasterStore& store, StrokeTile& st);
     void releaseTiles();
     static void grow(canvas::RectI& r, const canvas::RectI& add);
@@ -98,6 +111,13 @@ private:
     bool active_ = false;
     BrushSettings settings_;
     BrushDynamics dyn_;
+    bool classic_ = true;                       // Block 3/4 rasteriser
+    bool buildup_ = false;
+    const Texture8* tipTex_ = nullptr;          // stamp tips
+    const Texture8* grainTex_ = nullptr;        // canvas grain
+    std::vector<uint16_t> wetLut_;              // mask -> coverage (kWetLutSize + 1), empty = identity
+    uint32_t dabIndex_ = 0;                     // committed dabs of the stroke (jitter sequence)
+    static constexpr int kWetLutBits = 10;
     // Paint constants (premultiplied colour * opacity, 0..255 scale).
     float paintA_ = 0.0f;                       // opacity * colour alpha
     float paintR_ = 0.0f, paintG_ = 0.0f, paintB_ = 0.0f;  // straight colour 0..255

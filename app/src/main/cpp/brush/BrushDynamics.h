@@ -21,6 +21,7 @@
 // simulated).
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 #include "brush/BrushTypes.h"
@@ -64,9 +65,19 @@ public:
     // Pressure response c in [0, 1] (1 when the stroke has no pressure).
     double response(const SampleAxes& a) const;
     double diameter(const SampleAxes& a) const;
-    double spacingPx(const SampleAxes& a) const { return settings_.spacingPx(diameter(a)); }
+    // Dab distance: from the smaller dab dimension (a flat nib needs the
+    // spacing of its thin side; roundness 1 = the Block 3/4 spacing).
+    double spacingPx(const SampleAxes& a) const {
+        const double d = diameter(a);
+        return settings_.spacingPx(settings_.roundness < 1.0f ? d * std::max(0.2f, settings_.roundness) : d);
+    }
     DabGeometry geometry(const SampleAxes& a) const;
     bool usesPressure() const { return hasPressure_ && (settings_.pressureSize || settings_.pressureOpacity); }
+    bool hasPressure() const { return hasPressure_; }
+    // The dab is oriented by the stroke direction (unknown at the first sample).
+    bool followsStroke() const {
+        return settings_.angleFollowsStroke && (settings_.tip != BrushTip::Round || settings_.roundness < 1.0f);
+    }
     bool usesTilt() const { return hasTilt_ && settings_.tiltShape && settings_.tiltStrength > 0.0f; }
 
 private:

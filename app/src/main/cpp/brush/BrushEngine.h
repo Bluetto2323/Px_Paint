@@ -99,6 +99,10 @@ private:
     // Prepares a sample for the active stroke: smoothed pressure; axes the
     // stroke does not use are cleared (no mixing finger / stylus data).
     StrokePoint prepare(const StrokePoint& p);
+public:
+    // Jitter seed of a stroke, from its first sample (deterministic replay).
+    static uint32_t strokeSeed(const StrokePoint& p);
+private:
     std::vector<Dab> dabs_;
     StrokePath path_;
     StrokeCompositor comp_;

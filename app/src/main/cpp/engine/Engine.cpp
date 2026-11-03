@@ -343,12 +343,17 @@ brush::StrokePoint toCanvas(const canvas::Viewport& view, const float* f) {
 void Engine::strokeBegin(const brush::BrushSettings& settings, const float* sample) {
     if (!sample) return;
     brush::StrokePoint p;
+    brush::BrushSettings s = settings;
     {
         std::lock_guard<std::mutex> lock(viewMutex_);
         if (!view_.valid()) return;
         p = toCanvas(view_, sample);
+        // A fixed nib angle is held in the hand: screen space, like the
+        // stylus orientation, so it does not turn with the canvas view.
+        // (An angle that follows the stroke is relative to its direction.)
+        if (!s.angleFollowsStroke) s.angle = static_cast<float>(s.angle - view_.rotation());
     }
-    doc_.strokeBegin(settings, p);
+    doc_.strokeBegin(s, p);
     queue_.wake();
 }
 

@@ -56,7 +56,10 @@ void StrokePath::begin(const StrokePoint& first, double spacingPx, const BrushDy
     walker_.carry = 0.0;
     walker_.lastDab = p;
     walker_.lastAxes = first.axes;
-    committed_.push_back({p.x, p.y, first.axes});
+    // A dab oriented by the stroke waits for a direction (a tap still gets
+    // its dot in finish()); every other brush starts with a dab right away.
+    firstPending_ = dyn_ && dyn_->followsStroke();
+    if (!firstPending_) committed_.push_back({p.x, p.y, first.axes});
 }
 
 bool StrokePath::add(const StrokePoint& s) {
@@ -91,11 +94,13 @@ void StrokePath::finish() {
         walkSegment(p0, p1, p2, mirror(p2, p1), ax(0), walker_, committed_);
         // End exactly on the last sample.
         if ((walker_.lastDab - p2).length() > 1e-6) {
-            committed_.push_back({p2.x, p2.y, ax(0)});
+            committed_.push_back({p2.x, p2.y, ax(0), walker_.dir});
             walker_.lastDab = p2;
             walker_.lastAxes = ax(0);
             walker_.carry = 0.0;
         }
+    } else if (firstPending_) {
+        committed_.push_back({pt(0).x, pt(0).y, ax(0)});
     } else if (dyn_ && dyn_->usesPressure()) {
         // A tap: the dot takes the pressure reached before lifting.
         if (!committed_.empty()) committed_.back().axes = ax(0);
@@ -115,7 +120,7 @@ void StrokePath::provisional(std::vector<Dab>& out) const {
     const Vec2 p1 = pt(1), p2 = pt(0);
     const Vec2 p0 = count_ >= 3 ? pt(2) : mirror(p1, p2);
     walkSegment(p0, p1, p2, mirror(p2, p1), ax(0), w, out);
-    if ((w.lastDab - p2).length() > 1e-6) out.push_back({p2.x, p2.y, ax(0)});  // tip under the finger
+    if ((w.lastDab - p2).length() > 1e-6) out.push_back({p2.x, p2.y, ax(0), w.dir});  // tip under the finger
 }
 
 void StrokePath::walkSegment(Vec2 p0, Vec2 p1, Vec2 p2, Vec2 p3, const SampleAxes& a2, Walker& w,
@@ -141,13 +146,14 @@ void StrokePath::walkLine(Vec2 to, const SampleAxes& toAxes, Walker& w, std::vec
         w.axes = toAxes;
         return;
     }
+    w.dir = static_cast<float>(std::atan2(d.y, d.x));
     double s = spacingAt(w.lastAxes) - w.carry;  // distance along this piece to the next dab
     double last = -w.carry;                       // position of the last dab on this piece
     while (s <= len) {
         const double f = s / len;
         const Vec2 q = w.pos + d * f;
         const SampleAxes a = lerpAxes(w.axes, toAxes, f);
-        out.push_back({q.x, q.y, a});
+        out.push_back({q.x, q.y, a, w.dir});
         w.lastDab = q;
         w.lastAxes = a;
         last = s;
