@@ -64,4 +64,15 @@ set(PE_BRUSH_CORE_SOURCES
     ${PE_CPP_DIR}/brush/BrushEngine.cpp
 )
 
+# Per-pixel paths, always optimised (also in debug builds): brush
+# rasterisation, compositing, raster store, tile copies.
+set(PE_HOT_SOURCES
+    ${PE_CPP_DIR}/brush/StrokePath.cpp
+    ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
+    ${PE_CPP_DIR}/brush/BrushEngine.cpp
+    ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
+    ${PE_CPP_DIR}/engine/CanvasDocument.cpp
+)
+
 set(PE_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter)

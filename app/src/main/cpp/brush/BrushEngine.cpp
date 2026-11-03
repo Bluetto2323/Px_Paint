@@ -14,6 +14,7 @@ BrushEngine::BrushEngine() {
 
 void BrushEngine::push(const Event& e) {
     std::lock_guard<std::mutex> lock(inputMutex_);
+    if (queue_.empty()) queuedSinceNs_ = nowNs();
     queue_.push_back(e);
     if (e.type == Ev::Begin || e.type == Ev::Sample) received_++;
     pending_.store(true, std::memory_order_release);
@@ -30,6 +31,7 @@ void BrushEngine::begin(const BrushSettings& settings, const StrokePoint& first)
 void BrushEngine::addSamples(const StrokePoint* points, size_t count) {
     if (count == 0) return;
     std::lock_guard<std::mutex> lock(inputMutex_);
+    if (queue_.empty()) queuedSinceNs_ = nowNs();
     for (size_t i = 0; i < count; ++i) {
         Event e;
         e.type = Ev::Sample;
@@ -69,6 +71,8 @@ bool BrushEngine::process(canvas::RasterStore& store) {
         work_.clear();
         work_.swap(queue_);  // both keep their capacity: no allocation once warmed up
         pending_.store(false, std::memory_order_release);
+        if (!work_.empty() && (consumedQueuedNs_ == 0 || queuedSinceNs_ < consumedQueuedNs_))
+            consumedQueuedNs_ = queuedSinceNs_;
         st_.samplesReceived = received_;
     }
     if (work_.empty()) return false;

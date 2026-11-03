@@ -1155,6 +1155,70 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
         for (const auto& p : pe::log::recentProblems(10)) std::printf("    %s\n", p.c_str());
     return 0;
 }
+
+// ================================================================ suite: perf
+// Same drawing scenario as the Block 2 baseline measurement (see
+// docs/BLOCK3_REPORT.md): 40 fast strokes, a touch batch of 2 samples every
+// 4 ms (240 Hz), 13 px per sample, brushes alternating 48 / 6 px, zoom 1.
+int suitePerf(const std::string& pref, const std::string& expected, bool noFallback) {
+    const BackendType want = expected == "vulkan" ? BackendType::Vulkan : BackendType::OpenGLES;
+    std::shared_ptr<WindowProbe> probe;
+    pe::EngineConfig cfg = makeConfig(pref, noFallback, RenderMode::OnDemand);
+    cfg.scene = pe::SceneMode::Canvas;
+    cfg.enableValidation = false;
+    pe::Engine engine(cfg);
+    engine.start();
+    constexpr uint32_t kW = 1080, kH = 1600;  // phone-like surface
+    engine.surfaceCreated(trackedWindow(kW, kH, probe));
+    engine.surfaceChanged(kW, kH);
+    check(waitRunning(engine) && engine.status().backend == want, "engine running on expected backend");
+    check(engine.createCanvas({2480, 3508, 0xFFFFFFFFu}).empty(), "A4 canvas (tiled)");
+    engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady; }, 10s);
+    double zf[] = {1.0, kW / 2.0, kH / 2.0};
+    engine.viewportOp(pe::ViewOp::SetZoomAt, zf, 3);
+    const auto s0 = engine.status();
+    const int64_t t0 = pe::nowNs();
+    std::vector<double> lags;
+    for (int sidx = 0; sidx < 40; ++sidx) {
+        const double y = 200 + (sidx % 24) * 50;
+        std::vector<pe::canvas::Vec2> pts;
+        for (int i = 0; i <= 60; ++i) pts.push_back({100 + i * 13.0, y + 25 * std::sin(i * 0.3)});
+        const float size = sidx % 2 ? 48.0f : 6.0f;
+        engine.strokeBegin(brushOf(size, 1.0f, 0xFF203060u), pts[0].x, pts[0].y, 0);
+        for (size_t i = 1; i < pts.size(); i += 2) {
+            float xyt[6];
+            size_t n = 0;
+            for (size_t k = i; k < std::min(pts.size(), i + 2); ++k, ++n) {
+                xyt[n * 3] = static_cast<float>(pts[k].x);
+                xyt[n * 3 + 1] = static_cast<float>(pts[k].y);
+                xyt[n * 3 + 2] = static_cast<float>(k * 4);
+            }
+            engine.strokeSamples(xyt, n);
+            std::this_thread::sleep_for(4ms);
+        }
+        engine.strokeEnd();
+        const int64_t tEnd = pe::nowNs();
+        const uint64_t framesAtEnd = frames(engine);
+        brushIdle(engine, 10s);
+        engine.waitForStatus([&](const EngineStatus& s) { return s.frames.framesPresented > framesAtEnd; }, 2s);
+        lags.push_back(msSince(tEnd));
+    }
+    const double total = msSince(t0);
+    const auto s1 = engine.status();
+    std::sort(lags.begin(), lags.end());
+    std::printf("    PERF %s: input->present avg %.2f ms, max %.2f ms (%llu frames with input); 40 strokes in %.0f ms "
+                "(4.8 s of input pacing), %llu frames, frame CPU work avg %.2f ms; end of stroke -> idle: median %.1f ms, "
+                "worst %.1f ms; %llu uploads, %.1f MiB uploaded\n",
+                expected.c_str(), s1.canvas.inputLatencyAvgMs, s1.canvas.inputLatencyMaxMs,
+                static_cast<unsigned long long>(s1.canvas.inputLatencyFrames), total,
+                static_cast<unsigned long long>(s1.frames.framesPresented - s0.frames.framesPresented),
+                s1.frames.steadyAvgRecordMs + s1.frames.steadyAvgSubmitMs, lags[lags.size() / 2], lags.back(),
+                static_cast<unsigned long long>(s1.canvas.textureUploads - s0.canvas.textureUploads),
+                (s1.canvas.bytesUploaded - s0.canvas.bytesUploaded) / 1048576.0);
+    check(s1.canvas.brushSamplesProcessed == s1.canvas.brushSamplesReceived, "every sample processed");
+    engine.shutdown();
+    return 0;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1187,6 +1251,8 @@ int main(int argc, char** argv) {
         suiteCanvas(pref, expected, noFallback);
     else if (suite == "brush")
         suiteBrush(pref, expected, noFallback);
+    else if (suite == "perf")
+        suitePerf(pref, expected, noFallback);
     else {
         std::fprintf(stderr, "unknown suite %s\n", suite.c_str());
         return 2;

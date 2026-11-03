@@ -787,6 +787,7 @@ void Engine::renderFrame() {
         status = gfx::FrameStatus::DeviceLost;
     }
     if (status == gfx::FrameStatus::Ok) {
+        if (sceneMode_ == SceneMode::Canvas) canvas_.onFramePresented(tPresented);
         scheduler_.endFramePresented(tPresented, nsToMs(tAcquired - tBegin), nsToMs(tRecorded - tAcquired),
                                      nsToMs(tPresented - tRecorded));
         consecutiveErrors_ = 0;

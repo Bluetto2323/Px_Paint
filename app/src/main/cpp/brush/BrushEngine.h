@@ -60,6 +60,14 @@ public:
     // --- Processing side: caller holds the store's lock --------------------
     // Consumes every queued event. Returns true if the store changed.
     bool process(canvas::RasterStore& store);
+    // Time (nowNs) the oldest event consumed by the last process() call was
+    // queued, then 0 until another call consumes input. Input-to-display
+    // latency is measured from it when that frame is presented.
+    int64_t takeConsumedInputTime() {
+        const int64_t t = consumedQueuedNs_;
+        consumedQueuedNs_ = 0;
+        return t;
+    }
     // The canvas was replaced/cleared: forget any stroke without touching it
     // (also drops queued events that belonged to the old canvas).
     void discard();
@@ -78,6 +86,8 @@ private:
     mutable std::mutex inputMutex_;
     std::vector<Event> queue_;       // guarded by inputMutex_
     uint64_t received_ = 0;          // guarded by inputMutex_
+    int64_t queuedSinceNs_ = 0;      // guarded by inputMutex_: oldest event in queue_
+    int64_t consumedQueuedNs_ = 0;   // processing side
     std::atomic<bool> pending_{false};
 
     // Processing state (caller-synchronised)

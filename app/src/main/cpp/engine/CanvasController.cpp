@@ -155,6 +155,7 @@ bool CanvasController::render(gfx::GraphicsDevice& device, gfx::RenderingContext
         if (!dirty_.empty() && !surface_.upload(store, dirty_)) needFullUpload_ = true;
     });
     if (!current && haveSurface) surface_.destroy();  // document replaced: rebuilt next frame
+    if (const int64_t t = doc_.takeConsumedInputTime()) frameInputNs_ = frameInputNs_ ? std::min(frameInputNs_, t) : t;
 
     if (testStep_ >= 0) {
         using canvas::CanvasSelfTest;
@@ -268,6 +269,16 @@ void CanvasController::finishSelfTest() {
         PE_LOGI(kTag, "Canvas self-test PASSED");
 }
 
+void CanvasController::onFramePresented(int64_t nowNs) {
+    if (!frameInputNs_) return;
+    latencyLastMs_ = static_cast<double>(nowNs - frameInputNs_) / 1e6;
+    frameInputNs_ = 0;
+    latencyMaxMs_ = std::max(latencyMaxMs_, latencyLastMs_);
+    // Exponential average over roughly the last 60 frames with input.
+    latencyAvgMs_ = latencySamples_ == 0 ? latencyLastMs_ : latencyAvgMs_ + (latencyLastMs_ - latencyAvgMs_) / 60.0;
+    latencySamples_++;
+}
+
 void CanvasController::fillStatus(CanvasStatus& c) const {
     c.open = open_;
     c.gpuReady = surface_.valid();
@@ -299,6 +310,10 @@ void CanvasController::fillStatus(CanvasStatus& c) const {
     c.brushStrokeTiles = d.brush.strokeTiles;
     c.brushLastMs = d.brush.lastProcessMs;
     c.brushMaxMs = d.brush.maxProcessMs;
+    c.inputLatencyLastMs = latencyLastMs_;
+    c.inputLatencyAvgMs = latencyAvgMs_;
+    c.inputLatencyMaxMs = latencyMaxMs_;
+    c.inputLatencyFrames = latencySamples_;
     c.tilesVisible = frame_.tilesVisible;
     c.piecesDrawn = frame_.piecesDrawn;
     c.drawCalls = frame_.drawCalls;

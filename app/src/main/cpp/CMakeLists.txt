@@ -26,13 +26,7 @@ target_link_libraries(pe_engine PUBLIC EGL GLESv3 log dl)
 # always optimised, also in the debug APK: at -O0 they would be several
 # times slower and the device test would measure the build type, not the
 # engine. Everything else keeps the build type's flags.
-set_source_files_properties(
-    ${PE_CPP_DIR}/brush/StrokePath.cpp
-    ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
-    ${PE_CPP_DIR}/brush/BrushEngine.cpp
-    ${PE_CPP_DIR}/canvas/RasterStore.cpp
-    ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
-    ${PE_CPP_DIR}/engine/CanvasDocument.cpp
+set_source_files_properties(${PE_HOT_SOURCES}
     PROPERTIES COMPILE_OPTIONS "-O2")
 
 # ---------------------------------------------------------------------------

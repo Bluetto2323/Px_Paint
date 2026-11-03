@@ -180,6 +180,11 @@ std::string statusSummary(const EngineStatus& s) {
                           static_cast<unsigned long long>(c.brushSamplesReceived),
                           static_cast<unsigned long long>(c.brushDabs), c.brushLastMs, c.brushMaxMs);
             o << buf;
+            if (c.inputLatencyFrames) {
+                std::snprintf(buf, sizeof(buf), "Latency   input->present avg %.1f ms, last %.1f, max %.1f\n",
+                              c.inputLatencyAvgMs, c.inputLatencyLastMs, c.inputLatencyMaxMs);
+                o << buf;
+            }
         } else {
             o << "Canvas    none open\n";
         }
@@ -302,6 +307,10 @@ std::string statusJson(const EngineStatus& s) {
     num("brushStrokeTiles", c.brushStrokeTiles);
     num("brushLastMs", c.brushLastMs);
     num("brushMaxMs", c.brushMaxMs);
+    num("inputLatencyLastMs", c.inputLatencyLastMs);
+    num("inputLatencyAvgMs", c.inputLatencyAvgMs);
+    num("inputLatencyMaxMs", c.inputLatencyMaxMs);
+    num("inputLatencyFrames", static_cast<double>(c.inputLatencyFrames));
     num("canvasTilesVisible", c.tilesVisible);
     num("canvasPiecesDrawn", c.piecesDrawn);
     num("canvasDrawCalls", c.drawCalls);

@@ -76,6 +76,10 @@ public:
     void retrySelfTestStep() { testRendered_ = false; }
     void abortSelfTest(const char* why);
 
+    // The frame rendered by the last render() call was presented at `nowNs`:
+    // closes the input-to-display latency measurement of its stroke input.
+    void onFramePresented(int64_t nowNs);
+
     void fillStatus(CanvasStatus& out) const;
 
 private:
@@ -89,6 +93,10 @@ private:
     uint64_t surfaceGen_ = ~0ull;  // document generation the GPU copy belongs to
     bool needFullUpload_ = true;
     std::vector<canvas::RectI> dirty_;
+    // Input -> presented latency of brush input (render thread).
+    int64_t frameInputNs_ = 0;
+    double latencyLastMs_ = 0.0, latencyMaxMs_ = 0.0, latencyAvgMs_ = 0.0;
+    uint64_t latencySamples_ = 0;
     canvas::CanvasAppearance look_;
     canvas::CanvasSurface surface_;
     canvas::CanvasRenderer renderer_;

@@ -53,7 +53,7 @@ run() { local name=$1 icd=$2; shift 2
     grep -E "\[FAIL\]|state=|attempt |E/" "$BUILD/$name.log" | head -25 | sed 's/^/      | /'
   fi
   # Measurements (brush / canvas suites) straight into the job log.
-  case "$name" in brush_*|canvas_*) grep -E "^    " "$BUILD/$name.log" | grep -vE "^    \[" | head -14 | sed 's/^/      /' || true;; esac; }
+  case "$name" in brush_*|canvas_*|perf_*) grep -E "^    " "$BUILD/$name.log" | grep -vE "^    \[" | head -14 | sed 's/^/      /' || true;; esac; }
 # backend selection / fallback matrix
 run basic_gles             "$ICD"               gles   gles   --suite basic
 run basic_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite basic
@@ -74,4 +74,7 @@ run canvas_vulkan          "$ICD"               vulkan vulkan --no-fallback --su
 # PxPaint brush engine end to end (screen samples -> raster -> uploads -> display)
 run brush_gles             "$ICD"               gles   gles   --suite brush
 run brush_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite brush
+# drawing performance scenario (numbers only; compared with the Block 2 baseline)
+run perf_gles              "$ICD"               gles   gles   --suite perf
+run perf_vulkan            "$ICD"               vulkan vulkan --no-fallback --suite perf
 exit $fail

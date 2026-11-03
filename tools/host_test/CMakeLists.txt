@@ -11,6 +11,8 @@ set(PE_KHRONOS_INCLUDE "" CACHE STRING "Khronos header include dirs (Vulkan, EGL
 option(PE_SANITIZE "Build with AddressSanitizer + UBSan" OFF)
 
 add_executable(pe_host_test host_test.cpp ${PE_ENGINE_SOURCES})
+# Same optimisation of the per-pixel code as the Android build (see EngineSources.cmake).
+set_source_files_properties(${PE_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
 target_include_directories(pe_host_test PRIVATE ${PE_CPP_DIR} ${PE_KHRONOS_INCLUDE})
 # EGL_NO_X11: plain integer native types (we only use pbuffers on host).
 target_compile_definitions(pe_host_test PRIVATE EGL_NO_X11 PE_ENABLE_TEST_HOOKS=1)

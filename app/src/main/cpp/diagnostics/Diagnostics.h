@@ -39,6 +39,10 @@ struct CanvasStatus {
     uint64_t brushSamplesReceived = 0, brushSamplesProcessed = 0, brushDabs = 0;
     uint32_t brushPending = 0, brushStrokeTiles = 0;
     double brushLastMs = 0.0, brushMaxMs = 0.0;
+    // Brush input -> frame presented (queue time of the oldest sample in the
+    // frame to the return of present; the display adds its own scan-out).
+    double inputLatencyLastMs = 0.0, inputLatencyAvgMs = 0.0, inputLatencyMaxMs = 0.0;
+    uint64_t inputLatencyFrames = 0;
     // Last canvas frame
     uint32_t tilesVisible = 0, piecesDrawn = 0, drawCalls = 0;
     double zoom = 0.0, rotationDeg = 0.0;

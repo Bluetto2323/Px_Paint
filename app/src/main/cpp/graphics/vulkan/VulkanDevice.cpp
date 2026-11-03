@@ -537,6 +537,9 @@ void VulkanDevice::detachSurface() {
     vkDeviceWaitIdle(device_);
     swapchain_.reset();
     backbuffer_ = {};
+    // The GPU is idle: retired resources (e.g. a closed canvas's tiles) are
+    // freed now instead of waiting for frames that may not come for a while.
+    resources_.collectAll();
     PE_LOGI(kTag, "Surface detached");
 }
 
@@ -554,7 +557,12 @@ void VulkanDevice::notifySurfaceResized(gfx::Extent2D extent) {
 }
 
 bool VulkanDevice::needsFrame() const {
-    return swapchain_ && resizeChaseFrames_ > 0 && !swapchain_->matches(desiredExtent_);
+    if (!swapchain_) return false;
+    if (resizeChaseFrames_ > 0 && !swapchain_->matches(desiredExtent_)) return true;
+    // Retired resources are destroyed when a later frame's fence shows the
+    // GPU is done with them: in on-demand mode render the few frames needed
+    // so released memory (a closed canvas) does not stay allocated.
+    return resources_.stats().pendingDestruction > 0;
 }
 
 void VulkanDevice::chaseResize() {

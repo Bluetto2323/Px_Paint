@@ -94,6 +94,11 @@ public:
         fn(store_);
         return true;
     }
+    // See BrushEngine::takeConsumedInputTime (call after syncGpu, render thread).
+    int64_t takeConsumedInputTime() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return brush_.takeConsumedInputTime();
+    }
     // Size of the document of `generation` (false if it is not current).
     bool size(uint64_t generation, uint32_t& width, uint32_t& height) const;
 
