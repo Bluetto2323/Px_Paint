@@ -195,3 +195,37 @@ A layout dump from the emulator screenshot job found it. `Widgets.row` now keeps
 the size the caller gives the trailing view. If *Engine diagnostics* could not
 be found on the A33, this was why; the REPORT for KI-1 can now be opened from
 *Settings → Engine diagnostics*.
+
+## KI-11 — Layers: limits of the Block 6 implementation
+
+* **Not tested by hand on a phone yet.** Verified by:
+  * CPU tests: blend modes against an independent reference, operations,
+    persistence, migration;
+  * GPU tests on Mesa GLES and lavapipe Vulkan;
+  * JVM tests;
+  * emulator screenshots.
+* **Compositing is on the CPU.** This is deliberate: identical on Vulkan and
+  GLES, no per-layer GPU memory, no readbacks. The cost is CPU time:
+  * Strokes stay cheap (measured < 1.5 ms per frame at 50 layers on the host).
+  * A property change (opacity, visibility, blend, order) recomposites every
+    tile where that layer has content, for all layers at those tiles. On a
+    4096 × 4096 canvas with 50 overlapping layers that work totals about 1 s on
+    the host CI machine. It is spread over frames (3–8 ms each), so the app
+    stays responsive but the display catches up visibly.
+  * A phone CPU is slower than the host: unmeasured on the A33.
+* **Merge down and Flatten are isolated.** With a non-Normal mode the upper
+  layer blends only with the layer below where that layer is transparent, and a
+  flattened stack no longer blends with the paper. The picture is exact for
+  Normal layers and wherever the layers below are opaque, as in other painting
+  applications.
+* **Flatten deletes hidden layers.** The confirmation says how many.
+* **Reordering uses Move up / Move down** (buttons and menu); there is no
+  drag-and-drop yet.
+* **No undo** (out of scope so far): delete, merge, flatten and clear are
+  confirmed or reversible only by hand.
+* **Memory.** Each layer stores only the tiles it uses (256 KiB per tile).
+  Duplicate and merge are refused beyond the canvas memory budget (¼ of RAM).
+  Many full layers on very large canvases can still use a lot of RAM:
+  50 overlapping layers on 4096² measured about 1.1 GiB.
+* **Blending is done on sRGB values**, as in common painting apps, not in linear
+  light.

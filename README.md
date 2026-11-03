@@ -1,4 +1,4 @@
-# PxPaint — Blocco 5 (libreria pennelli) sul motore Paint Engine
+# PxPaint — Blocco 6 (livelli) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -35,6 +35,16 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   preferiti, recenti, ricerca, dimensione/opacità rapide; duplica, rinomina,
   elimina, ripristina; editor con anteprime disegnate dal motore e area di
   prova. Dettagli: `docs/BRUSHES.md`, `docs/BLOCK5_REPORT.md`.
+* **Blocco 6**: **livelli**.
+  * Ogni livello ha i propri tile (id persistente, nome, visibilità, blocco,
+    opacità, modalità di fusione).
+  * La composizione avviene su CPU, identica su Vulkan e GLES: 8 modalità W3C
+    che si fondono anche con la carta, aggiornamento per regioni modificate.
+  * Operazioni: aggiungi, elimina, duplica, rinomina, sposta, nascondi, blocca,
+    opacità, modalità, unisci in basso, unisci tutto.
+  * Nuovo formato di progetto a livelli; le tele precedenti vengono migrate.
+  * Pannello Livelli con miniature.
+  * Dettagli: `docs/LAYERS.md`, `docs/BLOCK6_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).

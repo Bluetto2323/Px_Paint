@@ -130,6 +130,24 @@ Status fields: `brushStrokes`, `brushCancelled`, `brushSamplesReceived`,
 `inputLatencyLastMs/AvgMs/MaxMs/Frames` (oldest sample queued → frame
 presented).
 
+## Layers (Block 6)
+
+| Call | Notes |
+|---|---|
+| `layers()` | Table: `active\t<id>` then per layer, bottom first, `id, visible, locked, opacity, blend, tiles, version, name` (tab separated, name escaped). Parsed by `pxpaint.core.LayerStack.parse`. |
+| `layerOp(op, id, arg, value, text)` | `ADD`, `DELETE`, `DUPLICATE`, `RENAME`, `MOVE` (arg = index from the bottom), `VISIBLE`, `LOCKED` (arg 0/1), `OPACITY` (value), `BLEND` (arg = mode code), `ACTIVE`, `MERGE_DOWN`, `FLATTEN`, `CLEAR`. Returns `LayerResult(error, newId)`. Error codes: 0 done, 1 no canvas, 2 not found, 3 last layer, 4 no layer below, 5 locked, 6 hidden, 7 too many (100), 8 memory, 9 bad value. Queued strokes are applied first. |
+| `setLayerStack(ids, names, flags, opacity, blend, activeId)` | Project load: empty layers with these properties (flags 1 visible, 2 locked). Then `importLayerTiles` per layer. |
+| `exportLayerTiles(id, changedOnly, max)` / `importLayerTiles(id, records)` | The tile record format of `exportCanvasTiles`, per layer. `exportCanvasTiles` / `importCanvasTiles` act on the active layer. |
+| `layerThumbnail(id, maxSide)` | That layer's own pixels (visibility ignored), straight ARGB `[w, h, px...]`. |
+| `strokeBegin(...)` | Now returns false when the active layer is hidden or locked (nothing is painted). |
+
+Blend codes: 0 Normal, 1 Multiply, 2 Screen, 3 Overlay, 4 Darken, 5 Lighten,
+6 Add, 7 Difference. `setCanvasColors` also sets the paper the bottom layer
+blends with. Status fields `canvasLayers`, `canvasCompositeTiles`,
+`compositeLastMs`, `compositeMaxMs`; `canvasRasterTiles` counts the layers'
+content tiles, `canvasRasterBytes` the CPU memory of layers + composite.
+Details: `docs/LAYERS.md`.
+
 ## Canvas content and persistence
 
 The canvas pixels are a **CPU raster** (`canvas/RasterStore`): premultiplied

@@ -359,3 +359,41 @@ Installa `PxPaint-block5-debug-….apk` **sopra** la build del Blocco 4, senza d
 
 Riporta OK / KO per ogni riga; per i KO aggiungi uno screenshot e, se
 possibile, il REPORT della diagnostica.
+
+# Blocco 6 — Livelli: checklist sul Galaxy A33
+
+Installa `PxPaint-block6-debug-….apk` **sopra** la build precedente, così si verifica anche la migrazione delle tele esistenti.
+
+### 1. Tele esistenti
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1.1 | Apri una tela dei blocchi precedenti | identica; nel pannello Livelli c'è un solo livello, "Layer 1" |
+| 1.2 | Disegna, torna alla galleria, riapri | il disegno c'è; la tela ora è salvata nel formato a livelli |
+
+### 2. Operazioni
+
+| # | Azione | Atteso |
+|---|---|---|
+| 2.1 | Pannello Livelli → + tre volte | nuovi livelli in cima, l'ultimo è attivo (evidenziato) |
+| 2.2 | Disegna su livelli diversi, toccando la riga per sceglierli | il tratto va solo sul livello attivo; le miniature mostrano solo il proprio livello |
+| 2.3 | Occhio (nascondi / mostra) | il livello sparisce e ricompare, senza perdere nulla |
+| 2.4 | Lucchetto, poi prova a disegnare su quel livello | non disegna e compare "Il livello è bloccato: sbloccalo prima" |
+| 2.5 | Livello nascosto attivo, prova a disegnare | "Il livello è nascosto: mostralo prima" |
+| 2.6 | Opacità del livello 50 % con un pennello al 50 % | il tratto appare al 25 %; riportando l'opacità al 100 % torna al 50 % |
+| 2.7 | Modalità: Moltiplica, Scolora, Sovrapponi, Scurisci, Schiarisci, Aggiungi, Differenza su un livello sopra un altro | ogni modalità cambia il risultato; nessun alone sui bordi trasparenti |
+| 2.8 | Sposta su / Sposta giù | l'ordine sulla tela cambia di conseguenza |
+| 2.9 | Duplica, Rinomina, Elimina (con conferma) | funzionano; l'ultimo livello non si può eliminare (pulsante disattivato) |
+| 2.10 | Unisci in basso | due livelli diventano uno, la tela non cambia (livelli Normali) |
+| 2.11 | ⋮ → Unisci tutti i livelli (con un livello nascosto) | la conferma dice che il livello nascosto verrà eliminato; poi resta un solo livello, la tela non cambia |
+| 2.12 | Sfondo color crema + livello in Moltiplica | il livello si fonde anche con la carta |
+
+### 3. Salvataggio e prestazioni
+
+| # | Azione | Atteso |
+|---|---|---|
+| 3.1 | 5–10 livelli con nomi, opacità, modalità, uno nascosto e uno bloccato; chiudi l'app e riapri la tela | tutto identico: ordine, nomi, visibilità, blocchi, opacità, modalità, livello attivo |
+| 3.2 | Indicatore prestazioni attivo, disegna con 10+ livelli | tratto fluido come prima (*brush ms* simile) |
+| 3.3 | Trascina l'opacità di un livello grande | la tela si aggiorna in fretta; su tele molto grandi si aggiorna a zone in pochi istanti, l'app non si blocca |
+
+Riporta OK / KO per ogni riga.
