@@ -33,6 +33,19 @@ constexpr const char* kTag = "JNI";
 
 pe::Engine* fromHandle(jlong handle) { return reinterpret_cast<pe::Engine*>(handle); }
 
+// Layer names travel in a tab/newline separated table: escape them.
+std::string escapeField(const std::string& v) {
+    std::string o;
+    for (char c : v) {
+        if (c == '\\') o += "\\\\";
+        else if (c == '\t') o += "\\t";
+        else if (c == '\n') o += "\\n";
+        else if (c == '\r') o += "\\r";
+        else o += c;
+    }
+    return o;
+}
+
 std::string toStdString(JNIEnv* env, jstring s) {
     if (!s) return {};
     const char* chars = env->GetStringUTFChars(s, nullptr);
@@ -418,16 +431,15 @@ bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatA
 }
 }  // namespace
 
-JNIEXPORT void JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeBegin(
+JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStrokeBegin(
     JNIEnv* env, jclass, jlong handle, jfloatArray sample, jfloatArray params, jint argb, jint flags, jfloatArray curve) {
-    guard("nativeStrokeBegin", 0, [&] {
-        if (!sample || env->GetArrayLength(sample) < static_cast<jsize>(pe::Engine::kSampleFloats)) return 0;
+    return guard("nativeStrokeBegin", jboolean{JNI_FALSE}, [&]() -> jboolean {
+        if (!sample || env->GetArrayLength(sample) < static_cast<jsize>(pe::Engine::kSampleFloats)) return JNI_FALSE;
         jfloat s[pe::Engine::kSampleFloats];
         env->GetFloatArrayRegion(sample, 0, static_cast<jsize>(pe::Engine::kSampleFloats), s);
         pe::brush::BrushSettings b;
-        if (!decodeBrush(env, params, argb, flags, curve, b)) return 0;
-        fromHandle(handle)->strokeBegin(b, s);
-        return 0;
+        if (!decodeBrush(env, params, argb, flags, curve, b)) return JNI_FALSE;
+        return fromHandle(handle)->strokeBegin(b, s) ? JNI_TRUE : JNI_FALSE;
     });
 }
 
@@ -541,6 +553,121 @@ JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeImportCanv
                                                              static_cast<size_t>(len));
         env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
         return static_cast<jint>(n);
+    });
+}
+
+// --- Layers (Block 6) --------------------------------------------------------
+// "active\t<id>\n" then one line per layer, bottom first:
+// id \t visible \t locked \t opacity \t blend \t tiles \t version \t name
+JNIEXPORT jstring JNICALL Java_com_paintengine_engine_NativeEngine_nativeLayers(JNIEnv* env, jclass, jlong handle) {
+    return guard("nativeLayers", static_cast<jstring>(nullptr), [&]() -> jstring {
+        uint32_t active = 0;
+        const auto list = fromHandle(handle)->layers(active);
+        std::string out = "active\t" + std::to_string(active) + "\n";
+        char buf[160];
+        for (const auto& l : list) {
+            std::snprintf(buf, sizeof(buf), "%u\t%d\t%d\t%.6f\t%d\t%zu\t%llu\t", l.info.id, l.info.visible ? 1 : 0,
+                          l.info.locked ? 1 : 0, static_cast<double>(l.info.opacity), static_cast<int>(l.info.blend), l.tiles,
+                          static_cast<unsigned long long>(l.version));
+            out += buf;
+            out += escapeField(l.info.name);
+            out += "\n";
+        }
+        return env->NewStringUTF(out.c_str());
+    });
+}
+
+// Returns (error << 32) | newId (error 0 = done; codes: pe::LayerError).
+JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeLayerOp(JNIEnv* env, jclass, jlong handle,
+                                                                              jint op, jint id, jint arg, jfloat value,
+                                                                              jstring text) {
+    return guard("nativeLayerOp", static_cast<jlong>(static_cast<int64_t>(pe::LayerError::BadValue) << 32),
+                 [&]() -> jlong {
+                     if (op < 0 || op > 12) return static_cast<jlong>(static_cast<int64_t>(pe::LayerError::BadValue) << 32);
+                     uint32_t newId = 0;
+                     const pe::LayerError e = fromHandle(handle)->layerOp(
+                         static_cast<pe::Engine::LayerOp>(op), static_cast<uint32_t>(id), arg, value,
+                         text ? toStdString(env, text) : std::string(), newId);
+                     return static_cast<jlong>((static_cast<int64_t>(e) << 32) | static_cast<int64_t>(newId));
+                 });
+}
+
+// Project load: the layer stack (properties, no pixels yet). `flags`: 1 visible, 2 locked.
+JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeSetLayerStack(
+    JNIEnv* env, jclass, jlong handle, jintArray ids, jobjectArray names, jintArray flags, jfloatArray opacity,
+    jintArray blend, jint activeId) {
+    return guard("nativeSetLayerStack", jboolean{JNI_FALSE}, [&]() -> jboolean {
+        if (!ids || !names || !flags || !opacity || !blend) return JNI_FALSE;
+        const jsize n = env->GetArrayLength(ids);
+        if (n <= 0 || env->GetArrayLength(names) != n || env->GetArrayLength(flags) != n ||
+            env->GetArrayLength(opacity) != n || env->GetArrayLength(blend) != n)
+            return JNI_FALSE;
+        std::vector<jint> idv(static_cast<size_t>(n)), fl(static_cast<size_t>(n)), bl(static_cast<size_t>(n));
+        std::vector<jfloat> op(static_cast<size_t>(n));
+        env->GetIntArrayRegion(ids, 0, n, idv.data());
+        env->GetIntArrayRegion(flags, 0, n, fl.data());
+        env->GetIntArrayRegion(blend, 0, n, bl.data());
+        env->GetFloatArrayRegion(opacity, 0, n, op.data());
+        std::vector<pe::LayerInfo> stack;
+        for (jsize i = 0; i < n; ++i) {
+            pe::LayerInfo info;
+            if (idv[i] <= 0 || bl[i] < 0 || bl[i] >= pe::canvas::kBlendModeCount) return JNI_FALSE;
+            info.id = static_cast<uint32_t>(idv[i]);
+            auto js = static_cast<jstring>(env->GetObjectArrayElement(names, i));
+            info.name = js ? toStdString(env, js) : std::string();
+            if (js) env->DeleteLocalRef(js);
+            info.visible = (fl[i] & 1) != 0;
+            info.locked = (fl[i] & 2) != 0;
+            info.opacity = op[i];
+            info.blend = static_cast<pe::canvas::BlendMode>(bl[i]);
+            stack.push_back(info);
+        }
+        return fromHandle(handle)->setLayerStack(stack, static_cast<uint32_t>(activeId)) ? JNI_TRUE : JNI_FALSE;
+    });
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeExportLayerTiles(
+    JNIEnv* env, jclass, jlong handle, jint id, jboolean changedOnly, jint maxTiles) {
+    return guard("nativeExportLayerTiles", static_cast<jbyteArray>(nullptr), [&]() -> jbyteArray {
+        std::vector<uint8_t> out;
+        fromHandle(handle)->exportLayerTiles(static_cast<uint32_t>(id), changedOnly == JNI_TRUE,
+                                             static_cast<size_t>(std::max(0, maxTiles)), out);
+        if (out.size() > static_cast<size_t>(INT32_MAX)) return nullptr;
+        jbyteArray arr = env->NewByteArray(static_cast<jsize>(out.size()));
+        if (!arr) return nullptr;
+        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(out.size()), reinterpret_cast<const jbyte*>(out.data()));
+        return arr;
+    });
+}
+
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeImportLayerTiles(JNIEnv* env, jclass, jlong handle,
+                                                                                      jint id, jbyteArray data) {
+    return guard("nativeImportLayerTiles", jint{-1}, [&]() -> jint {
+        if (!data) return -1;
+        const jsize len = env->GetArrayLength(data);
+        jbyte* bytes = env->GetByteArrayElements(data, nullptr);
+        if (!bytes) return -1;
+        const long n = fromHandle(handle)->importLayerTiles(static_cast<uint32_t>(id), reinterpret_cast<const uint8_t*>(bytes),
+                                                            static_cast<size_t>(len));
+        env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+        return static_cast<jint>(n);
+    });
+}
+
+// One layer's own content (visibility ignored): {width, height, pixels...}; null if unknown.
+JNIEXPORT jintArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeLayerThumbnail(JNIEnv* env, jclass,
+                                                                                         jlong handle, jint id, jint maxSide) {
+    return guard("nativeLayerThumbnail", static_cast<jintArray>(nullptr), [&]() -> jintArray {
+        uint32_t w = 0, h = 0;
+        std::vector<uint32_t> px;
+        if (!fromHandle(handle)->layerThumbnail(static_cast<uint32_t>(id), static_cast<uint32_t>(std::max(1, maxSide)), w, h, px))
+            return nullptr;
+        jintArray out = env->NewIntArray(static_cast<jsize>(px.size() + 2));
+        if (!out) return nullptr;
+        const jint head[2] = {static_cast<jint>(w), static_cast<jint>(h)};
+        env->SetIntArrayRegion(out, 0, 2, head);
+        if (!px.empty()) env->SetIntArrayRegion(out, 2, static_cast<jsize>(px.size()), reinterpret_cast<const jint*>(px.data()));
+        return out;
     });
 }
 

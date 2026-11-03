@@ -49,3 +49,13 @@ if(PE_SANITIZE)
   target_compile_options(pe_brush_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
   target_link_options(pe_brush_test PRIVATE -fsanitize=address,undefined)
 endif()
+
+# Pure-CPU layer system tests (compositing, layer operations, persistence) - Block 6.
+add_executable(pe_layer_test layer_test.cpp ${PE_BRUSH_CORE_SOURCES} ${PE_CPP_DIR}/engine/CanvasDocument.cpp)
+target_include_directories(pe_layer_test PRIVATE ${PE_CPP_DIR})
+target_compile_options(pe_layer_test PRIVATE ${PE_WARNING_FLAGS} -Werror -O2)
+target_link_libraries(pe_layer_test PRIVATE Threads::Threads)
+if(PE_SANITIZE)
+  target_compile_options(pe_layer_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+  target_link_options(pe_layer_test PRIVATE -fsanitize=address,undefined)
+endif()

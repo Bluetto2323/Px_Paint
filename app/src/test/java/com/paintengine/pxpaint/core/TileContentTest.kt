@@ -115,7 +115,8 @@ class TileContentTest {
         val store = ProjectStore(tmp) { now }
         val p = store.create("Tiles", 600, 300, -1, false)
         assertTrue(store.hasTiles(p.id))
-        assertEquals(0, store.loadTiles(p.id)!!.tileCount)
+        assertNull(store.loadTiles(p.id))                        // new projects are layered (Block 6)
+        assertEquals(0, store.loadLayers(p.id)!!.tiles.getValue(1).tileCount)
         val c = TileContent(600, 300).apply { applyExport(records(Triple(2, 1, pattern(7)))) }
         now = 2000L
         val saved = store.saveTiles(p.id, c)

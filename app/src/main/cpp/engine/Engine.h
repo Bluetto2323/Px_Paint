@@ -159,7 +159,8 @@ public:
     // converted to canvas space here). NaN = axis not reported by the device.
     // Processed in order at the next frame.
     static constexpr size_t kSampleFloats = 6;
-    void strokeBegin(const brush::BrushSettings& settings, const float* sample);
+    // False if nothing will be painted (no canvas, or the active layer is hidden / locked).
+    bool strokeBegin(const brush::BrushSettings& settings, const float* sample);
     void strokeSamples(const float* samples, size_t count);
     void strokeEnd();
     void strokeCancel();
@@ -170,6 +171,24 @@ public:
     long importCanvasTiles(const uint8_t* data, size_t size);
     bool canvasThumbnail(uint32_t maxSide, uint32_t& width, uint32_t& height, std::vector<uint32_t>& argb);
     CanvasDocument& document() { return doc_; }
+
+    // --- Layers (any thread; Block 6). Results apply at the next frame. ---
+    enum class LayerOp : int32_t {
+        Add = 0, Delete = 1, Duplicate = 2, Rename = 3, Move = 4, Visible = 5, Locked = 6, Opacity = 7,
+        Blend = 8, Active = 9, MergeDown = 10, Flatten = 11, Clear = 12,
+    };
+    // `arg`: index / bool / blend mode, `value`: opacity, `text`: name.
+    // `outId`: the new layer of Add / Duplicate.
+    LayerError layerOp(LayerOp op, uint32_t id, int32_t arg, float value, const std::string& text, uint32_t& outId);
+    std::vector<LayerSummary> layers(uint32_t& activeId) const { return doc_.layers(activeId); }
+    bool setLayerStack(const std::vector<LayerInfo>& stack, uint32_t activeId);
+    size_t exportLayerTiles(uint32_t id, bool changedOnly, size_t maxTiles, std::vector<uint8_t>& out) {
+        return doc_.exportLayerTiles(id, changedOnly, maxTiles, out);
+    }
+    long importLayerTiles(uint32_t id, const uint8_t* data, size_t size);
+    bool layerThumbnail(uint32_t id, uint32_t maxSide, uint32_t& width, uint32_t& height, std::vector<uint32_t>& argb) {
+        return doc_.layerThumbnail(id, maxSide, width, height, argb);
+    }
     void runCanvasSelfTest();
 
     // Viewport: applied immediately (thread-safe), drawn at the next frame.

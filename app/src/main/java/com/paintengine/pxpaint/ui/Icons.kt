@@ -15,6 +15,7 @@ import android.graphics.drawable.Drawable
 enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
+    EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -140,6 +141,27 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 path.close()
                 if (icon == Icon.STAR_FILLED) c.drawPath(path, fill)
                 c.drawPath(path, stroke)
+            }
+            Icon.EYE, Icon.EYE_OFF -> {
+                path.reset()
+                path.moveTo(2.5f, 12f)
+                path.cubicTo(5.5f, 6.5f, 18.5f, 6.5f, 21.5f, 12f)
+                path.cubicTo(18.5f, 17.5f, 5.5f, 17.5f, 2.5f, 12f)
+                c.drawPath(path, stroke)
+                circle(c, 12f, 12f, 2.6f)
+                if (icon == Icon.EYE_OFF) line(c, 4.5f, 4.5f, 19.5f, 19.5f)
+            }
+            Icon.LOCK, Icon.UNLOCK -> {
+                roundRect(c, 5.5f, 11f, 18.5f, 20f, 2f)
+                if (icon == Icon.LOCK) arc(c, 12f, 9.5f, 4f, 180f, 180f) else arc(c, 15.5f, 8.5f, 3.5f, 180f, 160f)
+                if (icon == Icon.LOCK) { line(c, 8f, 9.5f, 8f, 11f); line(c, 16f, 9.5f, 16f, 11f) } else line(c, 12f, 8.5f, 12f, 11f)
+            }
+            Icon.ARROW_UP -> { line(c, 12f, 19f, 12f, 5f); poly(c, 6.5f, 10.5f, 12f, 5f, 17.5f, 10.5f) }
+            Icon.ARROW_DOWN -> { line(c, 12f, 5f, 12f, 19f); poly(c, 6.5f, 13.5f, 12f, 19f, 17.5f, 13.5f) }
+            Icon.MERGE -> {
+                poly(c, 12f, 3.5f, 20f, 7.5f, 12f, 11.5f, 4f, 7.5f, close = true)
+                line(c, 12f, 13.5f, 12f, 20.5f)
+                poly(c, 8.5f, 17f, 12f, 20.5f, 15.5f, 17f)
             }
             Icon.RESET -> { arc(c, 12f, 12.5f, 7f, 120f, 300f); poly(c, 4.2f, 8.5f, 5.6f, 12.3f, 9.2f, 10.8f) }
             Icon.BRUSH -> {

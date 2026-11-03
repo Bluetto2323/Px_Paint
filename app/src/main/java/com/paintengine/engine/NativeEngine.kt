@@ -163,14 +163,59 @@ class NativeEngine(config: Config) : AutoCloseable {
      * pixels, mapped through the current viewport), t (ms), pressure (0..1),
      * tilt (rad), orientation (rad, screen space); NaN = axis not reported.
      */
-    fun strokeBegin(sample: FloatArray, brush: Brush) =
-        withHandle { nativeStrokeBegin(it, sample, brush.params, brush.argb, brush.flags, brush.pressureCurve) }
+    /** False if nothing will be painted: no canvas, or the active layer is hidden or locked. */
+    fun strokeBegin(sample: FloatArray, brush: Brush): Boolean =
+        handle.let { it != 0L && nativeStrokeBegin(it, sample, brush.params, brush.argb, brush.flags, brush.pressureCurve) }
 
     /** [samples]: [count] samples of [SAMPLE_FLOATS] floats each (see [strokeBegin]), oldest first. */
     fun strokeSamples(samples: FloatArray, count: Int) = withHandle { nativeStrokeSamples(it, samples, count) }
     fun strokeEnd() = withHandle { nativeStrokeEnd(it) }
     /** Removes the stroke in progress; the canvas returns exactly to its previous state. */
     fun strokeCancel() = withHandle { nativeStrokeCancel(it) }
+
+    // --- Layers (Block 6; any thread, cheap except merge / flatten / duplicate) -
+    /** Layer operations; codes = engine Engine::LayerOp. */
+    enum class LayerOp(val code: Int) {
+        ADD(0), DELETE(1), DUPLICATE(2), RENAME(3), MOVE(4), VISIBLE(5), LOCKED(6), OPACITY(7), BLEND(8), ACTIVE(9),
+        MERGE_DOWN(10), FLATTEN(11), CLEAR(12),
+    }
+
+    /** Result of [layerOp]: engine error code (0 = done) and the new layer of ADD / DUPLICATE. */
+    data class LayerResult(val error: Int, val newId: Int)
+
+    /**
+     * Applies a layer operation (queued strokes first, in input order). [arg]:
+     * index (MOVE), 0/1 (VISIBLE, LOCKED), blend code (BLEND); [value]:
+     * opacity; [text]: name (ADD, DUPLICATE, RENAME, FLATTEN).
+     */
+    @Synchronized
+    fun layerOp(op: LayerOp, id: Int, arg: Int = 0, value: Float = 0f, text: String? = null): LayerResult {
+        val h = handle
+        if (h == 0L) return LayerResult(1, 0)
+        val r = nativeLayerOp(h, op.code, id, arg, value, text)
+        return LayerResult((r ushr 32).toInt(), (r and 0xFFFFFFFFL).toInt())
+    }
+
+    /** Layer table (see pxpaint.core.LayerStack.parse); null without a canvas. */
+    @Synchronized
+    fun layers(): String? = handle.let { if (it != 0L) nativeLayers(it) else null }
+
+    /** Project load: replaces the stack with empty layers with these properties. */
+    @Synchronized
+    fun setLayerStack(ids: IntArray, names: Array<String>, flags: IntArray, opacity: FloatArray, blend: IntArray, activeId: Int): Boolean =
+        handle.let { it != 0L && nativeSetLayerStack(it, ids, names, flags, opacity, blend, activeId) }
+
+    /** Like [exportCanvasTiles] for one layer. */
+    @Synchronized
+    fun exportLayerTiles(id: Int, changedOnly: Boolean, maxTiles: Int): ByteArray? =
+        handle.let { if (it != 0L) nativeExportLayerTiles(it, id, changedOnly, maxTiles) else null }
+
+    @Synchronized
+    fun importLayerTiles(id: Int, records: ByteArray): Int = handle.let { if (it != 0L) nativeImportLayerTiles(it, id, records) else -1 }
+
+    /** One layer's own content (visibility ignored), straight ARGB [width, height, pixels...]. */
+    @Synchronized
+    fun layerThumbnail(id: Int, maxSide: Int): IntArray? = handle.let { if (it != 0L) nativeLayerThumbnail(it, id, maxSide) else null }
 
     // --- Persistence (any thread; synchronized with [close]) -----------------
     /**
@@ -264,7 +309,15 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeRunCanvasSelfTest(handle: Long)
         @JvmStatic private external fun nativeStrokeBegin(
             handle: Long, sample: FloatArray, params: FloatArray, argb: Int, flags: Int, curve: FloatArray?,
-        )
+        ): Boolean
+        @JvmStatic private external fun nativeLayers(handle: Long): String?
+        @JvmStatic private external fun nativeLayerOp(handle: Long, op: Int, id: Int, arg: Int, value: Float, text: String?): Long
+        @JvmStatic private external fun nativeSetLayerStack(
+            handle: Long, ids: IntArray, names: Array<String>, flags: IntArray, opacity: FloatArray, blend: IntArray, activeId: Int,
+        ): Boolean
+        @JvmStatic private external fun nativeExportLayerTiles(handle: Long, id: Int, changedOnly: Boolean, maxTiles: Int): ByteArray?
+        @JvmStatic private external fun nativeImportLayerTiles(handle: Long, id: Int, records: ByteArray): Int
+        @JvmStatic private external fun nativeLayerThumbnail(handle: Long, id: Int, maxSide: Int): IntArray?
         @JvmStatic private external fun nativeStrokeSamples(handle: Long, samples: FloatArray, count: Int)
         @JvmStatic private external fun nativeStrokeEnd(handle: Long)
         @JvmStatic private external fun nativeStrokeCancel(handle: Long)

@@ -19,6 +19,9 @@ import com.paintengine.engine.NativeEngine.ViewOp
 import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.DockPlacement
 import com.paintengine.pxpaint.core.Format
+import com.paintengine.pxpaint.core.LayerError
+import com.paintengine.pxpaint.core.LayerInfo
+import com.paintengine.pxpaint.core.LayerStack
 import com.paintengine.pxpaint.core.LayoutPolicy
 import com.paintengine.pxpaint.core.P
 import com.paintengine.pxpaint.core.ProjectMeta
@@ -93,7 +96,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var closed = false
     private var savedRevision = -1L
     private var lastAutosave = 0L
-    private var content: TileContent? = null   // io thread only
+    // Layered persistence (io thread only): each layer's tiles as on disk.
+    private val layerFiles = HashMap<Int, TileContent>()
+    private val layersOnDisk = HashSet<Int>()
+    private var writeAllLayers = false            // pre-layer project: first save writes every layer
+    @Volatile private var ioReady = false
+    // UI thread: the engine's layer stack (refreshed after every layer operation).
+    private var layerStack: LayerStack? = null
+    private val thumbCache = HashMap<Int, Pair<Long, android.graphics.Bitmap>>()
+    private val thumbExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "PxPaint-layer-thumbs") }
+    private var lastBlockedMessage = 0L
 
     // Tools (sizes / opacities / spacing / colour live in host.brush, persisted)
     private var tool = Tool.MARKER
@@ -164,6 +176,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     override fun onRemoved() {
         removed = true
+        thumbExec.shutdown()
+        layerExec.shutdown()
         handler.removeCallbacks(poll)
         router.interrupt()
         closeCanvas()
@@ -207,23 +221,42 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         host.io.execute {
             val result = runCatching {
                 e.createCanvas(m.width, m.height, m.paperArgb, m.transparentBackground)?.let { throw OpenFailure(it) }
-                val tiles = host.store.loadTiles(m.id)
-                if (tiles != null) {
-                    for (batch in tiles.importBatches()) {
-                        if (e.importCanvasTiles(batch) < 0) throw OpenFailure("tile import rejected")
+                val layered = host.store.loadLayers(m.id)
+                if (layered != null) {
+                    // Block 6 project: the layer stack, then each layer's pixels.
+                    val st = layered.stack
+                    if (!e.setLayerStack(
+                            st.layers.map { it.id }.toIntArray(), st.layers.map { it.name }.toTypedArray(),
+                            st.layers.map { (if (it.visible) 1 else 0) or (if (it.locked) 2 else 0) }.toIntArray(),
+                            st.layers.map { it.opacity }.toFloatArray(), st.layers.map { it.blend.code }.toIntArray(), st.activeId,
+                        )
+                    ) throw OpenFailure("layer stack rejected")
+                    for ((lid, tiles) in layered.tiles) {
+                        for (batch in tiles.importBatches()) if (e.importLayerTiles(lid, batch) < 0) throw OpenFailure("tile import rejected")
                     }
-                    tiles
+                    layerFiles.putAll(layered.tiles)
+                    layersOnDisk.addAll(layered.tiles.keys)
                 } else {
-                    // Block 2 project: rectangle content, rasterised by the engine;
-                    // the first save writes it in the tile format.
-                    e.loadCanvasContent(host.store.loadContent(m.id))
-                    TileContent(m.width, m.height)
+                    // Blocks 2-5 project: its single raster becomes layer 1; the
+                    // first save writes the layered format (nothing is flattened
+                    // or dropped: the old file is removed only after that).
+                    val tiles = host.store.loadTiles(m.id)
+                    if (tiles != null) {
+                        for (batch in tiles.importBatches()) if (e.importLayerTiles(1, batch) < 0) throw OpenFailure("tile import rejected")
+                        layerFiles[1] = tiles
+                    } else {
+                        e.loadCanvasContent(host.store.loadContent(m.id))
+                        layerFiles[1] = TileContent(m.width, m.height)
+                    }
+                    writeAllLayers = true
                 }
+                ioReady = true
+                LayerStack.parse(e.layers())
             }
-            result.onSuccess { content = it }
             host.runOnMain {
                 if (closed) return@runOnMain
                 result.onSuccess {
+                    layerStack = it
                     savedRevision = e.canvasContentRevision()
                     lastAutosave = SystemClock.uptimeMillis()
                     loaded = true
@@ -241,6 +274,43 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private class OpenFailure(message: String) : Exception(message)
+
+    /** DebugDemo "layers": a few layers with different modes, one hidden, one locked; then the panel. */
+    private fun demoLayers(e: NativeEngine, w: Float, h: Float) {
+        val round = host.brushes.get("builtin.airbrush")?.params ?: return
+        fun stroke(x0: Float, y0: Float, x1: Float, y1: Float, size: Float, argb: Int) {
+            val n = 30
+            val pts = FloatArray(n * 6) { Float.NaN }
+            for (k in 0 until n) {
+                val t = k / (n - 1f)
+                pts[k * 6] = x0 + (x1 - x0) * t
+                pts[k * 6 + 1] = y0 + (y1 - y0) * t
+                pts[k * 6 + 2] = k * 8f
+            }
+            val b = NativeEngine.Brush(BrushEncoding.params(round, size = size, pressureSmoothing = 0f), BrushEncoding.flags(round, false), argb, null)
+            e.strokeBegin(pts.copyOfRange(0, 6), b)
+            e.strokeSamples(pts.copyOfRange(6, pts.size), n - 1)
+            e.strokeEnd()
+        }
+        fun add(name: String): Int = e.layerOp(NativeEngine.LayerOp.ADD, 0, text = name).newId
+        e.layerOp(NativeEngine.LayerOp.RENAME, 1, text = "Sketch")
+        val shade = add("Shadows")
+        stroke(w * 0.15f, h * 0.30f, w * 0.85f, h * 0.55f, 260f, 0xFF3050A0.toInt())
+        e.layerOp(NativeEngine.LayerOp.BLEND, shade, com.paintengine.pxpaint.core.BlendMode.MULTIPLY.code)
+        e.layerOp(NativeEngine.LayerOp.OPACITY, shade, value = 0.7f)
+        val glow = add("Glow")
+        stroke(w * 0.2f, h * 0.6f, w * 0.8f, h * 0.35f, 200f, 0xFFF0B030.toInt())
+        e.layerOp(NativeEngine.LayerOp.BLEND, glow, com.paintengine.pxpaint.core.BlendMode.SCREEN.code)
+        val notes = add("Notes")
+        stroke(w * 0.1f, h * 0.7f, w * 0.9f, h * 0.7f, 60f, 0xFFE03030.toInt())
+        e.layerOp(NativeEngine.LayerOp.VISIBLE, notes, 0)
+        val ink = add("Ink")
+        stroke(w * 0.1f, h * 0.25f, w * 0.9f, h * 0.62f, 24f, 0xFF101010.toInt())
+        e.layerOp(NativeEngine.LayerOp.LOCKED, ink, 1)
+        e.layerOp(NativeEngine.LayerOp.ACTIVE, shade)
+        layerStack = LayerStack.parse(e.layers())
+        handler.postDelayed({ setPanel(Panel.LAYERS) }, 400)
+    }
 
     /** DebugDemo: one stroke per built-in preset (finger-like samples), then the requested panel. */
     private fun runDemo(d: DebugDemo.Script) {
@@ -274,6 +344,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             e.strokeEnd()
         }
         when (d.panel) {
+            "layers" -> demoLayers(e, w, h)
             "workspace" -> setPanel(Panel.TOOL)
             "library" -> {
                 d.filter?.let { libraryState.filter = it }
@@ -312,14 +383,27 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         lastAutosave = SystemClock.uptimeMillis()
         val id = meta.id
         host.io.execute {
-            val c = content ?: return@execute
+            if (!ioReady) return@execute
             val r = runCatching {
-                // Only tiles changed since the last export, in bounded batches.
-                while (true) {
-                    val records = e.exportCanvasTiles(true, EXPORT_BATCH) ?: break
-                    if (c.applyExport(records) < EXPORT_BATCH) break
+                val stack = LayerStack.parse(e.layers()) ?: throw IllegalStateException("no layers")
+                val changed = HashMap<Int, TileContent>()
+                for (l in stack.layers) {
+                    val c = layerFiles.getOrPut(l.id) { TileContent(meta.width, meta.height) }
+                    var dirty = writeAllLayers || l.id !in layersOnDisk
+                    // Only tiles changed since the last export, in bounded batches.
+                    while (true) {
+                        val records = e.exportLayerTiles(l.id, true, EXPORT_BATCH) ?: break
+                        val n = c.applyExport(records)
+                        if (n > 0) dirty = true
+                        if (n < EXPORT_BATCH) break
+                    }
+                    if (dirty) changed[l.id] = c
                 }
-                val updated = host.store.saveTiles(id, c)
+                val removed = layerFiles.keys.filter { stack.get(it) == null }
+                val updated = host.store.saveLayers(id, stack, changed, removed)
+                removed.forEach { layerFiles.remove(it); layersOnDisk.remove(it) }
+                layersOnDisk.addAll(changed.keys)
+                writeAllLayers = false
                 val thumb = Thumbnails.fromEngine(updated, e.canvasThumbnail(Thumbnails.MAX_SIDE))
                 host.store.saveThumbnail(id, Thumbnails.png(thumb))
                 updated
@@ -447,7 +531,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             if (!StylusInput.append(e, pointerId, kind, strokeT0, samples, includeHistory = false)) return
             // The selected library preset of the tool, with its quick size / opacity.
             val p = host.brushes.effective(if (eraser) BrushTool.ERASER else BrushTool.PAINT)
-            engine.strokeBegin(
+            val accepted = engine.strokeBegin(
                 samples.first(),
                 NativeEngine.Brush(
                     BrushEncoding.params(p, pressureSmoothing = host.settings.pressureSmoothing),
@@ -456,6 +540,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     host.pressureTable(),
                 ),
             )
+            if (!accepted) paintBlocked()   // hidden or locked layer: nothing painted
         }
 
         override fun strokeSamples(pointerId: Int) {
@@ -899,9 +984,70 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var pendingRecent = 0
     private val rememberColor = Runnable { host.updateBrush(host.brush.withRecent(pendingRecent)) }
 
-    private fun layersPanel(): View = column(context, theme, horizontalPadding = false) {
-        addView(theme.text(context, tr(S.LAYERS), PxTheme.Type.HEADLINE).apply { setPadding(0, 0, 0, theme.dp(10)) })
-        addView(layerRow(tr(S.LAYER_PAINT), Icon.MARKER, null, selected = true))
+    private fun layersPanel(): View = LayersPanel(host, layerOps).view()
+
+    private val layerOps = object : LayersPanel.Ops {
+        override val stack: LayerStack? get() = layerStack
+        override fun run(op: NativeEngine.LayerOp, id: Int, arg: Int, value: Float, text: String?, done: S?) =
+            runLayerOp(op, id, arg, value, text, done)
+        override fun thumbnail(layer: LayerInfo, sizePx: Int, onReady: (android.graphics.Bitmap?) -> Unit): android.graphics.Bitmap? =
+            layerThumbnail(layer, sizePx, onReady)
+        override fun background(): View = backgroundSection()
+    }
+
+    // One thread for every layer operation, in the order they were asked:
+    // merge / flatten / duplicate of big documents never block the UI thread.
+    private val layerExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "PxPaint-layers") }
+
+    /** Runs a layer operation; refusals are explained, the panel and stack follow. */
+    private fun runLayerOp(op: NativeEngine.LayerOp, id: Int, arg: Int = 0, value: Float = 0f, text: String? = null, done: S? = null) {
+        val e = engine ?: return
+        if (closed) return
+        layerExec.execute {
+            val r = e.layerOp(op, id, arg, value, text)
+            val table = e.layers()
+            host.runOnMain {
+                if (closed) return@runOnMain
+                val err = LayerError.of(r.error)
+                if (err != LayerError.NONE) err.message?.let { host.overlays.message(tr(it)) }
+                else done?.let { host.overlays.message(tr(it)) }
+                LayerStack.parse(table)?.let { layerStack = it }
+                // The opacity slider keeps its own state while it is dragged.
+                if (panel == Panel.LAYERS && op != NativeEngine.LayerOp.OPACITY) showPanel(Panel.LAYERS)
+            }
+        }
+    }
+
+    /** Cached thumbnail of a layer (its own pixels), refreshed off the UI thread when its content changed. */
+    private fun layerThumbnail(layer: LayerInfo, sizePx: Int, onReady: (android.graphics.Bitmap?) -> Unit): android.graphics.Bitmap? {
+        val cached = thumbCache[layer.id]
+        if (cached != null && cached.first == layer.version) return cached.second
+        val e = engine ?: return cached?.second
+        val id = layer.id
+        val version = layer.version
+        thumbExec.execute {
+            val px = e.layerThumbnail(id, sizePx) ?: return@execute
+            if (px.size < 2 || px[0] <= 0 || px[1] <= 0) return@execute
+            val bmp = android.graphics.Bitmap.createBitmap(px, 2, px[0], px[0], px[1], android.graphics.Bitmap.Config.ARGB_8888)
+            host.runOnMain {
+                thumbCache[id] = version to bmp
+                onReady(bmp)
+            }
+        }
+        return cached?.second
+    }
+
+    /** The active layer refused a stroke: say why (at most every 2 s). */
+    private fun paintBlocked() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastBlockedMessage < 2000) return
+        lastBlockedMessage = now
+        val reason = layerStack?.paintBlocker() ?: return
+        reason.message?.let { host.overlays.message(tr(it)) }
+    }
+
+    /** Background (paper / transparency): not a layer; the bottom layer blends with it. */
+    private fun backgroundSection(): View = column(context, theme, horizontalPadding = false) {
         addView(layerRow(tr(S.LAYER_BACKGROUND), null, if (meta.transparentBackground) null else meta.paperArgb, selected = false))
         // Background colour (real: the engine draws the paper / checkerboard).
         val papers = listOf(0xFFFFFFFF.toInt() to false, 0xFFF3EBDD.toInt() to false, 0xFF8A8D91.toInt() to false,
@@ -926,8 +1072,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 }, LinearLayout.LayoutParams(theme.dp(36), theme.dp(36)).apply { marginEnd = theme.dp(10) })
             }
         })
-        addView(theme.text(context, tr(S.LAYERS_SOON_TITLE), PxTheme.Type.LABEL))
-        addView(theme.text(context, tr(S.LAYERS_SOON_BODY), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, 0) })
     }
 
     private fun layerRow(name: String, icon: Icon?, swatch: Int?, selected: Boolean): View = LinearLayout(context).apply {
@@ -976,12 +1120,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private fun confirmClear() {
         host.overlays.confirm(tr(S.CLEAR_CANVAS), tr(S.CLEAR_CONFIRM), tr(S.ACTION_CLEAR), tr(S.ACTION_CANCEL), true) {
-            val e = engine
-            if (e != null) host.io.execute {
-                e.clearCanvas()
-                content?.clear()   // the tile file is rewritten empty by the save below
-            }
-            save(force = true)
+            // The active layer only; its tiles are saved as removed by the next save.
+            layerStack?.active?.let { runLayerOp(NativeEngine.LayerOp.CLEAR, it.id) }
         }
     }
 

@@ -170,6 +170,19 @@ bool BrushEngine::process(canvas::RasterStore& store) {
     return true;
 }
 
+void BrushEngine::finishActive(canvas::RasterStore& store) {
+    if (!comp_.active()) return;
+    path_.finish();
+    dabs_.clear();
+    path_.takeCommitted(dabs_);
+    comp_.addDabs(store, dabs_.data(), dabs_.size());
+    st_.dabs += dabs_.size();
+    comp_.commit(store);
+    path_.reset();
+    st_.strokesCommitted++;
+    st_.strokeActive = false;
+}
+
 uint32_t BrushEngine::strokeSeed(const StrokePoint& p) {
     // From the first sample: replaying the same input gives the same jitter.
     auto bits = [](double v) {

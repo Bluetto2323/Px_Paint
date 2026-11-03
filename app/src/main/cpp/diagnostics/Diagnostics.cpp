@@ -297,6 +297,10 @@ std::string statusJson(const EngineStatus& s) {
     num("canvasRestores", c.restores);
     num("canvasRasterTiles", static_cast<double>(c.rasterTiles));
     num("canvasRasterBytes", static_cast<double>(c.rasterBytes));
+    num("canvasLayers", static_cast<double>(c.layers));
+    num("canvasCompositeTiles", static_cast<double>(c.compositeTiles));
+    num("compositeLastMs", c.compositeLastMs);
+    num("compositeMaxMs", c.compositeMaxMs);
     num("canvasRevision", static_cast<double>(c.revision));
     num("brushStrokes", static_cast<double>(c.brushStrokes));
     num("brushCancelled", static_cast<double>(c.brushCancelled));

@@ -55,6 +55,11 @@ adb shell input swipe 540 1900 540 500 600; sleep 3
 shot 07-editor-texture
 start --es pxpaint.demo editor --es pxpaint.brush builtin.textured
 shot 08-editor-textured
+start --es pxpaint.demo layers
+shot 11-layers-panel
+adb shell uiautomator dump /sdcard/ui11.xml > /dev/null 2>&1 && adb pull /sdcard/ui11.xml "$OUT/11-layout.xml" > /dev/null 2>&1 || true
+adb shell input swipe 540 1700 540 900 500; sleep 2
+shot 12-layers-panel-scrolled
 start --es pxpaint.demo settings
 shot 09-settings
 adb shell input swipe 540 1900 540 600 600; sleep 2

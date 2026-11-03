@@ -300,6 +300,10 @@ void CanvasController::fillStatus(CanvasStatus& c) const {
     const DocumentStats d = doc_.stats();
     c.rasterTiles = d.tilesAllocated;
     c.rasterBytes = d.bytesAllocated;
+    c.layers = static_cast<uint32_t>(d.layerCount);
+    c.compositeTiles = d.compositeTiles;
+    c.compositeLastMs = d.lastCompositeMs;
+    c.compositeMaxMs = d.maxCompositeMs;
     c.revision = d.revision;
     c.brushStrokes = d.brush.strokesCommitted;
     c.brushCancelled = d.brush.strokesCancelled;

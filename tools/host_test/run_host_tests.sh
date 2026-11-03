@@ -36,7 +36,7 @@ ninja -C "$BUILD"
 export EGL_PLATFORM=surfaceless
 fail=0
 # Pure-CPU suites (no GPU): canvas math / tiles / storage, brush engine.
-for t in pe_canvas_test pe_brush_test; do
+for t in pe_canvas_test pe_brush_test pe_layer_test; do
   if "$BUILD/$t" > "$BUILD/$t.log" 2>&1; then
     echo "PASS  $t  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$t.log"))"
   else

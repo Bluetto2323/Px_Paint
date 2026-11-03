@@ -14,6 +14,7 @@ import com.paintengine.pxpaint.core.BrushTool
  *   library         + brush library panel (optional --es pxpaint.filter dry|inking|...)
  *   editor          brush editor of --es pxpaint.brush <preset id>
  *   settings        settings screen
+ *   layers          five layers (modes, opacity, hidden, locked) + the Layers panel
  *
  * The strokes are drawn through the normal engine stroke API with finger-like
  * samples (no pressure: nothing is simulated).

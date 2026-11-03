@@ -1272,6 +1272,91 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
             }
         }
 
+        section("S12 layers on the GPU (Block 6): blend modes, transparency, opacity, visibility, painting a layer");
+        {
+            check(engine.createCanvas({1200, 800, kPaper}).empty(), "S12: canvas");
+            engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.rasterTiles == 0; }, 10s);
+            engine.setCanvasColors(0xFF202020u, 0xFFE8D8B8u, false);  // cream paper: blend modes must use it
+            double one[] = {1.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetZoomAt, one, 3);
+            double r0[] = {0.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetRotationAt, r0, 3);
+            const uint32_t liveBefore = engine.status().resources.totalLive();
+            // Backdrop layer: a horizontal colour ramp over the left half, transparent on the right.
+            auto c0 = engine.screenToCanvas({0.5, 0.5});
+            const int ox = static_cast<int>(std::floor(c0.x)), oy = static_cast<int>(std::floor(c0.y));
+            for (int i = 0; i < 8; ++i) {
+                const uint32_t v = static_cast<uint32_t>(30 + i * 30);
+                engine.document().fill({ox + 20 + i * 50, oy + 20, 50, 560}, 0xFF000000u | (v << 16) | ((255 - v) << 8) | 0x80u);
+            }
+            // One layer per blend mode: a column crossing ramp, paper and transparent parts.
+            uint32_t id = 0;
+            std::vector<uint32_t> ids;
+            for (int m = 0; m < 8; ++m) {
+                engine.layerOp(pe::Engine::LayerOp::Add, 0, 0, 0, "", id);
+                ids.push_back(id);
+                engine.document().fill({ox + 20, oy + 40 + m * 65, 860, 40}, 0xB4C06030u);
+                engine.layerOp(pe::Engine::LayerOp::Blend, id, m, 0, "", id);
+            }
+            (void)engine.document().pixel(0, 0);  // finish the composite
+            check(brushIdle(engine) && engine.waitForStatus([&](const EngineStatus&) { return !engine.document().hasPendingComposite(); }, 10s),
+                  "S12: 9 layers composited");
+            Cap c12;
+            if (capture(engine, c12)) {
+                // Display == CPU composite (paper included) at sample points of every band:
+                // over the ramp, over plain paper, and where nothing is painted.
+                int worst = 0;
+                for (int m = 0; m < 8; ++m)
+                    for (int sx : {60, 220, 380, 600, 850}) {
+                        const int sy = 60 + m * 65;
+                        const auto cp = engine.screenToCanvas({sx + 0.5, sy + 0.5});
+                        const auto px = engine.document().pixel(static_cast<int32_t>(std::floor(cp.x)), static_cast<int32_t>(std::floor(cp.y)));
+                        const uint8_t* g = c12.at(sx, sy);
+                        worst = std::max({worst, std::abs(g[0] - px.r), std::abs(g[1] - px.g), std::abs(g[2] - px.b)});
+                    }
+                std::printf("    8 blend modes x 5 points (ramp / paper / beyond the canvas content): worst display-vs-composite diff %d\n", worst);
+                check(worst <= 2, "S12: every blend mode shows on screen exactly as composited (paper as the backdrop)");
+                // Known values: Multiply (mode 1) of the 70 % orange over cream paper is darker than both; Screen lighter.
+                const uint8_t* mul = c12.at(850, 60 + 1 * 65);
+                const uint8_t* scr = c12.at(850, 60 + 2 * 65);
+                const uint8_t* paper = c12.at(850, 10);
+                check(mul[2] < paper[2] && scr[0] >= paper[0], "S12: Multiply darkens, Screen lightens the paper");
+            }
+            // Opacity and visibility of one layer change the display (progressive recomposite).
+            engine.layerOp(pe::Engine::LayerOp::Opacity, ids[0], 0, 0.0f, "", id);
+            engine.layerOp(pe::Engine::LayerOp::Visible, ids[1], 0, 0, "", id);
+            check(engine.waitForStatus([&](const EngineStatus&) { return !engine.document().hasPendingComposite(); }, 10s),
+                  "S12: property changes recomposited");
+            Cap c12b;
+            if (capture(engine, c12b)) {
+                const uint8_t* a = c12b.at(850, 60);
+                const uint8_t* b = c12b.at(850, 125);
+                const uint8_t* p = c12b.at(850, 10);
+                check(std::abs(a[0] - p[0]) <= 1 && std::abs(b[0] - p[0]) <= 1 && std::abs(b[2] - p[2]) <= 1,
+                      "S12: opacity 0 and hidden layers disappear from the display (paper shows)");
+            }
+            const uint32_t liveAfter = engine.status().resources.totalLive();
+            std::printf("    GPU resources: %u before the layers, %u with 9 layers\n", liveBefore, liveAfter);
+            check(liveAfter <= liveBefore + 4, "S12: layers allocate no GPU resources (the display stays one composite)");
+            // Paint on the active (top) layer, zoomed and rotated, across a tile corner.
+            double z2[] = {2.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetZoomAt, z2, 3);
+            double r30[] = {0.5, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetRotationAt, r30, 3);
+            const auto t0 = engine.canvasToScreen({480, 512}), t1 = engine.canvasToScreen({560, 512});
+            screenStroke(engine, brushOf(20, 1.0f, 0xFF000000u), screenLine(t0.x, t0.y, t1.x, t1.y, 20));
+            check(brushIdle(engine), "S12: stroke processed");
+            const uint32_t top = ids.back();
+            // Layer 1 has its ramp there (column 6: red 210): untouched by the stroke.
+            const auto under = engine.document().layerPixel(1, 512, 512);
+            check(engine.document().layerPixel(top, 512, 512).a == 255 && under.r == 210 && under.g == 45 &&
+                      engine.document().layerPixel(ids[3], 512, 512).a == 0,
+                  "S12: the stroke (zoom 2, rotated) is on the active layer only, across the 512 px tile corner");
+            engine.layerOp(pe::Engine::LayerOp::Locked, top, 1, 0, "", id);
+            float smp[pe::Engine::kSampleFloats] = {450, 300, 0, NAN, NAN, NAN};
+            check(!engine.strokeBegin(brushOf(20, 1.0f, 0xFF000000u), smp), "S12: painting a locked layer is refused");
+        }
+
         section("S9 close -> resources released");
         engine.closeCanvas();
         check(engine.waitForStatus([](const EngineStatus& s) { return !s.canvas.open; }, 5s), "S9: canvas closed");

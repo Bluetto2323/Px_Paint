@@ -66,6 +66,28 @@ uint8_t* RasterStore::tileForWrite(int32_t tx, int32_t ty) {
     return t.px.get();
 }
 
+void RasterStore::releaseTile(int32_t tx, int32_t ty) {
+    if (!validTile(tx, ty)) return;
+    Tile& t = tiles_[index(tx, ty)];
+    if (!t.px) return;
+    t.px.reset();
+    allocated_--;
+    version_++;
+}
+
+void RasterStore::copyFrom(const RasterStore& other) {
+    reset(other.width_, other.height_);
+    for (size_t i = 0; i < tiles_.size(); ++i) {
+        if (!other.tiles_[i].px) continue;
+        tiles_[i].px.reset(new uint8_t[kTileBytes]);
+        std::memcpy(tiles_[i].px.get(), other.tiles_[i].px.get(), kTileBytes);
+        tiles_[i].unsaved = true;
+        allocated_++;
+    }
+    markAllGpuDirty();
+    version_++;
+}
+
 void RasterStore::markChanged(const RectI& r) {
     int32_t tx0, ty0, tx1, ty1;
     if (!tileRange(r, tx0, ty0, tx1, ty1)) return;

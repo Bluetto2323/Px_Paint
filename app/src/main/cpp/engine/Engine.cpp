@@ -26,6 +26,9 @@ constexpr size_t kMaxRecoveriesPerWindow = 6;
 Engine::Engine(const EngineConfig& config) : config_(config), sceneMode_(config.scene), canvas_(doc_) {
     scheduler_.setMode(config.renderMode);
     canvas_.setMemoryBudget(config.canvasMemoryBudgetBytes);
+    // Layer pixels live on the CPU: the same share of RAM bounds what layer
+    // operations may allocate (duplicate, merge).
+    doc_.setMemoryBudget(config.canvasMemoryBudgetBytes ? config.canvasMemoryBudgetBytes : (1024ull << 20));
 }
 
 Engine::~Engine() { shutdown(); }
@@ -278,6 +281,7 @@ void Engine::closeCanvas() {
 }
 
 void Engine::setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool transparentBackground) {
+    doc_.setBackground(paperArgb, transparentBackground);  // layers blend with the paper
     queue_.post([this, workspaceArgb, paperArgb, transparentBackground] {
         canvas_.setWorkspaceColor(workspaceArgb);
         canvas_.setPaper(paperArgb, transparentBackground);
@@ -286,7 +290,7 @@ void Engine::setCanvasColors(uint32_t workspaceArgb, uint32_t paperArgb, bool tr
 }
 
 void Engine::clearCanvasContent() {
-    doc_.clear();
+    doc_.clear();  // the active layer
     queue_.post([this] {
         scheduler_.requestFrame();
         publishStatus(true);
@@ -340,21 +344,22 @@ brush::StrokePoint toCanvas(const canvas::Viewport& view, const float* f) {
 }
 }  // namespace
 
-void Engine::strokeBegin(const brush::BrushSettings& settings, const float* sample) {
-    if (!sample) return;
+bool Engine::strokeBegin(const brush::BrushSettings& settings, const float* sample) {
+    if (!sample) return false;
     brush::StrokePoint p;
     brush::BrushSettings s = settings;
     {
         std::lock_guard<std::mutex> lock(viewMutex_);
-        if (!view_.valid()) return;
+        if (!view_.valid()) return false;
         p = toCanvas(view_, sample);
         // A fixed nib angle is held in the hand: screen space, like the
         // stylus orientation, so it does not turn with the canvas view.
         // (An angle that follows the stroke is relative to its direction.)
         if (!s.angleFollowsStroke) s.angle = static_cast<float>(s.angle - view_.rotation());
     }
-    doc_.strokeBegin(s, p);
+    if (!doc_.strokeBegin(s, p)) return false;
     queue_.wake();
+    return true;
 }
 
 void Engine::strokeSamples(const float* samples, size_t count) {
@@ -387,6 +392,49 @@ void Engine::strokeCancel() {
 
 size_t Engine::exportCanvasTiles(bool changedOnly, size_t maxTiles, std::vector<uint8_t>& out) {
     return doc_.exportTiles(changedOnly, maxTiles, out);
+}
+
+LayerError Engine::layerOp(LayerOp op, uint32_t id, int32_t arg, float value, const std::string& text, uint32_t& outId) {
+    LayerError e = LayerError::BadValue;
+    switch (op) {
+        case LayerOp::Add: e = doc_.addLayer(id, text, outId); break;
+        case LayerOp::Delete: e = doc_.deleteLayer(id); break;
+        case LayerOp::Duplicate: e = doc_.duplicateLayer(id, text, outId); break;
+        case LayerOp::Rename: e = doc_.renameLayer(id, text); break;
+        case LayerOp::Move: e = doc_.moveLayer(id, arg); break;
+        case LayerOp::Visible: e = doc_.setVisible(id, arg != 0); break;
+        case LayerOp::Locked: e = doc_.setLocked(id, arg != 0); break;
+        case LayerOp::Opacity: e = doc_.setOpacity(id, value); break;
+        case LayerOp::Blend:
+            e = arg >= 0 && arg < canvas::kBlendModeCount ? doc_.setBlend(id, static_cast<canvas::BlendMode>(arg))
+                                                          : LayerError::BadValue;
+            break;
+        case LayerOp::Active: e = doc_.setActive(id); break;
+        case LayerOp::MergeDown: e = doc_.mergeDown(id); break;
+        case LayerOp::Flatten: e = doc_.flatten(text); break;
+        case LayerOp::Clear: e = doc_.clear(); break;
+    }
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return e;
+}
+
+bool Engine::setLayerStack(const std::vector<LayerInfo>& stack, uint32_t activeId) {
+    const bool ok = doc_.setLayerStack(stack, activeId);
+    queue_.post([this] { scheduler_.requestFrame(); });
+    return ok;
+}
+
+long Engine::importLayerTiles(uint32_t id, const uint8_t* data, size_t size) {
+    const long n = doc_.importLayerTiles(id, data, size);
+    queue_.wake();
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return n;
 }
 
 long Engine::importCanvasTiles(const uint8_t* data, size_t size) {
@@ -569,7 +617,8 @@ void Engine::teardown() {
 bool Engine::canRender() const {
     return selection_ && surfaceAttached_ && !surfaceRevoked_.load() && !paused_ && !renderingDisabled_ &&
            (scheduler_.wantsFrame() || selection_.device->needsFrame() ||
-            (sceneMode_ == SceneMode::Canvas && (canvas_.selfTestActive() || doc_.hasPendingInput())));
+            (sceneMode_ == SceneMode::Canvas &&
+             (canvas_.selfTestActive() || doc_.hasPendingInput() || doc_.hasPendingComposite())));
 }
 
 void Engine::detachAndReleaseWindow() {

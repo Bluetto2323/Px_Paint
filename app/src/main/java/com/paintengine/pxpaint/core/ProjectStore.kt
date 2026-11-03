@@ -64,7 +64,10 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
         val dir = dirOf(meta.id)
         if (!dir.mkdirs()) throw StoreException("cannot create project directory")
         writeMeta(meta)
-        writeAtomically(tilesFile(meta.id), TileContent(width, height).encode())
+        // Layered from the start (Block 6): one empty layer.
+        writeAtomically(layerFile(meta.id, 1), TileContent(width, height).encode())
+        writeAtomically(manifestFile(meta.id),
+            LayerManifest.encode(LayerStack(listOf(LayerInfo(1, "Layer 1")), 1), width, height).toByteArray())
         return meta
     }
 
@@ -86,9 +89,10 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
         )
         val dir = dirOf(copy.id)
         if (!dir.mkdirs()) throw StoreException("cannot create project directory")
-        contentFile(id).takeIf { it.isFile }?.let { writeAtomically(contentFile(copy.id), it.readBytes()) }
-        tilesFile(id).takeIf { it.isFile }?.let { writeAtomically(tilesFile(copy.id), it.readBytes()) }
-        thumbnailFile(id).takeIf { it.isFile }?.let { writeAtomically(thumbnailFile(copy.id), it.readBytes()) }
+        // Every content file (legacy or layered), the manifest last so a copy
+        // interrupted half-way is not taken for a complete layered project.
+        val files = dirOf(id).listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") && it.name != metaFile(id).name } ?: emptyList()
+        for (f in files.sortedBy { it.name == LayerManifest.FILE }) writeAtomically(File(dir, f.name), f.readBytes())
         writeMeta(copy)
         return copy
     }
@@ -143,7 +147,65 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
         return updated
     }
 
-    fun hasTiles(id: String): Boolean = tilesFile(id).isFile
+    fun hasTiles(id: String): Boolean = tilesFile(id).isFile || manifestFile(id).isFile
+
+    /** Layers of a project: the stack (bottom first, active layer) and each layer's pixels. */
+    class LayeredContent(val stack: LayerStack, val tiles: Map<Int, TileContent>)
+
+    /**
+     * The layered content (Block 6 format), or null if the project predates
+     * layers (then [loadTiles] / [loadContent] give its single-layer content).
+     * A damaged manifest or a missing / damaged layer file is an error: the
+     * project must not open with part of its picture.
+     */
+    fun loadLayers(id: String): LayeredContent? {
+        val meta = require(id)
+        val mf = manifestFile(id)
+        if (!mf.isFile) return null
+        val stack = try {
+            LayerManifest.decode(mf.readText(), meta.width, meta.height)
+        } catch (e: LayerManifest.Invalid) {
+            throw StoreException("layers of '$id' are damaged: ${e.message}", e)
+        }
+        val tiles = LinkedHashMap<Int, TileContent>()
+        for (l in stack.layers) {
+            val f = layerFile(id, l.id)
+            if (!f.isFile) throw StoreException("layer ${l.id} of '$id' is missing")
+            val c = try {
+                TileContent.decode(f.readBytes())
+            } catch (e: IOException) {
+                throw StoreException("layer ${l.id} of '$id' is damaged: ${e.message}", e)
+            }
+            if (c.width != meta.width || c.height != meta.height) throw StoreException("layer ${l.id} of '$id' has the wrong size")
+            tiles[l.id] = c
+        }
+        return LayeredContent(stack, tiles)
+    }
+
+    /**
+     * Saves the layered project: the [changed] layer files first (each one
+     * atomically), an empty file for any layer that has none yet, then the
+     * manifest (atomically: until it is replaced the previous one stays
+     * valid), then the files of [removed] layers and the pre-layer content
+     * files, which the manifest now supersedes.
+     */
+    fun saveLayers(id: String, stack: LayerStack, changed: Map<Int, TileContent>, removed: Collection<Int>): ProjectMeta {
+        val meta = require(id)
+        if (stack.layers.isEmpty()) throw StoreException("no layer to save")
+        for ((lid, c) in changed) {
+            if (c.width != meta.width || c.height != meta.height) throw StoreException("layer size mismatch")
+            writeAtomically(layerFile(id, lid), c.encode())
+        }
+        for (l in stack.layers) if (!layerFile(id, l.id).isFile) writeAtomically(layerFile(id, l.id), TileContent(meta.width, meta.height).encode())
+        writeAtomically(manifestFile(id), LayerManifest.encode(stack, meta.width, meta.height).toByteArray())
+        for (r in removed) if (stack.get(r) == null) layerFile(id, r).delete()
+        tilesFile(id).delete()
+        contentFile(id).delete()
+        val tiles = stack.layers.sumOf { l -> changed[l.id]?.tileCount ?: l.tiles }
+        val updated = meta.copy(modifiedMs = clock(), opCount = tiles)
+        writeMeta(updated)
+        return updated
+    }
 
     fun updateAppearance(id: String, paperArgb: Int, transparentBackground: Boolean): ProjectMeta {
         val updated = require(id).copy(paperArgb = paperArgb, transparentBackground = transparentBackground, modifiedMs = clock())
@@ -172,6 +234,8 @@ class ProjectStore(private val root: File, private val clock: () -> Long = Syste
     private fun contentFile(id: String) = File(dirOf(id), "content.pxops")
     private fun tilesFile(id: String) = File(dirOf(id), "content.pxtiles")
     private fun metaFile(id: String) = File(dirOf(id), "project.properties")
+    private fun manifestFile(id: String) = File(dirOf(id), LayerManifest.FILE)
+    private fun layerFile(id: String, layer: Int) = File(dirOf(id), LayerManifest.layerFile(layer))
 
     private fun newId(): String = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
 

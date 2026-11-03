@@ -61,6 +61,10 @@ public:
     // --- Processing side: caller holds the store's lock --------------------
     // Consumes every queued event. Returns true if the store changed.
     bool process(canvas::RasterStore& store);
+    // Commits a stroke still in progress into `store` (its later samples are
+    // ignored until the next begin): the target layer is about to change.
+    void finishActive(canvas::RasterStore& store);
+    bool strokeActive() const { return comp_.active(); }
     // Time (nowNs) the oldest event consumed by the last process() call was
     // queued, then 0 until another call consumes input. Input-to-display
     // latency is measured from it when that frame is presented.

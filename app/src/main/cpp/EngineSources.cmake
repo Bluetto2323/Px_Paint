@@ -13,6 +13,7 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/canvas/Viewport.cpp
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/canvas/Compositor.cpp
     # brush engine (CPU, no GPU, no UI)
     ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/BrushTextures.cpp
@@ -62,6 +63,7 @@ set(PE_CANVAS_CORE_SOURCES
 set(PE_BRUSH_CORE_SOURCES
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/canvas/Compositor.cpp
     ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/BrushTextures.cpp
     ${PE_CPP_DIR}/brush/BrushPreview.cpp
@@ -80,6 +82,7 @@ set(PE_HOT_SOURCES
     ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
     ${PE_CPP_DIR}/brush/BrushEngine.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/canvas/Compositor.cpp
     ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
     ${PE_CPP_DIR}/engine/CanvasDocument.cpp
 )

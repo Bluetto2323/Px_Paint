@@ -40,6 +40,8 @@ public:
     RasterStore() = default;
     RasterStore(const RasterStore&) = delete;
     RasterStore& operator=(const RasterStore&) = delete;
+    RasterStore(RasterStore&&) = default;
+    RasterStore& operator=(RasterStore&&) = default;
 
     // New empty canvas (every tile freed).
     void reset(uint32_t width, uint32_t height);
@@ -65,6 +67,10 @@ public:
     uint8_t* tileForWrite(int32_t tx, int32_t ty);
     bool tileAllocated(int32_t tx, int32_t ty) const { return tile(tx, ty) != nullptr; }
     size_t tilesAllocated() const { return allocated_; }
+    // Frees a tile (it reads as transparent again). Caller marks the change.
+    void releaseTile(int32_t tx, int32_t ty);
+    // Copies every tile of `other` (same size); this store becomes a copy.
+    void copyFrom(const RasterStore& other);
     uint64_t bytesAllocated() const { return static_cast<uint64_t>(allocated_) * kTileBytes; }
 
     // Records a content change of `r`: GPU dirty region, unsaved tile, version.

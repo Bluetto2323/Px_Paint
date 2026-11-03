@@ -34,6 +34,9 @@ struct CanvasStatus {
     uint32_t restores = 0;             // GPU copy rebuilt from the CPU raster (new device / backend)
     // CPU raster (authoritative content) and brush engine
     uint64_t rasterTiles = 0, rasterBytes = 0;
+    uint32_t layers = 0;                     // Block 6: layer count
+    uint64_t compositeTiles = 0;
+    double compositeLastMs = 0, compositeMaxMs = 0;
     uint64_t revision = 0;             // content revision (changes on every edit)
     uint64_t brushStrokes = 0, brushCancelled = 0;
     uint64_t brushSamplesReceived = 0, brushSamplesProcessed = 0, brushDabs = 0;
