@@ -80,8 +80,7 @@ Block 2's rectangle "preview marker" (and its 100 000-operation cap) is gone:
 the canvas is now a raster painted by the brush engine. What is deliberately
 not there yet, or bounded:
 
-* **No pressure, tilt or velocity dynamics** (Block 4). Samples carry their
-  time already.
+* **No velocity dynamics.** (Pressure and tilt: Block 4, see KI-8.)
 * **One layer, no undo/redo.** The UI entry points stay disabled.
 * **Memory:** the canvas exists twice, CPU raster (source of truth) + GPU
   copy, both only where painted. The canvas budget counts both, so the
@@ -131,3 +130,22 @@ The engine now reports input-to-present latency and brush CPU time
 (performance overlay, `inputLatency*` / `brush*Ms` status fields). Host runs
 on software GPUs only show the pipeline works and nothing is lost; the real
 numbers must come from the A33 (Block 3 checklist).
+
+## KI-8 — Stylus pressure / tilt are not tested on real hardware (Block 4)
+
+The primary test device (Galaxy A33 5G) has **no active stylus support**:
+it reports no stylus input device, and its touchscreen "pressure" is a
+finger contact estimate, which PxPaint deliberately ignores. Therefore:
+
+* pressure, tilt, orientation, hover distance, the eraser end and palm
+  rejection against a real stylus are verified **only by automated tests**
+  (synthetic samples through the brush engine and the GPU on GLES and
+  Vulkan, and the TouchRouter unit tests) - never on a physical stylus;
+* the axis reading follows the Android API (`InputDevice.getMotionRange`,
+  `MotionEvent.getHistorical*`) but its behaviour with specific styluses
+  (S Pen, USI pens, Bluetooth pens) is unverified;
+* pressure smoothing and the default curves are tuned on synthetic 240 Hz
+  data; they may need adjusting on a real pen;
+* tilt shaping assumes Android's orientation convention (0 = stylus
+  pointing to the top of the screen, clockwise positive). A device that
+  reports it differently would rotate the ellipse.

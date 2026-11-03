@@ -238,3 +238,61 @@ Per ogni passo annota **OK / KO** e, dove indicato, i numeri dell'indicatore.
 Nota: disinstallare l'app cancella i suoi progetti (memoria privata
 dell'app). Ogni build CI è firmata con una chiave debug diversa, quindi va
 sempre disinstallata la precedente.
+
+---
+
+# Blocco 4 — Stilo e pressione: checklist sul Galaxy A33
+
+**L'A33 non ha uno stilo attivo**: la pressione, l'inclinazione e la gomma
+dello stilo **non si possono provare su questo telefono**. Qui si verifica
+che tutto il resto funzioni come prima e che le funzioni dello stilo siano
+indicate correttamente come non disponibili. (Una penna capacitiva passiva
+viene vista dal telefono come un dito: deve comportarsi esattamente come un
+dito.)
+
+Installa `PxPaint-block4-debug-….apk` (disinstalla prima la build precedente).
+
+### 1. Il dito disegna come nel Blocco 3
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1.1 | Pennello 24 px: tratti veloci, lenti, tap | identici al Blocco 3: spessore costante, nessun buco, punta sotto il dito |
+| 1.2 | Pennello → *La pressione controlla la dimensione* **attivo**, minimo 5 %, poi disegna col dito | lo spessore **non cambia** (il dito non fornisce pressione: si usa sempre la dimensione piena) |
+| 1.3 | *La pressione controlla l'opacità* attivo, disegna col dito | opacità piena, nessuna variazione |
+| 1.4 | Indicatore delle prestazioni | latenza paragonabile al Blocco 3 (annota media/massimo) |
+
+### 2. Modalità del dito (Impostazioni → Gesti → *Un dito*)
+
+| # | Azione | Atteso |
+|---|---|---|
+| 2.1 | *Disegna* | un dito disegna; due dita spostano/zoomano/ruotano |
+| 2.2 | *Sposta la tela* | un dito sposta la tela, non disegna |
+| 2.3 | *Solo gesti* | un dito non fa nulla; due dita spostano/zoomano/ruotano |
+| 2.4 | Torna a *Disegna*, appoggia un dito e subito il secondo | nessun segno lasciato (come prima) |
+
+### 3. Indicazioni dello stilo
+
+| # | Azione | Atteso |
+|---|---|---|
+| 3.1 | Pannello del pennello (tocca di nuovo lo strumento) | sezione *Stilo* con il testo "Nessuno stilo con pressione rilevato…" |
+| 3.2 | *L'inclinazione modella il pennello* | interruttore disattivato, con "Non disponibile…" |
+| 3.3 | Impostazioni → *Stilo e pressione* → *Curva di pressione e prova* | "Questo dispositivo non riporta alcuno stilo attivo…" |
+| 3.4 | Nell'area di prova tocca col dito | "Tocco col dito: nessuna pressione viene letta" (nessun grafico inventato) |
+| 3.5 | Curva: scegli *Morbida*, trascina i due punti, sensibilità e smussamento | la curva si aggiorna; uscendo e rientrando i valori restano |
+| 3.6 | *Ripristina i valori predefiniti* | curva lineare, sensibilità 0, smussamento 35 % |
+
+### 4. Compatibilità
+
+| # | Azione | Atteso |
+|---|---|---|
+| 4.1 | Crea un disegno, chiudi l'app dalle recenti, riaprilo | disegno identico (il formato dei progetti non cambia nel Blocco 4) |
+| 4.2 | Diagnostica → DEVICE TEST → REPORT | come prima (sezione D decide KI-1) |
+| 4.3 | Motore grafico OpenGL ES, ripeti 1.1 | uguale |
+
+### Se hai un telefono/tablet con stilo attivo (facoltativo)
+
+Su un dispositivo con S Pen o penna USI: pressione → spessore e opacità,
+curva (area di prova: grigio = pressione dello stilo, colore = risposta),
+inclinazione (con l'opzione attiva), gomma della penna, appoggio del palmo
+mentre lo stilo disegna (nessun segno del palmo). Anche questo risultato
+va riportato come "testato su <modello>".

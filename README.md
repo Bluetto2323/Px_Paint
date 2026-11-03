@@ -1,4 +1,4 @@
-# PxPaint — Blocco 3 (brush engine) sul motore Paint Engine
+# PxPaint — Blocco 4 (stilo e pressione) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -19,6 +19,14 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   Salvataggio a tile compressi (`content.pxtiles`), import dei progetti del
   Blocco 2. Pressione/stilo, livelli e undo sono fuori scope (Blocco 4+).
   Dettagli: `docs/ENGINE_API.md`, `docs/BLOCK3_REPORT.md`.
+* **Blocco 4**: **stilo e pressione**. Dito, stilo e gomma dello stilo
+  distinti per tipo di puntatore; assi letti solo se il dispositivo li
+  dichiara (pressione normalizzata, inclinazione, orientamento, distanza);
+  pressione filtrata (1-euro), curva di risposta configurabile,
+  dimensione/opacità minima, inclinazione → pennello ellittico; rifiuto del
+  palmo; modalità del dito (disegna / sposta / solo gesti); schermata
+  *Stilo e pressione* con editor della curva e area di prova. Il dito
+  disegna esattamente come nel Blocco 3. Dettagli: `docs/BLOCK4_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).
@@ -29,6 +37,7 @@ L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 app/src/main/
   java/com/paintengine/
     pxpaint/PxPaintActivity.kt     launcher: pila di schermate, motore unico, impostazioni
+    pxpaint/input/                 lettura assi dello stilo, rilevamento stili
     pxpaint/core/                  Kotlin puro (test JUnit): impostazioni, regole
                                    dimensioni tela, archivio progetti, ricerca,
                                    layout adattivi, gesti, testi IT/EN
@@ -49,7 +58,8 @@ app/src/main/
     graphics/vulkan/               loader dinamico, device, swapchain, risorse
     graphics/opengles/             EGL + GLES 3.0 (3.1/3.2 rilevati a runtime)
     diagnostics/                   report GPU, stato live, auto-test
-    brush/                         brush engine: StrokePath (spline + spaziatura),
+    brush/                         brush engine: BrushDynamics (pressione, curva,
+                                   inclinazione, filtro), StrokePath (spline + spaziatura),
                                    StrokeCompositor (dab antialias, maschera, base),
                                    BrushEngine (coda input, ciclo di vita del tratto)
     engine/                        Engine (render thread), TestScene, CanvasController,
@@ -123,7 +133,7 @@ Installare dal telefono:
    scarica gli artifact) → **Actions** → ultima esecuzione verde di
    *Android build* → sezione **Artifacts** → `PxPaint-debug-apk-…`.
 2. Si scarica uno **.zip**: aprilo con *File* / *I miei file* di Samsung ed
-   estrai `PxPaint-block3-debug-….apk`.
+   estrai `PxPaint-block4-debug-….apk`.
 3. Tocca l'APK. La prima volta Android chiede di consentire l'installazione
    da quell'app (*Impostazioni → Installa app sconosciute*): consentila solo
    per *I miei file* / il browser usato.
@@ -174,7 +184,7 @@ non cambia la modalità), **SELF-TEST**, **LOG** (report completo in logcat).
 
 ### Cosa verificare sul dispositivo (diagnostica Blocco 1)
 
-Per PxPaint (Blocchi 2 e 3) vedi `docs/DEVICE_VALIDATION.md`.
+Per PxPaint (Blocchi 2, 3 e 4) vedi `docs/DEVICE_VALIDATION.md`.
 
 | Test | Come | Atteso |
 |---|---|---|

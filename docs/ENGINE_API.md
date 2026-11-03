@@ -60,14 +60,27 @@ diagnostics tools (`DiagnosticsActivity`) in a separate process
 | `setCanvasColors(workspace, paper, transparent)` | Workspace colour around the canvas; paper colour or checkerboard. |
 | `runCanvasSelfTest()` | Renders known content (tiles, seams, partial updates, rotation) and compares the pixels against a CPU model. Result in `canvasSelfTest*`. |
 
-## Brush strokes (Block 3)
+## Brush strokes (Blocks 3-4)
 
 | Call | Notes |
 |---|---|
-| `strokeBegin(x, y, tMs, diameter, opacity, argb, spacing, erase)` | Starts a stroke at a **screen** point. `diameter` is in **canvas** pixels (0.5…2000), so a brush keeps its size on the document at any zoom or rotation. `opacity` 0…1 is the stroke's opacity: overlapping dabs of one stroke never exceed it. `argb` straight sRGB colour (its alpha multiplies the opacity). `spacing` = dab distance / diameter (0.01…2). `erase` removes paint instead. |
-| `strokeSamples(xyt, count)` | `count` samples as `(x, y, tMs)` triples, screen pixels, **oldest first** (historical MotionEvent samples, then the current one). Every sample is kept; only exact duplicate positions add no geometry. |
+| `strokeBegin(sample, Brush)` | Starts a stroke. `sample` = `SAMPLE_FLOATS` (6) floats: x, y in **screen** pixels (mapped through the current viewport), t (ms), pressure (0..1, normalised by the app with the device's range), tilt (rad, 0 = perpendicular), orientation (rad, screen space; the engine converts it to canvas space). **NaN = the device does not report the axis.** `Brush`: `diameter` in **canvas** pixels (the maximum when pressure controls size), `opacity`, `argb`, `spacing`, `erase`, and the dynamics `pressureSize` + `minSizeFraction`, `pressureOpacity` + `minOpacityFraction`, `tiltShape` + `tiltStrength`, `pressureSmoothing`, `pressureCurve` (`PRESSURE_CURVE_SIZE` = 257 response values, monotonic 0→1; invalid tables fall back to linear). |
+| `strokeSamples(samples, count)` | `count` samples of 6 floats, **oldest first** (historical MotionEvent samples, then the current one). Every sample is kept. |
 | `strokeEnd()` | Commits the stroke, ending exactly on the last sample. |
-| `strokeCancel()` | Removes the stroke in progress: the canvas returns to its previous state bit for bit (PxPaint uses it when a pinch starts right after a finger landed). |
+| `strokeCancel()` | Removes the stroke in progress: the canvas returns to its previous state bit for bit. |
+
+Dynamics act only on strokes whose **first sample** carries the axis: a
+stroke without pressure (finger, mouse, passive stylus) is drawn exactly as
+in Block 3 (full size and opacity, round dabs) even if the brush enables
+pressure. Pressure is smoothed per stroke with a 1-euro filter on sample
+time (adaptive: slow jitter smoothed, fast presses pass within 1-3 samples),
+interpolated linearly between samples together with tilt and orientation
+(shorter arc), then mapped through the curve: size =
+`diameter × (min + (1 − min) × c)`, dab opacity = `min + (1 − min) × c`, with
+floors of 2 % (size) and 5 % (opacity) so no pressure value makes a stroke
+vanish. Dab spacing follows the current dab size. Tilt needs both tilt and
+orientation; the dab becomes an antialiased ellipse along the stylus
+(major axis × (1 + 1.5 · strength · sin tilt)); without them it stays round.
 
 The engine joins samples with a centripetal Catmull-Rom spline (through
 every sample), places antialiased round dabs at constant arc-length spacing,
