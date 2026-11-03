@@ -182,3 +182,16 @@ finger contact estimate, which PxPaint deliberately ignores. Therefore:
 * **Migration.** Block 3/4 users land on Hard Brush with their size, opacity,
   spacing and stylus settings. The eraser shares that customisation and keeps
   its own size and opacity.
+
+## KI-10 — Settings rows with a chevron showed no text (fixed in Block 5)
+
+In `Widgets.row`, the trailing chevron was a plain `View` added with
+`WRAP_CONTENT`. Android measures such a view at the full available width, so the
+row's title and description collapsed to zero width. The affected rows were
+*Engine diagnostics* (since Block 2), *Pressure curve and test* (Block 4) and
+*Edit brush* (Block 5): they kept their height but showed no text.
+
+A layout dump from the emulator screenshot job found it. `Widgets.row` now keeps
+the size the caller gives the trailing view. If *Engine diagnostics* could not
+be found on the A33, this was why; the REPORT for KI-1 can now be opened from
+*Settings → Engine diagnostics*.

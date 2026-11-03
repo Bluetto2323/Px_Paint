@@ -74,8 +74,22 @@ spacing and pressure behaviour (host test L4, KI-9).
 
 ## 5. UI screenshots
 
-From an Android 14 **emulator** (CI job "UI screenshots", SwiftShader, finger
-only). The images are on the `ci-screenshots` branch.
+From an Android 14 **emulator**, Pixel 6 profile at 1080×2400 (CI job "UI
+screenshots", SwiftShader, finger only). The ten screens cover:
+
+* the tool panel;
+* the library (all, scrolled, dry media);
+* the watercolour editor (preview and try pad, parameters, texture);
+* the textured brush editor;
+* Settings.
+
+They are on the `ci-screenshots` branch.
+
+The layout dump from this job found a bug that predates Block 5: in rows with a
+trailing chevron, a plain `View` measured `WRAP_CONTENT` took the whole width
+and hid the text. This affected "Edit brush" and, since Blocks 2 and 4,
+"Engine diagnostics" and "Pressure curve and test" in Settings. `Widgets.row`
+now keeps the trailing view's size, and the screenshots confirm the fix.
 
 ## 6. Automated tests
 
@@ -123,7 +137,7 @@ all 12 presets on both backends, and the chalk grain is visible on screen.
 * CI per 8-sample frame at default sizes:
   * round 0.15 ms, hard 0.07, airbrush 1.28, pencil 0.13, graphite 0.22, ink 0.36;
   * fine liner 0.11, marker 0.30, charcoal 0.42, chalk 0.81, textured 1.66, watercolor 0.64.
-* CI input → present (perf suite): GLES 20.5 ms, Vulkan 18.5 ms on average.
+* CI input → present (perf suite): GLES 20.5 / 22.0 ms and Vulkan 18.5 / 20.7 ms on average, from two runs.
   Block 4 runs on CI machines measured 16.8–23.1 ms, so this is in the same range.
 
 * CPU per 8-sample frame at default sizes (host):
