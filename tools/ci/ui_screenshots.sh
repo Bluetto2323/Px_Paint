@@ -55,5 +55,9 @@ adb shell input swipe 540 1900 540 500 600; sleep 3
 shot 07-editor-texture
 start --es pxpaint.demo editor --es pxpaint.brush builtin.textured
 shot 08-editor-textured
+start --es pxpaint.demo settings
+shot 09-settings
+adb shell input swipe 540 1900 540 600 600; sleep 2
+shot 10-settings-scrolled
 adb logcat -d -s PxPaint:* PaintEngine:* AndroidRuntime:E > "$OUT/logcat.txt" 2>&1 || true
 ls -la "$OUT"

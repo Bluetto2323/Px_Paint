@@ -13,6 +13,7 @@ import com.paintengine.pxpaint.core.BrushTool
  *   workspace       demo canvas, one stroke per built-in preset, tool panel open
  *   library         + brush library panel (optional --es pxpaint.filter dry|inking|...)
  *   editor          brush editor of --es pxpaint.brush <preset id>
+ *   settings        settings screen
  *
  * The strokes are drawn through the normal engine stroke API with finger-like
  * samples (no pressure: nothing is simulated).
@@ -29,6 +30,10 @@ object DebugDemo {
 
     fun start(host: PxHost, s: Script) {
         host.markTipShown(WorkspaceScreen.TIP_GESTURES)   // the first-run tip would cover the panels
+        if (s.panel == "settings") {
+            host.push(SettingsScreen(host))
+            return
+        }
         host.io.execute {
             val meta = runCatching { host.store.create("Brush demo", 1600, 2400, 0xFFFFFFFF.toInt(), false) }.getOrNull() ?: return@execute
             host.runOnMain {

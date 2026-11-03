@@ -784,7 +784,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 addView(theme.text(context, tr(S.CHANGE_BRUSH), PxTheme.Type.CAPTION, theme.accent, lines = 1))
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) },
-                LinearLayout.LayoutParams(theme.dp(18), theme.dp(18)))
+                LinearLayout.LayoutParams(theme.dp(18), theme.dp(18)))   // explicit size (see Widgets.row)
         })
         val b = host.brushes.effective(bt)
         val percent = { f: Float -> "${(f * 100).roundToInt()}%" }

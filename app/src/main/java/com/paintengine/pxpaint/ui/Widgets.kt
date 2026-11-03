@@ -185,9 +185,15 @@ object Widgets {
                 )
             }
             addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (trailing != null) addView(trailing, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                marginStart = theme.dp(12)
-            })
+            // Keep a size the caller gave the trailing view: a plain View measured
+            // WRAP_CONTENT takes all the width (View.getDefaultSize with AT_MOST)
+            // and squeezes the texts to nothing.
+            if (trailing != null) {
+                val given = trailing.layoutParams
+                addView(trailing, LinearLayout.LayoutParams(
+                    given?.width ?: LinearLayout.LayoutParams.WRAP_CONTENT, given?.height ?: LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = theme.dp(12) })
+            }
         }
 
     fun sectionHeader(context: Context, theme: PxTheme, title: String): TextView =
