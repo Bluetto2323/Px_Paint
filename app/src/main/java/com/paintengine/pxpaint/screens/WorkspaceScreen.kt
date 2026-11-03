@@ -286,6 +286,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (closed) return@runOnMain
                 result.onSuccess {
                     layerStack = it
+                    refreshPinned()
                     savedRevision = e.canvasContentRevision()
                     lastAutosave = SystemClock.uptimeMillis()
                     loaded = true
@@ -737,6 +738,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var sliderBubble: SliderBubble? = null
     private var libraryButton: IconButton? = null
     private var pinnedView: View? = null
+    private var slidersView: View? = null
     private val colorState = ColorPanel.State()
     /** Colour when the colour panel opened ("previous" swatch). */
     private var colorBefore = 0
@@ -773,8 +775,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val pinnedRight = s.pinned != PinnedPanel.NONE && s.panelSide == Side.RIGHT
 
         // Top bar (actions; on tablets also the tools)
+        val railW = if (s.toolbar == ToolbarPlacement.SIDE) theme.touchTarget + theme.dp(8) + m else 0
         c.addView(topBar(s), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
-            setMargins(ins.left + m, ins.top + m, ins.right + m, 0)
+            setMargins(ins.left + m + (if (s.railSide == Side.LEFT) railW else 0), ins.top + m,
+                ins.right + m + (if (s.railSide == Side.RIGHT) railW else 0), 0)
         })
         val belowBar = ins.top + m + barH + m
 
@@ -784,8 +788,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         // Zoom / rotation chip, centred over the canvas area.
         zoomChip = theme.text(context, "", PxTheme.Type.LABEL, theme.text).apply {
             gravity = Gravity.CENTER
-            minHeight = theme.dp(32)
-            setPadding(theme.dp(12), 0, theme.dp(12), 0)
+            minHeight = theme.touchTarget
+            minWidth = theme.touchTarget
+            setPadding(theme.dp(14), 0, theme.dp(14), 0)
             background = theme.pressable(theme.rounded(theme.chrome, theme.radiusPill, theme.outline), theme.radiusPill)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             isClickable = true
@@ -808,11 +813,18 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 dockH = theme.touchTarget + theme.dp(12) + theme.dp(if (s.toolLabels) 18 else 0) + theme.dp(12)
             }
             ToolbarPlacement.SIDE -> {
+                // Full height from the top (the top bar starts beside it): fits short landscape windows; scrolls if not.
                 val left = s.railSide == Side.LEFT
-                c.addView(dock(s, vertical = true), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                val rail = android.widget.ScrollView(context).apply {
+                    isVerticalScrollBarEnabled = false
+                    isFillViewport = false
+                    addView(dock(s, vertical = true))
+                }
+                c.addView(rail, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                     (if (left) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL).apply {
                     if (left) marginStart = ins.left + m else marginEnd = ins.right + m
-                    topMargin = belowBar - ins.top
+                    topMargin = ins.top + m
+                    bottomMargin = ins.bottom + m
                 })
             }
             ToolbarPlacement.TOP -> Unit
@@ -824,6 +836,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val availPx = (if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()) - sliderTop - sliderBottom
         val lengthPx = ((availPx - theme.dp(16)) / 2).coerceIn(theme.dp(72), theme.dp(QuickSlider.LENGTH_DP))
         val sliders = quickSliders(s, lengthPx)
+        slidersView = sliders
         val sliderLeft = s.sliderSide == Side.LEFT
         val railOnSliderSide = s.toolbar == ToolbarPlacement.SIDE && s.railSide == s.sliderSide
         val sideInset = theme.dp(2) + (if (railOnSliderSide) theme.touchTarget + theme.dp(24) else 0) +
@@ -924,14 +937,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 true
             }
             toolButtons[t] = b
-            box.addView(b)
+            box.addView(b, toolLp(vertical))
         }
         box.addView(separator(vertical))
         val preset = host.brushes.selectedPreset(brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool))
         libraryButton = IconButton(context, theme, Icon.LIBRARY, tr(S.BRUSH_LIBRARY_DESC, preset.displayName()),
             label = if (s.toolLabels) tr(S.BRUSH_LIBRARY) else null).apply {
             setOnClickListener { togglePanel(Panel.LIBRARY) }
-        }.also { box.addView(it) }
+        }.also { box.addView(it, toolLp(vertical)) }
         val swatch = FrameLayout(context).apply {
             minimumWidth = theme.touchTarget
             minimumHeight = theme.touchTarget
@@ -944,11 +957,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setOnClickListener { togglePanel(Panel.COLOR) }
         }
         colorButton = swatch
-        box.addView(swatch)
+        box.addView(swatch, toolLp(vertical))
         box.addView(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null).apply {
             setOnClickListener { togglePanel(Panel.LAYERS) }
-        })
+        }, toolLp(vertical))
     }
+
+    private fun toolLp(vertical: Boolean) = if (vertical)
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL }
+    else LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_VERTICAL }
 
     private fun dock(s: WorkspaceSpec, vertical: Boolean): View = LinearLayout(context).apply {
         orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
@@ -1059,6 +1076,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         panel = p
         panelView?.let { chrome?.removeView(it) }
         panelView = null
+        slidersView?.visibility = View.VISIBLE
         if (p != Panel.NONE) showPanel(p)
     }
 
@@ -1120,6 +1138,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         panelView = frame
         c.addView(frame, lp)
+        // A bottom sheet covers the edge sliders: hide them until it closes.
+        slidersView?.visibility = if (s.panelStyle == PanelStyle.BOTTOM_SHEET) View.INVISIBLE else View.VISIBLE
         if (!theme.reduceMotion) {
             frame.alpha = 0f
             frame.translationY = if (s.panelStyle == PanelStyle.BOTTOM_SHEET) theme.dpF(24f) else 0f
@@ -1259,8 +1279,17 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         c.addView(box, lp)
     }
 
+    /** Rebuilds only the pinned panel (its content changed); the rest of the chrome stays. */
     private fun refreshPinned() {
-        if (spec?.pinned != PinnedPanel.NONE) buildChrome()
+        val s = spec ?: return
+        val c = chrome ?: return
+        if (s.pinned == PinnedPanel.NONE || fullscreen) return
+        val old = pinnedView ?: return
+        val idx = c.indexOfChild(old)
+        val lp = old.layoutParams as? FrameLayout.LayoutParams ?: return
+        c.removeView(old)
+        pinnedPanel(c, s, lp.topMargin)
+        pinnedView?.let { v -> if (idx >= 0) { c.removeView(v); c.addView(v, idx) } }
     }
 
     private fun toolSettings(): View = column(context, theme, horizontalPadding = false) {
@@ -1339,7 +1368,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val t = if (tool == Tool.MOVE) Tool.MARKER else tool
         val panel = BrushLibraryPanel(host, brushTool(t), libraryState,
             onEdit = { bt -> host.push(BrushEditorScreen(host, bt)) },
-            onChanged = { showPanel(Panel.LIBRARY) })
+            onChanged = {
+                showPanel(Panel.LIBRARY)
+                if (spec?.pinned == PinnedPanel.BRUSHES) refreshPinned()
+                refreshDock()
+            })
         return panel.view()
     }
 
@@ -1560,6 +1593,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             host.runOnMain {
                 if (closed) return@runOnMain
                 LayerStack.parse(table)?.let { layerStack = it }
+                if (spec?.pinned == PinnedPanel.LAYERS) refreshPinned()
                 if (h != null) {
                     history = h
                     historyCounts = h.undo to h.redo
@@ -1609,6 +1643,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (err != LayerError.NONE) err.message?.let { host.overlays.message(tr(it)) }
                 else done?.let { host.overlays.message(tr(it)) }
                 LayerStack.parse(table)?.let { layerStack = it }
+                if (spec?.pinned == PinnedPanel.LAYERS) refreshPinned()
                 refreshHistoryButtons()
                 // The opacity slider keeps its own state while it is dragged.
                 if (panel == Panel.LAYERS && op != NativeEngine.LayerOp.OPACITY) showPanel(Panel.LAYERS)
@@ -1667,7 +1702,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     contentDescription = if (transparent) tr(S.BG_TRANSPARENT) else String.format(java.util.Locale.US, "#%06X", argb and 0xFFFFFF)
                     isClickable = true
                     setOnClickListener { setPaper(argb, transparent) }
-                }, LinearLayout.LayoutParams(theme.dp(36), theme.dp(36)).apply { marginEnd = theme.dp(10) })
+                }.let { sw -> FrameLayout(context).apply {
+                    // 36 dp swatch inside a full touch target.
+                    addView(sw, FrameLayout.LayoutParams(theme.dp(36), theme.dp(36), Gravity.CENTER))
+                    sw.isClickable = false
+                    sw.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    contentDescription = sw.contentDescription
+                    isClickable = true
+                    setOnClickListener { setPaper(argb, transparent) }
+                } }, LinearLayout.LayoutParams(theme.touchTarget, theme.touchTarget).apply { marginEnd = theme.dp(2) })
             }
         })
     }

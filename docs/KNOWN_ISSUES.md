@@ -266,3 +266,28 @@ be found on the A33, this was why; the REPORT for KI-1 can now be opened from
 * **The history list is not live while drawing.** It refreshes after each
   stroke and operation. The buttons follow within about 50 ms of a stroke's
   end.
+
+## KI-13 — Workspace redesign: limits of the Block 8 implementation
+
+* **No physical test yet.** Verified by:
+  * JVM tests of the layout policy (15 window shapes), gestures, colour math
+    and contrast tokens;
+  * emulator screenshots.
+
+  The phone layouts were captured on a Pixel 6 emulator profile. The tablet,
+  small and large layouts are **emulated windows** (`wm size` / `wm density`
+  on the same emulator), **not tablet hardware**. Touch on the emulator is a
+  single synthetic pointer: multi-finger taps and quick pinch are tested only
+  by the JVM tests.
+* **The stylus button eyedropper** uses `BUTTON_STYLUS_PRIMARY`. It is
+  untested with a real S Pen or USI stylus.
+* **Panel transitions** are short fades / slides (none with *Reduce motion*).
+  There are no shared-element animations between layouts: a rotation
+  rebuilds the chrome.
+* **Reordering layers** still uses Move up / Move down (no drag and drop).
+* **Accessibility audit.** It checks only the states captured. Rows cut off at
+  the edge of a scrolling panel can show up as "small targets" in the dump.
+* **Colour handling.** The colour panel works in sRGB, like the engine. There
+  is no wide-gamut (P3) colour picking.
+* **One pinned panel** at a time, on tablets only. Phones use sheets.
+

@@ -1,4 +1,4 @@
-# PxPaint — Blocco 7 (annulla / ripeti) sul motore Paint Engine
+# PxPaint — Blocco 8 (nuova interfaccia) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -59,6 +59,18 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
     vengono scartati.
   * Pulsanti ↶ ↷ attivi o disattivati, pannello Cronologia.
   * Dettagli: `docs/HISTORY.md`, `docs/BLOCK7_REPORT.md`.
+* **Blocco 8**: **nuova interfaccia per telefoni e tablet**.
+  * Layout scelto dalla finestra reale (non dal modello del dispositivo):
+    * telefono verticale: barra in basso e pannelli dal basso;
+    * telefono orizzontale: colonna laterale e pannelli laterali;
+    * tablet: una barra in alto, pannelli sospesi oppure un pannello fissato
+      e ridimensionabile.
+  * Cursori di dimensione e opacità sul bordo, con anteprima reale.
+  * Spazio colore: ruota, HSV, RGB, HEX, recenti, tavolozza, contagocce.
+  * Gesti configurabili: due dita annulla, tre ripeti, quattro nasconde
+    l'interfaccia, pizzico rapido adatta.
+  * Token di design con contrasto WCAG verificato.
+  * Dettagli: `docs/UI.md`, `docs/BLOCK8_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).

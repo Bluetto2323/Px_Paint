@@ -226,7 +226,7 @@ class BrushLibraryPanel(
             addView(theme.text(context, sub, PxTheme.Type.CAPTION, if (lib.isModified(p.id)) theme.accent else theme.textSecondary, lines = 1))
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         val fav = lib.isFavorite(p.id)
-        addView(IconButton(context, theme, if (fav) Icon.STAR_FILLED else Icon.STAR, tr(if (fav) S.FAVORITE_REMOVE else S.FAVORITE_ADD), sizeDp = 36f).apply {
+        addView(IconButton(context, theme, if (fav) Icon.STAR_FILLED else Icon.STAR, tr(if (fav) S.FAVORITE_REMOVE else S.FAVORITE_ADD), sizeDp = 40f).apply {
             isSelected = fav
             setOnClickListener {
                 host.updateBrushes(lib.toggleFavorite(p.id))
@@ -234,7 +234,7 @@ class BrushLibraryPanel(
                 if (state.filter == BrushFilter.FAVORITES) buildList()
             }
         })
-        val more = IconButton(context, theme, Icon.MORE, tr(S.MORE_OPTIONS), sizeDp = 36f)
+        val more = IconButton(context, theme, Icon.MORE, tr(S.MORE_OPTIONS), sizeDp = 40f)
         more.setOnClickListener { menu(more, p) }
         addView(more)
     }

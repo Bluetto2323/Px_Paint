@@ -61,7 +61,7 @@ class ColorWheel(context: Context, private val theme: PxTheme, description: Stri
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        val side = min(w, theme.dp(280))
+        val side = min(w, theme.dp(240))
         setMeasuredDimension(w, side)
     }
 

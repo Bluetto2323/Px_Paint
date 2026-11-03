@@ -126,7 +126,8 @@ object Widgets {
     fun chip(context: Context, theme: PxTheme, text: String, selected: Boolean, onClick: () -> Unit): TextView =
         theme.text(context, text, PxTheme.Type.LABEL, if (selected) theme.accent else theme.textSecondary, lines = 1).apply {
             gravity = Gravity.CENTER
-            minHeight = theme.dp(36)
+            minHeight = theme.touchTarget
+            minWidth = theme.touchTarget
             setPadding(theme.dp(14), 0, theme.dp(14), 0)
             background = theme.pressable(
                 theme.rounded(if (selected) theme.accentSoft else theme.surface, theme.dpF(999f),

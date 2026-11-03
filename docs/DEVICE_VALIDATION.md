@@ -444,3 +444,44 @@ Installa `PxPaint-block7-debug-….apk` **sopra** la build del Blocco 6 (i proge
 
 Riporta OK / KO per ogni riga.
 
+
+---
+
+# Blocco 8 — Nuova interfaccia: checklist sul Galaxy A33
+
+Installa `PxPaint-block8-debug-….apk` **sopra** la build del Blocco 7 (progetti, pennelli e impostazioni restano).
+
+### 1. Telefono in verticale
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1.1 | Apri una tela | barra in alto (galleria, nome, ↶ ↷, ⋮); in basso Pennello, Gomma, Sposta, Libreria, Colore, Livelli; a sinistra due cursori verticali |
+| 1.2 | Trascina il cursore superiore (dimensione) | accanto compare la punta alla sua grandezza reale e i px; il valore non salta al primo tocco; spostando il dito lontano dal cursore la regolazione diventa più fine |
+| 1.3 | Cursore inferiore (opacità) | anteprima del colore con quell'opacità e la percentuale |
+| 1.4 | Tocca di nuovo Pennello | pannello dal basso: pennello attuale, pennelli recenti, dimensione, opacità; trascinando la maniglia verso il basso si chiude |
+| 1.5 | Libreria | categorie, ricerca, preferiti, anteprime; la tela resta visibile sopra |
+| 1.6 | Colore | ruota dei colori, HSV / RGB con i valori, HEX (prova `#FF8800` e un valore sbagliato), recenti, tavolozza (+ per salvare, tieni premuto per togliere) |
+| 1.7 | Contagocce nel pannello colore, poi tocca la tela | una lente segue il dito; al rilascio il colore diventa quello del pennello |
+| 1.8 | Tocco con due dita / tre dita | annulla / ripete l'ultimo passaggio, senza lasciare punti sulla tela |
+| 1.9 | Pizzico veloce verso l'interno | la tela si adatta allo schermo; un pizzico lento rimpicciolisce normalmente |
+| 1.10 | Tocco con quattro dita (o ⋮ → Nascondi interfaccia) | resta solo la tela (anche senza barre di sistema) e un pulsante nell'angolo; di nuovo quattro dita o il pulsante per tornare |
+| 1.11 | Disegna mentre un pannello è aperto | il primo tocco chiude il pannello senza disegnare; il tocco successivo disegna |
+
+### 2. Telefono in orizzontale
+
+| # | Azione | Atteso |
+|---|---|---|
+| 2.1 | Ruota il telefono | strumenti in una colonna a sinistra, cursori a destra, la tela resta la stessa (zoom, livelli, cronologia) |
+| 2.2 | Colore / Livelli | pannello laterale a destra, la tela resta visibile per più di metà larghezza |
+
+### 3. Impostazioni
+
+| # | Azione | Atteso |
+|---|---|---|
+| 3.1 | Impostazioni → Barra strumenti → cursori a destra | i cursori passano al bordo destro |
+| 3.2 | Impostazioni → Gesti: disattiva il tocco con due dita | il tocco con due dita non annulla più |
+| 3.3 | Tema chiaro, Contrasto elevato, Bersagli grandi | tutto resta leggibile e utilizzabile |
+| 3.4 | S Pen o stilo con tasto (se disponibile): tieni premuto il tasto e tocca la tela | prende il colore |
+
+Riporta OK / KO per ogni riga. I layout per tablet sono stati provati solo in finestre emulate: se hai un tablet Android, prova anche lì (pannello fissato con 📌 e bordo trascinabile per ridimensionarlo).
+

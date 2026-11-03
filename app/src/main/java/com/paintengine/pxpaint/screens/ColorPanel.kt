@@ -89,8 +89,8 @@ class ColorPanel(private val host: PxHost, private val ops: Ops, private val sta
                 contentDescription = "${tr(S.COLOR_CURRENT)} ${ColorMath.toHex(ops.color)}"
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             }
-            pair.addView(prev, LinearLayout.LayoutParams(theme.dp(40), theme.touchTarget - theme.dp(6)))
-            pair.addView(current, LinearLayout.LayoutParams(theme.dp(40), theme.touchTarget - theme.dp(6)).apply { marginStart = theme.dp(3) })
+            pair.addView(prev, LinearLayout.LayoutParams(theme.touchTarget, theme.touchTarget))
+            pair.addView(current, LinearLayout.LayoutParams(theme.touchTarget, theme.touchTarget).apply { marginStart = theme.dp(3) })
             addView(pair, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginStart = theme.dp(6)
             })

@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 out = sys.argv[1]
 MIN_DP = 48
 problems_total = 0
+clipped_total = [0]
 nodes_total = 0
 lines = []
 try:
@@ -45,6 +46,10 @@ for name, density in ((e[0], int(e[1]) if len(e) > 1 and e[1].isdigit() else 420
         w_dp = (x1 - x0) * 160 / density
         h_dp = (y1 - y0) * 160 / density
         cls = n.get("class", "").split(".")[-1]
+        if w_dp < 12 or h_dp < 12:
+            # Mostly scrolled out of its list: the dump only has the visible sliver.
+            clipped_total[0] += 1
+            continue
         if not label:
             problems.append(f"  unlabelled {cls} at {n.get('bounds')}")
         # Partly scrolled-out rows are clipped by the dump: only check fully visible, non-text-field nodes.
@@ -55,4 +60,4 @@ for name, density in ((e[0], int(e[1]) if len(e) > 1 and e[1].isdigit() else 420
     lines.append(f"{name} (density {density}): {checked} interactive nodes, {len(problems)} problems")
     lines.extend(problems)
 print("\n".join(lines))
-print(f"TOTAL: {nodes_total} interactive nodes checked, {problems_total} problems")
+print(f"TOTAL: {nodes_total} interactive nodes checked, {problems_total} problems ({clipped_total[0]} rows scrolled almost out of view not checked)")
