@@ -22,6 +22,7 @@
 #include <mutex>
 #include <vector>
 
+#include "brush/BrushDynamics.h"
 #include "brush/BrushTypes.h"
 #include "brush/StrokeCompositor.h"
 #include "brush/StrokePath.h"
@@ -79,12 +80,12 @@ private:
     struct Event {
         Ev type = Ev::Sample;
         StrokePoint p;
-        BrushSettings s;
     };
     void push(const Event& e);
 
     mutable std::mutex inputMutex_;
     std::vector<Event> queue_;       // guarded by inputMutex_
+    std::vector<BrushSettings> beginSettings_;  // one per queued Begin, in order (guarded)
     uint64_t received_ = 0;          // guarded by inputMutex_
     int64_t queuedSinceNs_ = 0;      // guarded by inputMutex_: oldest event in queue_
     int64_t consumedQueuedNs_ = 0;   // processing side
@@ -92,6 +93,12 @@ private:
 
     // Processing state (caller-synchronised)
     std::vector<Event> work_;
+    std::vector<BrushSettings> workSettings_;
+    PressureFilter pressure_;
+    bool strokeHasPressure_ = false, strokeHasTilt_ = false;
+    // Prepares a sample for the active stroke: smoothed pressure; axes the
+    // stroke does not use are cleared (no mixing finger / stylus data).
+    StrokePoint prepare(const StrokePoint& p);
     std::vector<Dab> dabs_;
     StrokePath path_;
     StrokeCompositor comp_;

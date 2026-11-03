@@ -14,6 +14,7 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
     # brush engine (CPU, no GPU, no UI)
+    ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/StrokePath.cpp
     ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
     ${PE_CPP_DIR}/brush/BrushEngine.cpp
@@ -59,6 +60,7 @@ set(PE_CANVAS_CORE_SOURCES
 set(PE_BRUSH_CORE_SOURCES
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
+    ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/StrokePath.cpp
     ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
     ${PE_CPP_DIR}/brush/BrushEngine.cpp
@@ -67,6 +69,7 @@ set(PE_BRUSH_CORE_SOURCES
 # Per-pixel paths, always optimised (also in debug builds): brush
 # rasterisation, compositing, raster store, tile copies.
 set(PE_HOT_SOURCES
+    ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/StrokePath.cpp
     ${PE_CPP_DIR}/brush/StrokeCompositor.cpp
     ${PE_CPP_DIR}/brush/BrushEngine.cpp

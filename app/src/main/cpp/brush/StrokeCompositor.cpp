@@ -46,10 +46,10 @@ void StrokeCompositor::grow(RectI& r, const RectI& add) {
     r = {l, t, rr - l, b - t};
 }
 
-void StrokeCompositor::begin(RasterStore& store, const BrushSettings& settings) {
+void StrokeCompositor::begin(RasterStore& store, const BrushSettings& settings, bool hasPressure, bool hasTilt) {
     if (active_) commit(store);
     settings_ = settings.sanitized();
-    shape_ = DabShape::forDiameter(settings_.diameter);
+    dyn_.configure(settings_, hasPressure, hasTilt);
     const float colourAlpha = static_cast<float>((settings_.argb >> 24) & 0xFF) / 255.0f;
     paintA_ = settings_.opacity * colourAlpha;
     paintR_ = static_cast<float>((settings_.argb >> 16) & 0xFF);
@@ -97,14 +97,22 @@ StrokeCompositor::StrokeTile* StrokeCompositor::tileFor(RasterStore& store, int3
 
 void StrokeCompositor::rasterDab(RasterStore& store, const Dab& d, bool toTail) {
     if (!std::isfinite(d.x) || !std::isfinite(d.y)) return;
-    const RectI box = shape_.bounds(d.x, d.y).intersect(store.canvasRect());
+    const DabGeometry g = dyn_.geometry(d.axes);
+    if (g.elliptical) {
+        rasterEllipse(store, d, g, toTail);
+        return;
+    }
+    DabShape shape;
+    shape.radius = g.radius;
+    shape.scale = g.scale;
+    const RectI box = shape.bounds(d.x, d.y).intersect(store.canvasRect());
     int32_t tx0, ty0, tx1, ty1;
     if (!store.tileRange(box, tx0, ty0, tx1, ty1)) return;
-    const double r = shape_.radius;
+    const double r = g.radius;
     const double inner = r - 0.5;
     const double inner2 = inner > 0 ? inner * inner : -1.0;
     const double outer2 = (r + 0.5) * (r + 0.5);
-    const double scale = shape_.scale;
+    const double scale = g.scale * g.flow;  // pressure opacity scales the dab's coverage
     const uint16_t full = static_cast<uint16_t>(std::lround(65535.0 * scale));
     for (int32_t ty = ty0; ty <= ty1; ++ty) {
         for (int32_t tx = tx0; tx <= tx1; ++tx) {
@@ -153,6 +161,99 @@ void StrokeCompositor::rasterDab(RasterStore& store, const Dab& d, bool toTail) 
             }
             grow(st->dirty, part);
             if (toTail) grow(st->tailRect, part);
+        }
+    }
+    stats_.dabs++;
+}
+
+void StrokeCompositor::rasterEllipse(RasterStore& store, const Dab& d, const DabGeometry& g, bool toTail) {
+    // Antialiased ellipse: normalised radius rho = |(u/a, v/b)|; the distance
+    // to the edge is approximated by (rho - 1) / |grad rho| (exact on the
+    // axes, within a few percent elsewhere), then the same 1 px ramp as the
+    // round dab.
+    const double a = g.major, b = g.radius;
+    const double e = a + 1.0;
+    const RectI box = RectI{static_cast<int32_t>(std::floor(d.x - e)), static_cast<int32_t>(std::floor(d.y - e)),
+                            static_cast<int32_t>(std::ceil(2 * e)) + 1, static_cast<int32_t>(std::ceil(2 * e)) + 1}
+                          .intersect(store.canvasRect());
+    int32_t tx0, ty0, tx1, ty1;
+    if (!store.tileRange(box, tx0, ty0, tx1, ty1)) return;
+    const double c = std::cos(g.angle), sn = std::sin(g.angle);
+    const double ia2 = 1.0 / (a * a), ib2 = 1.0 / (b * b);
+    const double scale = g.scale * g.flow;
+    const uint16_t full = static_cast<uint16_t>(std::lround(65535.0 * scale));
+    // Outer limit: 1 px beyond the edge along the minor axis (and more along
+    // the major one). Core: the ellipse scaled so it stays >= 0.5 px inside
+    // the edge everywhere (min distance of homothetic ellipses is along the
+    // minor axis): coverage is exactly 1 there.
+    const double outerR2 = (1.0 + 1.0 / b) * (1.0 + 1.0 / b);
+    const double k = std::max(0.0, 1.0 - 0.5 / b);
+    const double coreR2 = k * k;
+    for (int32_t ty = ty0; ty <= ty1; ++ty) {
+        for (int32_t tx = tx0; tx <= tx1; ++tx) {
+            const RectI part = box.intersect(store.tileRect(tx, ty));
+            if (part.empty()) continue;
+            StrokeTile* st = tileFor(store, tx, ty, true);
+            if (!st) continue;
+            uint16_t* plane = toTail ? st->tail.get() : st->mask.get();
+            const int32_t ox = tx * kTile, oy = ty * kTile;
+            bool touched = false;
+            for (int32_t y = part.y; y < part.bottom(); ++y) {
+                const double dy = (y + 0.5) - d.y;
+                // rho^2(dx) = A dx^2 + B dx + C on this row: solve for the
+                // span inside the outer limit and the fully covered core.
+                const double A = c * c * ia2 + sn * sn * ib2;
+                const double B = 2.0 * dy * c * sn * (ia2 - ib2);
+                const double C = dy * dy * (sn * sn * ia2 + c * c * ib2);
+                auto span = [&](double r2, double& lo, double& hi) {
+                    const double disc = B * B - 4.0 * A * (C - r2);
+                    if (disc < 0) return false;
+                    const double sq = std::sqrt(disc);
+                    lo = (-B - sq) / (2.0 * A);
+                    hi = (-B + sq) / (2.0 * A);
+                    return true;
+                };
+                double lo, hi;
+                if (!span(outerR2, lo, hi)) continue;
+                const int32_t xs = std::max(part.x, static_cast<int32_t>(std::floor(d.x + lo - 0.5)));
+                const int32_t xe = std::min(part.right(), static_cast<int32_t>(std::ceil(d.x + hi - 0.5)) + 1);
+                if (xs >= xe) continue;
+                int32_t cs = xe, ce = xe;
+                double clo, chi;
+                if (span(coreR2, clo, chi)) {
+                    cs = std::max(xs, static_cast<int32_t>(std::ceil(d.x + clo - 0.5)));
+                    ce = std::min(xe, static_cast<int32_t>(std::floor(d.x + chi - 0.5)) + 1);
+                    if (ce < cs) cs = ce = xe;
+                }
+                uint16_t* row = plane + static_cast<size_t>(y - oy) * kTile - ox;
+                auto ring = [&](int32_t x0, int32_t x1) {
+                    for (int32_t x = x0; x < x1; ++x) {
+                        const double dx = (x + 0.5) - d.x;
+                        const double u = dx * c + dy * sn, v = -dx * sn + dy * c;
+                        const double q = u * u * ia2 + v * v * ib2;  // rho^2
+                        if (q >= outerR2) continue;
+                        const double rho = std::sqrt(q);
+                        double cov = 1.0;
+                        if (rho >= 0.5) {
+                            const double gu = u * ia2, gv = v * ib2;
+                            const double grad = std::sqrt(gu * gu + gv * gv) / rho;
+                            cov = std::clamp(0.5 - (rho - 1.0) / grad, 0.0, 1.0);
+                        }
+                        if (cov <= 0.0) continue;
+                        const uint16_t val = static_cast<uint16_t>(cov * scale * 65535.0 + 0.5);
+                        uint16_t& m = row[x];
+                        if (val > m) m = val;
+                    }
+                };
+                ring(xs, cs);
+                for (int32_t x = cs; x < ce; ++x) row[x] = std::max(row[x], full);
+                ring(ce, xe);
+                touched = true;
+            }
+            if (touched) {
+                grow(st->dirty, part);
+                if (toTail) grow(st->tailRect, part);
+            }
         }
     }
     stats_.dabs++;

@@ -586,6 +586,299 @@ void testStore() {
     check(s.tilesAllocated() == 0 && s.version() > v, "B16: clear frees every tile");
 }
 
+
+// ======================================================= Block 4: pressure & tilt
+Path withPressure(Path p, float p0, float p1) {
+    for (size_t i = 0; i < p.size(); ++i) {
+        const double f = p.size() == 1 ? 0.0 : static_cast<double>(i) / (p.size() - 1);
+        p[i].axes.pressure = static_cast<float>(p0 + (p1 - p0) * f);
+    }
+    return p;
+}
+BrushSettings dyn(float d, bool size, bool opacity, float minSize = 0.2f, float minOpacity = 0.2f, float smoothing = 0.0f) {
+    BrushSettings b = brush(d);
+    b.pressureSize = size;
+    b.pressureOpacity = opacity;
+    b.minSizeFraction = minSize;
+    b.minOpacityFraction = minOpacity;
+    b.pressureSmoothing = smoothing;
+    return b;
+}
+double widthAt(const RasterStore& s, int x, int y0, int y1) { return columnInk(s, x, y0, y1); }
+
+void testPressureCompat() {
+    section("P1 missing pressure axis: strokes identical to Block 3");
+    RasterStore a, b;
+    a.reset(600, 300);
+    b.reset(600, 300);
+    BrushEngine e1, e2;
+    BrushSettings plain = brush(30, 0.7f, 0xFF3050A0u);
+    BrushSettings dynamics = plain;
+    dynamics.pressureSize = dynamics.pressureOpacity = dynamics.tiltShape = true;
+    const Path p = circle(300, 150, 100, 23, 0.8);  // no axes: finger / mouse
+    draw(e1, a, plain, p, 3);
+    draw(e2, b, dynamics, p, 3);
+    int worst = 0;
+    check(sameStore(a, b, 0, &worst), fmt("P1: dynamics enabled but no pressure/tilt in the samples: identical pixels (diff %.0f)", worst));
+    check(e2.stats().strokesCommitted == 1, "P1: committed");
+}
+
+void testPressureSize() {
+    section("P2 pressure -> size: min / max / response");
+    const double D = 40;
+    for (float pr : {0.0f, 0.25f, 0.5f, 1.0f}) {
+        RasterStore s;
+        s.reset(800, 300);
+        BrushEngine e;
+        draw(e, s, dyn(static_cast<float>(D), true, false), withPressure(line(100, 150.3, 700, 150.3, 20), pr, pr));
+        const double expect = D * (0.2 + 0.8 * pr);
+        double lo = 1e9, hi = 0;
+        for (int x = 200; x <= 600; x += 20) {
+            const double w = widthAt(s, x, 50, 250);
+            lo = std::min(lo, w);
+            hi = std::max(hi, w);
+        }
+        check(std::abs(lo - expect) < 0.3 && std::abs(hi - expect) < 0.3,
+              fmt("P2: pressure %.2f -> width %.2f..%.2f px", pr, lo, hi) + fmt(" (expected %.2f)", expect));
+    }
+    // Out-of-range values are clamped, never extrapolated.
+    RasterStore over;
+    over.reset(800, 300);
+    BrushEngine eo;
+    draw(eo, over, dyn(static_cast<float>(D), true, false), withPressure(line(100, 150, 700, 150, 5), 1.7f, 1.7f));
+    check(std::abs(widthAt(over, 400, 50, 250) - D) < 0.3, "P2: pressure > 1 clamps to the maximum size");
+    // A response curve (here p^2) shapes the size.
+    auto lut = std::make_shared<pe::brush::PressureLut>();
+    for (size_t i = 0; i < pe::brush::PressureLut::kSize; ++i) {
+        const float x = static_cast<float>(i) / (pe::brush::PressureLut::kSize - 1);
+        lut->lut[i] = x * x;
+    }
+    BrushSettings curved = dyn(static_cast<float>(D), true, false);
+    curved.pressureCurve = lut;
+    RasterStore cs;
+    cs.reset(800, 300);
+    BrushEngine ec;
+    draw(ec, cs, curved, withPressure(line(100, 150, 700, 150, 5), 0.5f, 0.5f));
+    check(std::abs(widthAt(cs, 400, 50, 250) - D * (0.2 + 0.8 * 0.25)) < 0.3, "P2: response curve p^2 -> 0.5 maps to 0.25");
+    BrushSettings bad = curved;
+    auto badLut = std::make_shared<pe::brush::PressureLut>(*lut);
+    badLut->lut[100] = 2.0f;  // not monotonic
+    bad.pressureCurve = badLut;
+    check(!bad.sanitized().pressureCurve, "P2: invalid (non-monotonic) curve rejected -> linear");
+}
+
+void testNeverDisappears() {
+    section("P3 a pressure value never makes the stroke vanish");
+    RasterStore s;
+    s.reset(800, 300);
+    BrushEngine e;
+    // Minimum size 0 requested (floored at 2 %), opacity minimum 0 (floored at 5 %), zero pressure.
+    draw(e, s, dyn(40, true, true, 0.0f, 0.0f), withPressure(line(100, 150.5, 700, 150.5, 10), 0.0f, 0.0f));
+    double minCentre = 1;
+    for (int x = 150; x <= 650; ++x) minCentre = std::min(minCentre, alpha(s, x, 150));
+    check(minCentre > 0.0, fmt("P3: zero pressure still paints (min centre alpha %.3f)", minCentre));
+    RasterStore t;
+    t.reset(800, 300);
+    BrushEngine e2;
+    Path nan = line(100, 150, 700, 150, 10);
+    nan[0].axes.pressure = 0.5f;   // stroke has pressure...
+    nan[4].axes.pressure = NAN;    // ...one sample lost it
+    for (size_t i = 1; i < nan.size(); ++i) if (i != 4) nan[i].axes.pressure = 0.5f;
+    draw(e2, t, dyn(40, true, false), nan);
+    check(alpha(t, 330, 150) == 1.0, "P3: a sample without pressure inside a pressure stroke does not break it");
+}
+
+void testPressureInterpolation() {
+    section("P4 pressure interpolated between (historical) samples");
+    const double D = 40;
+    RasterStore s;
+    s.reset(900, 300);
+    BrushEngine e;
+    // ONE segment from pressure 0 to 1: the width must grow smoothly along it.
+    draw(e, s, dyn(static_cast<float>(D), true, false), withPressure(line(100, 150.5, 800, 150.5, 2), 0.0f, 1.0f));
+    double prev = 0, maxStep = 0;
+    bool monotonic = true;
+    for (int x = 120; x <= 780; x += 10) {
+        const double w = widthAt(s, x, 50, 250);
+        if (w + 0.05 < prev) monotonic = false;
+        if (prev > 0) maxStep = std::max(maxStep, w - prev);
+        prev = w;
+    }
+    const double mid = widthAt(s, 450, 50, 250);
+    check(monotonic, "P4: width grows monotonically along a 0 -> 1 pressure segment");
+    check(std::abs(mid - D * (0.2 + 0.8 * 0.5)) < 1.0, fmt("P4: half-way width %.2f px (expected %.2f)", mid, D * 0.6));
+    check(maxStep < 1.0, fmt("P4: no steps (largest change per 10 px: %.3f px)", maxStep));
+    // Dense historical samples (pressure ramp) vs the same ramp in 2 samples: same result.
+    RasterStore dense;
+    dense.reset(900, 300);
+    BrushEngine e2;
+    draw(e2, dense, dyn(static_cast<float>(D), true, false), withPressure(line(100, 150.5, 800, 150.5, 300), 0.0f, 1.0f), 7);
+    double worst = 0;
+    for (int x = 120; x <= 780; x += 10) worst = std::max(worst, std::abs(widthAt(dense, x, 50, 250) - widthAt(s, x, 50, 250)));
+    check(worst < 0.5, fmt("P4: 300 samples in batches of 7 vs 2 samples: widths agree within %.3f px", worst));
+}
+
+void testPressureOpacity() {
+    section("P5 pressure -> opacity, independent of size");
+    RasterStore s;
+    s.reset(800, 300);
+    fillOpaque(s, 0xFFFFFFFFu);
+    BrushEngine e;
+    draw(e, s, dyn(30, false, true), withPressure(line(100, 100, 700, 100, 8), 0.5f, 0.5f));
+    const int expect = static_cast<int>(std::lround(255 * (1 - 0.6)));  // flow = 0.2 + 0.8 * 0.5
+    check(std::abs(s.pixel(400, 100).r - expect) <= 1, fmt("P5: 50%% pressure -> 60%% opacity (pixel %.0f, expected %.0f)",
+                                                           s.pixel(400, 100).r, expect));
+    check(std::abs(columnInk(s, 400, 50, 150) - 0) >= 0 && alpha(s, 400, 100 + 14) == 1.0,
+          "P5: opacity only: size unchanged (30 px)");
+    // Self-overlap at constant pressure still does not darken.
+    RasterStore z;
+    z.reset(600, 600);
+    fillOpaque(z, 0xFFFFFFFFu);
+    BrushEngine e2;
+    Path zig;
+    for (int i = 0; i <= 10; ++i) zig.push_back({100.0 + (i % 2) * 400, 100.0 + i * 30, 0});
+    draw(e2, z, dyn(40, false, true), withPressure(zig, 0.5f, 0.5f));
+    int darkest = 255;
+    for (int y = 0; y < 600; ++y)
+        for (int x = 0; x < 600; ++x) darkest = std::min(darkest, static_cast<int>(z.pixel(x, y).r));
+    check(std::abs(darkest - expect) <= 1, fmt("P5: overlapping dabs keep the pressure opacity (darkest %.0f)", darkest));
+    // Size and opacity together.
+    RasterStore b;
+    b.reset(800, 300);
+    fillOpaque(b, 0xFFFFFFFFu);
+    BrushEngine e3;
+    draw(e3, b, dyn(30, true, true), withPressure(line(100, 150, 700, 150, 8), 0.5f, 0.5f));
+    check(std::abs(b.pixel(400, 150).r - expect) <= 1 && b.pixel(400, 150 + 12).r == 255,
+          "P5: size and opacity together (18 px wide, 60%)");
+}
+
+void testPressureFilter() {
+    section("P6 pressure smoothing: noise reduced, fast changes preserved, no start lag");
+    pe::brush::PressureFilter f;
+    f.reset(0.0f);
+    check(f.filter(0.37f, 0) == 0.37f && f.filter(0.91f, 4) == 0.91f, "P6: smoothing 0 = raw values");
+    f.reset(0.35f);
+    check(f.filter(0.2f, 0) == 0.2f, "P6: first sample taken as is (no ramp-in)");
+    for (int i = 1; i < 20; ++i) f.filter(0.2f, i * 4.1667);
+    float v = 0;
+    int samples = 0;
+    while (v < 0.8f && samples < 50) v = f.filter(0.9f, (20 + samples++) * 4.1667);
+    check(samples <= 3, fmt("P6: step 0.2 -> 0.9 at 240 Hz reaches 0.8 in %.0f samples (%.1f ms)", samples, samples * 4.1667));
+    std::mt19937 rng(3);
+    std::normal_distribution<double> noise(0.0, 0.02);
+    f.reset(0.35f);
+    double rawVar = 0, outVar = 0;
+    const int n = 2000;
+    for (int i = 0; i < n; ++i) {
+        const double raw = 0.5 + noise(rng);
+        const double out = f.filter(static_cast<float>(raw), i * 4.1667);
+        if (i > 50) {
+            rawVar += (raw - 0.5) * (raw - 0.5);
+            outVar += (out - 0.5) * (out - 0.5);
+        }
+    }
+    const double ratio = std::sqrt(outVar / rawVar);
+    check(ratio < 0.6, fmt("P6: sensor noise (sigma 0.02) reduced to %.0f%% of its amplitude", ratio * 100));
+    // Slow ramp: lag stays small.
+    f.reset(0.35f);
+    double worstLag = 0;
+    for (int i = 0; i < 240; ++i) {
+        const double target = i / 240.0;  // 0 -> 1 in one second
+        worstLag = std::max(worstLag, target - f.filter(static_cast<float>(target), i * 4.1667));
+    }
+    check(worstLag < 0.05, fmt("P6: slow 1 s press: filtered value lags by at most %.3f", worstLag));
+    // End-to-end: a fast press inside a stroke shows up within a few px.
+    RasterStore s;
+    s.reset(900, 300);
+    BrushEngine e;
+    Path p = line(100, 150.5, 800, 150.5, 141);  // 5 px per sample
+    for (size_t i = 0; i < p.size(); ++i) {
+        p[i].t = i * 4.1667;
+        p[i].axes.pressure = i < 70 ? 0.1f : 1.0f;
+    }
+    draw(e, s, dyn(40, true, false, 0.2f, 0.2f, 0.35f), p, 4);
+    const double before = widthAt(s, 400, 50, 250), after = widthAt(s, 470, 50, 250);
+    check(before < 12 && after > 38, fmt("P6: width %.1f px before, %.1f px 20 px after a fast press", before, after));
+}
+
+void testTilt() {
+    section("P7 tilt + orientation shape the dab; missing tilt -> round");
+    const double D = 20;
+    auto tap = [&](float tilt, float orient, bool enabled) {
+        RasterStore s;
+        s.reset(200, 200);
+        BrushEngine e;
+        BrushSettings b = brush(static_cast<float>(D));
+        b.tiltShape = enabled;
+        StrokePoint p{100.5, 100.5, 0};
+        p.axes.tilt = tilt;
+        p.axes.orientation = orient;
+        draw(e, s, b, Path{p});
+        return std::pair<double, double>(rowInk(s, 100, 0, 199), columnInk(s, 100, 0, 199));
+    };
+    const auto round = tap(NAN, NAN, true);
+    check(std::abs(round.first - D) < 0.3 && std::abs(round.second - D) < 0.3, "P7: no tilt axis -> round dab");
+    const auto noOrient = tap(1.0f, NAN, true);
+    check(std::abs(noOrient.first - D) < 0.3 && std::abs(noOrient.second - D) < 0.3,
+          "P7: tilt without orientation -> round (direction unknown, not invented)");
+    const float kPi = 3.14159265f;
+    const auto flat = tap(kPi / 3, kPi / 2, true);  // 60 deg tilt, pointing right
+    const double major = D * (1 + 1.5 * std::sin(kPi / 3));
+    check(std::abs(flat.first - major) < 0.8 && std::abs(flat.second - D) < 0.5,
+          fmt("P7: 60 deg tilt pointing right: %.2f x %.2f px", flat.first, flat.second) + fmt(" (expected %.2f x 20)", major));
+    const auto up = tap(kPi / 3, 0.0f, true);  // pointing up: long axis vertical
+    check(std::abs(up.second - major) < 0.8 && std::abs(up.first - D) < 0.5, "P7: orientation 0 (up): long axis vertical");
+    const auto off = tap(kPi / 3, kPi / 2, false);
+    check(std::abs(off.first - D) < 0.3, "P7: tilt shaping disabled -> round");
+    check(std::abs(pe::brush::lerpAxes({0.5f, 0, 3.0f}, {0.5f, 0, -3.0f}, 0.5).orientation) > 3.1f,
+          "P7: orientation interpolates along the shorter arc (across +-pi)");
+}
+
+void testTransitions() {
+    section("P8 stylus -> finger -> stylus: no state leaks between strokes; cancel");
+    RasterStore mixed, ref;
+    mixed.reset(800, 400);
+    ref.reset(800, 400);
+    BrushEngine e;
+    BrushSettings b = dyn(30, true, true, 0.2f, 0.2f, 0.35f);
+    draw(e, mixed, b, withPressure(line(100, 100, 700, 100, 30), 0.1f, 0.3f));   // stylus
+    draw(e, mixed, b, line(100, 250, 700, 250, 30));                               // finger: no pressure
+    BrushEngine e2;
+    draw(e2, ref, b, withPressure(line(100, 100, 700, 100, 30), 0.1f, 0.3f));
+    draw(e2, ref, brush(30), line(100, 250, 700, 250, 30));                         // plain Block 3 stroke
+    check(sameStore(mixed, ref, 0), "P8: the finger stroke after a stylus stroke is a plain full-size stroke");
+    // Cancel restores exactly, also with pressure + tilt.
+    RasterStore c, before;
+    c.reset(800, 400);
+    before.reset(800, 400);
+    BrushEngine e3, e4;
+    draw(e3, c, brush(20), line(50, 200, 750, 200, 5));
+    draw(e4, before, brush(20), line(50, 200, 750, 200, 5));
+    BrushSettings tb = b;
+    tb.tiltShape = true;
+    Path p = withPressure(circle(400, 200, 150, 30), 0.2f, 1.0f);
+    for (auto& q : p) {
+        q.axes.tilt = 0.8f;
+        q.axes.orientation = 1.0f;
+    }
+    e3.begin(tb, p[0]);
+    e3.addSamples(p.data() + 1, 20);
+    e3.process(c);
+    e3.cancel();
+    e3.process(c);
+    check(sameStore(c, before, 0), "P8: cancelled pressure + tilt stroke restores the canvas bit for bit");
+    // Batching determinism with pressure.
+    RasterStore one, many;
+    one.reset(800, 400);
+    many.reset(800, 400);
+    BrushEngine e5, e6;
+    Path q = withPressure(circle(400, 200, 120, 40, 1.2), 0.0f, 1.0f);
+    for (size_t i = 0; i < q.size(); ++i) q[i].t = i * 4.0;
+    draw(e5, one, b, q, 0);
+    draw(e6, many, b, q, 1);
+    check(sameStore(one, many, 0), "P8: pressure strokes do not depend on frame batching");
+}
+
 void testPerf() {
     section("B15 timing (informational, this machine)");
     struct Case {
@@ -604,6 +897,25 @@ void testPerf() {
         const double ms = (pe::nowNs() - t0) / 1e6;
         std::printf("    %-30s %8.2f ms total, %6.3f ms per 8-sample frame, worst frame %.3f ms\n", c.name, ms,
                     ms / (c.samples / 8.0), e.stats().maxProcessMs);
+    }
+    // Same strokes with pressure (size + opacity) and tilt (elliptical dabs).
+    for (const auto& c : cases) {
+        RasterStore s;
+        s.reset(4096, 4096);
+        BrushEngine e;
+        Path p = withPressure(line(1000, 2000, 3000, 2000, c.samples), 0.3f, 1.0f);
+        for (size_t i = 0; i < p.size(); ++i) {
+            p[i].t = i * 4.0;
+            p[i].axes.tilt = 0.9f;
+            p[i].axes.orientation = 0.4f;
+        }
+        BrushSettings b = brush(c.d, 0.8f, 0xFF204080u);
+        b.pressureSize = b.pressureOpacity = b.tiltShape = true;
+        const int64_t t0 = pe::nowNs();
+        draw(e, s, b, p, 8);
+        const double ms = (pe::nowNs() - t0) / 1e6;
+        std::printf("    %-30s %8.2f ms total, %6.3f ms per 8-sample frame, worst frame %.3f ms (pressure + tilt)\n", c.name,
+                    ms, ms / (c.samples / 8.0), e.stats().maxProcessMs);
     }
     check(true, "B15: timings printed");
 }
@@ -627,6 +939,14 @@ int main() {
     testEraser();
     testEdges();
     testStore();
+    testPressureCompat();
+    testPressureSize();
+    testNeverDisappears();
+    testPressureInterpolation();
+    testPressureOpacity();
+    testPressureFilter();
+    testTilt();
+    testTransitions();
     testPerf();
     std::printf("=== %d/%d checks passed ===\n", gChecks - gFailures, gChecks);
     return gFailures == 0 ? 0 : 1;

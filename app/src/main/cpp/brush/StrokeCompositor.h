@@ -27,6 +27,7 @@
 #include <memory>
 #include <vector>
 
+#include "brush/BrushDynamics.h"
 #include "brush/BrushTypes.h"
 #include "canvas/RasterStore.h"
 
@@ -53,7 +54,10 @@ public:
         uint32_t pooledTiles = 0;
     };
 
-    void begin(canvas::RasterStore& store, const BrushSettings& settings);
+    // `hasPressure` / `hasTilt`: whether the stroke's samples carry these axes.
+    void begin(canvas::RasterStore& store, const BrushSettings& settings, bool hasPressure = false,
+               bool hasTilt = false);
+    const BrushDynamics& dynamics() const { return dyn_; }
     // Committed dabs: rasterised into the stroke mask.
     void addDabs(canvas::RasterStore& store, const Dab* dabs, size_t count);
     // Replaces the provisional tail.
@@ -86,13 +90,14 @@ private:
     };
     StrokeTile* tileFor(canvas::RasterStore& store, int32_t tx, int32_t ty, bool create);
     void rasterDab(canvas::RasterStore& store, const Dab& d, bool toTail);
+    void rasterEllipse(canvas::RasterStore& store, const Dab& d, const DabGeometry& g, bool toTail);
     void composite(canvas::RasterStore& store, StrokeTile& st);
     void releaseTiles();
     static void grow(canvas::RectI& r, const canvas::RectI& add);
 
     bool active_ = false;
     BrushSettings settings_;
-    DabShape shape_;
+    BrushDynamics dyn_;
     // Paint constants (premultiplied colour * opacity, 0..255 scale).
     float paintA_ = 0.0f;                       // opacity * colour alpha
     float paintR_ = 0.0f, paintG_ = 0.0f, paintB_ = 0.0f;  // straight colour 0..255

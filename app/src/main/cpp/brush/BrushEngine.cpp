@@ -9,6 +9,8 @@ namespace pe::brush {
 BrushEngine::BrushEngine() {
     queue_.reserve(8192);
     work_.reserve(8192);
+    beginSettings_.reserve(16);
+    workSettings_.reserve(16);
     dabs_.reserve(16384);
 }
 
@@ -24,8 +26,12 @@ void BrushEngine::begin(const BrushSettings& settings, const StrokePoint& first)
     Event e;
     e.type = Ev::Begin;
     e.p = first;
-    e.s = settings.sanitized();
-    push(e);
+    std::lock_guard<std::mutex> lock(inputMutex_);
+    if (queue_.empty()) queuedSinceNs_ = nowNs();
+    beginSettings_.push_back(settings.sanitized());
+    queue_.push_back(e);
+    received_++;
+    pending_.store(true, std::memory_order_release);
 }
 
 void BrushEngine::addSamples(const StrokePoint* points, size_t count) {
@@ -58,6 +64,7 @@ void BrushEngine::discard() {
     {
         std::lock_guard<std::mutex> lock(inputMutex_);
         queue_.clear();
+        beginSettings_.clear();
         pending_.store(false, std::memory_order_release);
     }
     path_.reset();
@@ -70,6 +77,8 @@ bool BrushEngine::process(canvas::RasterStore& store) {
         std::lock_guard<std::mutex> lock(inputMutex_);
         work_.clear();
         work_.swap(queue_);  // both keep their capacity: no allocation once warmed up
+        workSettings_.clear();
+        workSettings_.swap(beginSettings_);
         pending_.store(false, std::memory_order_release);
         if (!work_.empty() && (consumedQueuedNs_ == 0 || queuedSinceNs_ < consumedQueuedNs_))
             consumedQueuedNs_ = queuedSinceNs_;
@@ -78,6 +87,7 @@ bool BrushEngine::process(canvas::RasterStore& store) {
     if (work_.empty()) return false;
     const int64_t t0 = nowNs();
     bool tailDirty = false;
+    size_t settingsIndex = 0;
     for (const Event& e : work_) {
         switch (e.type) {
             case Ev::Begin:
@@ -89,8 +99,14 @@ bool BrushEngine::process(canvas::RasterStore& store) {
                     comp_.commit(store);
                     st_.strokesCommitted++;
                 }
-                comp_.begin(store, e.s);
-                path_.begin(e.p, e.s.spacingPx());
+                {
+                    const BrushSettings& bs = workSettings_[settingsIndex++];
+                    strokeHasPressure_ = std::isfinite(e.p.axes.pressure);
+                    strokeHasTilt_ = std::isfinite(e.p.axes.tilt) && std::isfinite(e.p.axes.orientation);
+                    pressure_.reset(strokeHasPressure_ ? bs.pressureSmoothing : 0.0f);
+                    comp_.begin(store, bs, strokeHasPressure_, strokeHasTilt_);
+                    path_.begin(prepare(e.p), bs.spacingPx(), &comp_.dynamics());
+                }
                 st_.strokesBegun++;
                 st_.samplesProcessed++;
                 st_.pathPoints++;
@@ -98,7 +114,7 @@ bool BrushEngine::process(canvas::RasterStore& store) {
                 break;
             case Ev::Sample:
                 st_.samplesProcessed++;
-                if (path_.active() && path_.add(e.p)) {
+                if (path_.active() && path_.add(prepare(e.p))) {
                     st_.pathPoints++;
                     tailDirty = true;
                 }
@@ -150,6 +166,22 @@ bool BrushEngine::process(canvas::RasterStore& store) {
     st_.lastProcessMs = static_cast<double>(nowNs() - t0) / 1e6;
     st_.maxProcessMs = std::max(st_.maxProcessMs, st_.lastProcessMs);
     return true;
+}
+
+StrokePoint BrushEngine::prepare(const StrokePoint& in) {
+    StrokePoint p = in;
+    if (strokeHasPressure_) {
+        p.axes.pressure = pressure_.filter(std::isfinite(p.axes.pressure) ? std::clamp(p.axes.pressure, 0.0f, 1.0f)
+                                                                         : p.axes.pressure,
+                                           p.t);
+    } else {
+        p.axes.pressure = kNoValue;
+    }
+    if (!strokeHasTilt_) {
+        p.axes.tilt = kNoValue;
+        p.axes.orientation = kNoValue;
+    }
+    return p;
 }
 
 BrushStats BrushEngine::stats() const {
