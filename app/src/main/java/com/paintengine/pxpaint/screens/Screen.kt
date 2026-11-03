@@ -38,7 +38,12 @@ interface PxHost {
     fun push(screen: Screen)
     fun pop()
     fun replaceTop(screen: Screen)
-    fun updateSettings(newSettings: AppSettings)
+    /** Persists [newSettings]; [rebuild] = false keeps the visible screen as is (it updates itself). */
+    fun updateSettings(newSettings: AppSettings, rebuild: Boolean = true)
+    /** Styluses known to the system / seen in use (main thread). */
+    val stylus: com.paintengine.pxpaint.input.StylusMonitor
+    /** Engine pressure response table for the current settings (cached). */
+    fun pressureTable(): FloatArray
     /** Brush setup (sizes, opacities, spacing, colour), persisted across sessions. */
     val brush: BrushState
     fun updateBrush(state: BrushState)

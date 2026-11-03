@@ -2,6 +2,7 @@ package com.paintengine.pxpaint.screens
 
 import android.annotation.SuppressLint
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -24,7 +25,9 @@ import com.paintengine.pxpaint.core.ProjectMeta
 import com.paintengine.pxpaint.core.RotationSnap
 import com.paintengine.pxpaint.core.S
 import com.paintengine.pxpaint.core.SampleBuffer
-import com.paintengine.pxpaint.core.StrokeGate
+import com.paintengine.pxpaint.core.ToolKind
+import com.paintengine.pxpaint.core.TouchRouter
+import com.paintengine.pxpaint.input.StylusInput
 import com.paintengine.pxpaint.core.TileContent
 import com.paintengine.pxpaint.core.ToolBrush
 import com.paintengine.pxpaint.core.TwoFinger
@@ -100,19 +103,17 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private val toolButtons = HashMap<Tool, IconButton>()
     private var colorButton: View? = null
 
-    // Input
-    private val gate = StrokeGate()
+    // Input: TouchRouter decides, this screen executes with the event's data.
     private val samples = SampleBuffer()
+    private var event: MotionEvent? = null      // the event being dispatched
     private var strokeT0 = 0L
-    private var stroking = false
-    private var mode = Mode.IDLE
-    private var idA = -1
-    private var idB = -1
+    private var strokeKind = ToolKind.UNKNOWN
+    private var ignoreUntilUp = false
     private var prevA = P(0.0, 0.0)
     private var prevB = P(0.0, 0.0)
     private var panLast = P(0.0, 0.0)
+    private val router = TouchRouter(RouterActions())
 
-    private enum class Mode { IDLE, DRAW, PAN, GESTURE, IGNORE }
 
     private val poll = object : Runnable {
         override fun run() {
@@ -130,6 +131,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         sv.engine = engine
         @SuppressLint("ClickableViewAccessibility")
         sv.setOnTouchListener { _, e -> onCanvasTouch(e); true }
+        // A hovering stylus is detected (and its axes shown in the stylus info) before it touches.
+        sv.setOnHoverListener { _, e -> host.stylus.onEvent(e); false }
         root.addView(sv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         val c = FrameLayout(context)
         chrome = c
@@ -153,12 +156,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     override fun onRemoved() {
         removed = true
         handler.removeCallbacks(poll)
-        finishStroke()
+        router.interrupt()
         closeCanvas()
     }
 
     override fun onPause() {
-        finishStroke()   // a stroke interrupted by the system keeps what was drawn
+        router.interrupt()   // a stroke interrupted by the system keeps what was drawn
         save()
     }
 
@@ -330,112 +333,139 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     // ---------------------------------------------------------------- input
     private fun onCanvasTouch(e: MotionEvent) {
         if (engine == null || !loaded || closed) return
+        host.stylus.onEvent(e)
+        event = e
+        try {
+            dispatch(e)
+        } finally {
+            event = null
+        }
+    }
+
+    private fun dispatch(e: MotionEvent) {
+        val i = e.actionIndex
+        val id = e.getPointerId(i)
+        // FLAG_CANCELED (API 33): the system decided the lifted pointer was
+        // accidental (e.g. a palm); its stroke is cancelled, not committed.
+        val canceled = Build.VERSION.SDK_INT >= 33 && (e.flags and FLAG_CANCELED) != 0
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                ignoreUntilUp = false
                 if (panel != Panel.NONE && spec?.sidePanelDocked != true) {
                     setPanel(Panel.NONE)
-                    mode = Mode.IGNORE
+                    ignoreUntilUp = true
                     return
                 }
-                val p = P(e.x.toDouble(), e.y.toDouble())
-                val paints = tool != Tool.MOVE && host.settings.fingerDrawing
-                if (paints) {
-                    // Deliver MOVE events as they arrive, not batched per frame.
-                    surfaceView?.requestUnbufferedDispatch(e)
-                    mode = Mode.DRAW
-                    beginStroke(e, p)
-                } else {
-                    mode = Mode.PAN
-                    panLast = p
-                }
+                router.fingerMode = host.settings.fingerMode
+                router.moveTool = tool == Tool.MOVE
+                router.eraserTool = tool == Tool.ERASER
+                // Deliver MOVE events as they arrive, not batched per frame.
+                surfaceView?.requestUnbufferedDispatch(e)
+                router.down(id, StylusInput.kind(e, i), e.eventTime, e.getX(i), e.getY(i))
             }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                if (mode == Mode.DRAW && stroking) {
-                    if (gate.onSecondPointer(e.eventTime) == StrokeGate.Decision.CANCEL) engine?.strokeCancel()
-                    else engine?.strokeEnd()
-                    stroking = false
-                }
-                if (e.pointerCount >= 2) startGesture(e)
-            }
-            MotionEvent.ACTION_MOVE -> when (mode) {
-                Mode.DRAW -> sendSamples(e)
-                Mode.PAN -> {
-                    val p = P(e.x.toDouble(), e.y.toDouble())
-                    viewOp(ViewOp.PAN_BY, p.x - panLast.x, p.y - panLast.y)
-                    panLast = p
-                }
-                Mode.GESTURE -> {
-                    val ia = e.findPointerIndex(idA)
-                    val ib = e.findPointerIndex(idB)
-                    if (ia < 0 || ib < 0) return
-                    val a = P(e.getX(ia).toDouble(), e.getY(ia).toDouble())
-                    val b = P(e.getX(ib).toDouble(), e.getY(ib).toDouble())
-                    val st = TwoFinger.step(prevA, prevB, a, b, host.settings.twoFingerRotate)
-                    viewOp(ViewOp.GESTURE, st.prevFocal.x, st.prevFocal.y, st.newFocal.x, st.newFocal.y, st.scale, st.rotation)
-                    prevA = a
-                    prevB = b
-                }
-                else -> Unit
-            }
-            MotionEvent.ACTION_POINTER_UP -> if (mode == Mode.GESTURE) {
-                val lifted = e.getPointerId(e.actionIndex)
-                if (lifted == idA || lifted == idB) {
-                    if (e.pointerCount - 1 >= 2) startGesture(e, excludeId = lifted)
-                    else endGesture()
-                }
-            }
+            MotionEvent.ACTION_POINTER_DOWN ->
+                if (!ignoreUntilUp) router.pointerDown(id, StylusInput.kind(e, i), e.eventTime, e.getX(i), e.getY(i))
+            MotionEvent.ACTION_MOVE -> if (!ignoreUntilUp) router.move()
+            MotionEvent.ACTION_POINTER_UP -> if (!ignoreUntilUp) router.pointerUp(id, canceled)
             MotionEvent.ACTION_UP -> {
-                if (mode == Mode.DRAW && stroking) {
-                    sendSamples(e)   // the final position (and its history) is part of the stroke
-                    engine?.strokeEnd()
-                    stroking = false
-                    gate.end()
-                }
-                mode = Mode.IDLE
+                if (!ignoreUntilUp) router.up(id, canceled)
+                ignoreUntilUp = false
             }
             MotionEvent.ACTION_CANCEL -> {
-                if (stroking) {
-                    engine?.strokeCancel()
-                    stroking = false
-                    gate.end()
-                }
-                if (mode == Mode.GESTURE) endGesture()
-                mode = Mode.IDLE
+                router.cancel()
+                ignoreUntilUp = false
             }
         }
     }
 
-    private fun beginStroke(e: MotionEvent, p: P) {
-        val engine = engine ?: return
-        val t = toolBrush(tool)
-        strokeT0 = e.eventTime
-        gate.down(e.eventTime, p)
-        engine.strokeBegin(
-            p.x.toFloat(), p.y.toFloat(), 0f, t.size, t.opacity,
-            if (tool == Tool.ERASER) 0xFF000000.toInt() else color, t.spacing, tool == Tool.ERASER,
-        )
-        stroking = true
+    private fun pos(id: Int): P? {
+        val e = event ?: return null
+        val i = e.findPointerIndex(id)
+        return if (i < 0) null else P(e.getX(i).toDouble(), e.getY(i).toDouble())
     }
 
-    /** Every sample of the event, oldest first: historical positions, then the current one. */
-    private fun sendSamples(e: MotionEvent) {
-        if (!stroking) return
-        samples.clear()
-        for (h in 0 until e.historySize) {
-            samples.add(e.getHistoricalX(0, h), e.getHistoricalY(0, h), (e.getHistoricalEventTime(h) - strokeT0).toFloat())
+    /** Executes the router's decisions on the current event. */
+    private inner class RouterActions : TouchRouter.Actions {
+        override fun beginStroke(pointerId: Int, kind: ToolKind, eraser: Boolean) {
+            val e = event ?: return
+            val engine = engine ?: return
+            strokeT0 = e.eventTime
+            strokeKind = kind
+            samples.clear()
+            // The first sample: this pointer's current state (no history before the stroke).
+            if (!StylusInput.append(e, pointerId, kind, strokeT0, samples, includeHistory = false)) return
+            val t = toolBrush(if (eraser) Tool.ERASER else tool)
+            val st = host.settings
+            engine.strokeBegin(
+                samples.first(),
+                NativeEngine.Brush(
+                    diameter = t.size, opacity = t.opacity, argb = if (eraser) 0xFF000000.toInt() else color,
+                    spacing = t.spacing, erase = eraser,
+                    pressureSize = t.pressureSize, minSizeFraction = t.minSize,
+                    pressureOpacity = t.pressureOpacity, minOpacityFraction = t.minOpacity,
+                    tiltShape = t.tilt, tiltStrength = 1f,
+                    pressureSmoothing = st.pressureSmoothing, pressureCurve = host.pressureTable(),
+                ),
+            )
         }
-        samples.add(e.x, e.y, (e.eventTime - strokeT0).toFloat())
-        gate.move(P(e.x.toDouble(), e.y.toDouble()))
-        engine?.strokeSamples(samples.data, samples.count)
-    }
 
-    /** Ends a stroke the system interrupted (pause, screen change): it is kept. */
-    private fun finishStroke() {
-        if (!stroking) return
-        engine?.strokeEnd()
-        stroking = false
-        gate.end()
-        mode = Mode.IGNORE
+        override fun strokeSamples(pointerId: Int) {
+            val e = event ?: return
+            samples.clear()
+            if (!StylusInput.append(e, pointerId, strokeKind, strokeT0, samples)) return
+            val i = e.findPointerIndex(pointerId)
+            router.strokeMovedTo(e.getX(i), e.getY(i))
+            engine?.strokeSamples(samples.data, samples.count)
+        }
+
+        override fun endStroke(pointerId: Int) {
+            val e = event
+            if (e != null) {
+                // The final position (and its history) is part of the stroke.
+                samples.clear()
+                if (StylusInput.append(e, pointerId, strokeKind, strokeT0, samples)) engine?.strokeSamples(samples.data, samples.count)
+            }
+            engine?.strokeEnd()
+        }
+
+        override fun cancelStroke() {
+            engine?.strokeCancel()
+        }
+
+        override fun panStart(pointerId: Int) {
+            panLast = pos(pointerId) ?: return
+        }
+
+        override fun panMove(pointerId: Int) {
+            val p = pos(pointerId) ?: return
+            viewOp(ViewOp.PAN_BY, p.x - panLast.x, p.y - panLast.y)
+            panLast = p
+        }
+
+        override fun gestureStart(a: Int, b: Int) {
+            prevA = pos(a) ?: return
+            prevB = pos(b) ?: return
+        }
+
+        override fun gestureMove(a: Int, b: Int) {
+            val pa = pos(a) ?: return
+            val pb = pos(b) ?: return
+            val st = TwoFinger.step(prevA, prevB, pa, pb, host.settings.twoFingerRotate)
+            viewOp(ViewOp.GESTURE, st.prevFocal.x, st.prevFocal.y, st.newFocal.x, st.newFocal.y, st.scale, st.rotation)
+            prevA = pa
+            prevB = pb
+        }
+
+        override fun gestureEnd(a: Int, b: Int) {
+            if (host.settings.rotationSnap && host.settings.twoFingerRotate) {
+                RotationSnap.target(view.rotation)?.let { target ->
+                    if (target != view.rotation) {
+                        val f = P((prevA.x + prevB.x) / 2, (prevA.y + prevB.y) / 2)
+                        viewOp(ViewOp.SET_ROTATION_AT, target, f.x, f.y)
+                    }
+                }
+            }
+        }
     }
 
     private fun toolBrush(t: Tool): ToolBrush = if (t == Tool.ERASER) host.brush.eraser else host.brush.marker
@@ -443,30 +473,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private fun setToolBrush(t: Tool, b: ToolBrush) {
         val s = host.brush
         host.updateBrush(if (t == Tool.ERASER) s.copy(eraser = b.sanitized()) else s.copy(marker = b.sanitized()))
-    }
-
-    private fun startGesture(e: MotionEvent, excludeId: Int = -1) {
-        val ids = (0 until e.pointerCount).map { e.getPointerId(it) }.filter { it != excludeId }
-        if (ids.size < 2) return
-        idA = ids[0]
-        idB = ids[1]
-        val ia = e.findPointerIndex(idA)
-        val ib = e.findPointerIndex(idB)
-        prevA = P(e.getX(ia).toDouble(), e.getY(ia).toDouble())
-        prevB = P(e.getX(ib).toDouble(), e.getY(ib).toDouble())
-        mode = Mode.GESTURE
-    }
-
-    private fun endGesture() {
-        mode = Mode.IGNORE
-        if (host.settings.rotationSnap && host.settings.twoFingerRotate) {
-            RotationSnap.target(view.rotation)?.let { target ->
-                if (target != view.rotation) {
-                    val f = P((prevA.x + prevB.x) / 2, (prevA.y + prevB.y) / 2)
-                    viewOp(ViewOp.SET_ROTATION_AT, target, f.x, f.y)
-                }
-            }
-        }
     }
 
     // --------------------------------------------------------------- chrome
@@ -698,7 +704,54 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setToolBrush(t, toolBrush(t).copy(spacing = BrushState.sliderToSpacing(it)))
         })
         addView(theme.text(context, tr(S.SPACING_HINT), PxTheme.Type.CAPTION, theme.textTertiary).apply { setPadding(0, theme.dp(4), 0, 0) })
+        addView(stylusSettings(t))
     }
+
+    /** Pressure / tilt dynamics of the tool (stylus strokes only). */
+    private fun stylusSettings(t: Tool): View = column(context, theme, horizontalPadding = false) {
+        setPadding(0, theme.dp(14), 0, 0)
+        addView(Widgets.divider(context, theme))
+        addView(theme.text(context, tr(S.STYLUS_SECTION), PxTheme.Type.HEADLINE).apply { setPadding(0, theme.dp(12), 0, 0) })
+        val m = host.stylus
+        addView(theme.text(context, if (m.pressureAvailable) tr(S.PRESSURE_STYLUS_READY) else tr(S.NO_PRESSURE_STYLUS),
+            PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(4), 0, theme.dp(4)) })
+        val b = toolBrush(t)
+        val percent = { f: Float -> "${(f * 100).roundToInt()}%" }
+        fun fraction(v: Float) = (BrushState.MIN_PRESSURE_FRACTION + v * (1f - BrushState.MIN_PRESSURE_FRACTION)).let { (it * 100).roundToInt() / 100f }
+        fun slider(f: Float) = ((f - BrushState.MIN_PRESSURE_FRACTION) / (1f - BrushState.MIN_PRESSURE_FRACTION)).coerceIn(0f, 1f)
+        addView(compactSwitch(tr(S.PRESSURE_SIZE), null, b.pressureSize, true) {
+            setToolBrush(t, toolBrush(t).copy(pressureSize = it))
+        })
+        addView(sliderRow(tr(S.MIN_SIZE), slider(b.minSize), { percent(fraction(it)) }) {
+            setToolBrush(t, toolBrush(t).copy(minSize = fraction(it)))
+        })
+        addView(compactSwitch(tr(S.PRESSURE_OPACITY), null, b.pressureOpacity, true) {
+            setToolBrush(t, toolBrush(t).copy(pressureOpacity = it))
+        })
+        addView(sliderRow(tr(S.MIN_OPACITY), slider(b.minOpacity), { percent(fraction(it)) }) {
+            setToolBrush(t, toolBrush(t).copy(minOpacity = fraction(it)))
+        })
+        val tilt = m.tiltAvailable
+        addView(compactSwitch(tr(S.TILT_SHAPE), if (tilt) null else tr(S.TILT_UNAVAILABLE), b.tilt && tilt, tilt) {
+            setToolBrush(t, toolBrush(t).copy(tilt = it))
+        })
+        addView(Widgets.row(context, theme, tr(S.PRESSURE_SETTINGS), null,
+            View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {
+                it.layoutParams = LinearLayout.LayoutParams(theme.dp(18), theme.dp(18))
+            }).apply {
+            setPadding(0, paddingTop, 0, paddingBottom)
+            isClickable = true
+            setOnClickListener { host.push(PressureScreen(host)) }
+        })
+    }
+
+    private fun compactSwitch(title: String, desc: String?, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit): View =
+        Widgets.switchRow(context, theme, title, desc, checked, onChange).apply {
+            setPadding(0, paddingTop, 0, paddingBottom)
+            isEnabled = enabled
+            alpha = if (enabled) 1f else 0.5f
+            if (!enabled) (this as? ViewGroup)?.let { g -> for (i in 0 until g.childCount) g.getChildAt(i).isEnabled = false }
+        }
 
     /** Label and current value above a slider. */
     private fun sliderRow(label: String, initial: Float, format: (Float) -> String, apply: (Float) -> Unit): View =
@@ -907,5 +960,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         const val TIP_GESTURES = "workspace.gestures"
         private const val AUTOSAVE_MS = 20_000L
         private const val EXPORT_BATCH = 32
+        private const val FLAG_CANCELED = 0x20   // MotionEvent.FLAG_CANCELED (API 33)
     }
 }

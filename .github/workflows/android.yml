@@ -114,7 +114,7 @@ jobs:
         id: name
         run: |
           short="${GITHUB_SHA::7}"
-          out="PxPaint-block3-debug-${short}.apk"
+          out="PxPaint-block4-debug-${short}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
           echo "artifact=PxPaint-debug-apk-${short}" >> "$GITHUB_OUTPUT"

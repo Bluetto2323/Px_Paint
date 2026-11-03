@@ -21,6 +21,8 @@ import com.paintengine.engine.NativeEngine
 import com.paintengine.pxpaint.core.AppSettings
 import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.CanvasSizeRules
+import com.paintengine.pxpaint.core.PressureCurve
+import com.paintengine.pxpaint.input.StylusMonitor
 import com.paintengine.pxpaint.core.LanguagePref
 import com.paintengine.pxpaint.core.ProjectStore
 import com.paintengine.pxpaint.core.RenderPreference
@@ -58,6 +60,10 @@ class PxPaintActivity : Activity(), PxHost {
         private set
     override var brush: BrushState = BrushState()
         private set
+    override lateinit var stylus: StylusMonitor
+        private set
+    private var tableKey: Pair<PressureCurve, Float>? = null
+    private var table = FloatArray(0)
     override lateinit var overlays: OverlayHost
         private set
     override val insets = Rect()
@@ -91,6 +97,7 @@ class PxPaintActivity : Activity(), PxHost {
         super.onCreate(savedInstanceState)
         settings = SettingsStore.load(this)
         brush = SettingsStore.loadBrush(this)
+        stylus = StylusMonitor(this)
         store = ProjectStore(File(filesDir, "projects"))
         readConfiguration(resources.configuration)
         theme = makeTheme()
@@ -138,6 +145,7 @@ class PxPaintActivity : Activity(), PxHost {
         runCatching { io.awaitTermination(10, TimeUnit.SECONDS) }
         engine?.close()
         engine = null
+        stylus.close()
         super.onDestroy()
     }
 
@@ -229,7 +237,7 @@ class PxPaintActivity : Activity(), PxHost {
     }
 
     // ------------------------------------------------------------- settings
-    override fun updateSettings(newSettings: AppSettings) {
+    override fun updateSettings(newSettings: AppSettings, rebuild: Boolean) {
         val old = settings
         if (newSettings == old) return
         settings = newSettings
@@ -240,7 +248,7 @@ class PxPaintActivity : Activity(), PxHost {
             old.largeTouchTargets != newSettings.largeTouchTargets || old.reduceMotion != newSettings.reduceMotion
         if (visual) retheme() else {
             // Toolbar / gesture / overlay changes: rebuild the visible screen.
-            top()?.let { rebuild(it) }
+            if (rebuild) top()?.let { rebuild(it) }
             for (other in stack) if (other !== top()) views.remove(other)
         }
     }
@@ -261,6 +269,15 @@ class PxPaintActivity : Activity(), PxHost {
             settings.copy(theme = if (uiNightMode == Configuration.UI_MODE_NIGHT_NO) ThemeMode.LIGHT else ThemeMode.DARK)
         } else settings
         return PxTheme(this, effective)
+    }
+
+    override fun pressureTable(): FloatArray {
+        val key = settings.pressureCurve to settings.pressureSensitivity
+        if (key != tableKey) {
+            table = settings.pressureCurve.table(settings.pressureSensitivity, NativeEngine.PRESSURE_CURVE_SIZE)
+            tableKey = key
+        }
+        return table
     }
 
     override fun updateBrush(state: BrushState) {

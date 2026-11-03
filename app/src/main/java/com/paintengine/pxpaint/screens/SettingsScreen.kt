@@ -9,6 +9,7 @@ import com.paintengine.BuildConfig
 import com.paintengine.pxpaint.core.AppSettings
 import com.paintengine.pxpaint.core.BackendChoice
 import com.paintengine.pxpaint.core.DockSide
+import com.paintengine.pxpaint.core.FingerMode
 import com.paintengine.pxpaint.core.LanguagePref
 import com.paintengine.pxpaint.core.RenderPreference
 import com.paintengine.pxpaint.core.S
@@ -69,11 +70,24 @@ class SettingsScreen(host: PxHost) : Screen(host) {
 
         // --- Gestures
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_GESTURES)))
-        page.addView(Widgets.switchRow(context, theme, tr(S.FINGER_DRAWING), tr(S.FINGER_DRAWING_DESC), s.fingerDrawing) { set(s.copy(fingerDrawing = it)) })
+        page.addView(choice(tr(S.FINGER_MODE), tr(S.FINGER_MODE_DESC), listOf(
+            FingerMode.DRAW to tr(S.FINGER_DRAW), FingerMode.PAN to tr(S.FINGER_PAN), FingerMode.GESTURES_ONLY to tr(S.FINGER_GESTURES),
+        ), s.fingerMode) { set(s.copy(fingerMode = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.TWO_FINGER_ROTATE), null, s.twoFingerRotate) { set(s.copy(twoFingerRotate = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.ROTATION_SNAP), null, s.rotationSnap) { set(s.copy(rotationSnap = it)) }.apply {
             isEnabled = s.twoFingerRotate
             alpha = if (s.twoFingerRotate) 1f else 0.45f
+        })
+
+        // --- Stylus & pressure
+        page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_STYLUS)))
+        page.addView(Widgets.row(context, theme, tr(S.PRESSURE_SETTINGS),
+            "${tr(S.PRESSURE_SETTINGS_DESC)}\n${stylusSummary()}",
+            View(context).apply { background = IconDrawable(Icon.CHEVRON_RIGHT, theme.textSecondary) }.also {
+                it.layoutParams = LinearLayout.LayoutParams(theme.dp(20), theme.dp(20))
+            }).apply {
+            isClickable = true
+            setOnClickListener { host.push(PressureScreen(host)) }
         })
 
         // --- Performance
@@ -153,6 +167,9 @@ class SettingsScreen(host: PxHost) : Screen(host) {
                 setPadding(0, theme.dp(10), 0, 0)
             })
         }
+
+    private fun stylusSummary(): String =
+        if (host.stylus.pressureAvailable) tr(S.PRESSURE_STYLUS_READY) else tr(S.STYLUS_NONE)
 
     private fun graphicsInUse(): String {
         val e = host.engineIfStarted ?: return tr(S.NOT_STARTED_YET)
