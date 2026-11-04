@@ -16,6 +16,7 @@ import com.paintengine.pxpaint.core.BrushTool
  *   settings        settings screen
  *   layers          five layers (modes, opacity, hidden, locked) + the Layers panel
  *   history         the layers demo (all recorded), 3 steps undone, the History panel
+ *           --es pxpaint.theme deep_blue|pure_black|warm_beige  interface theme for the state
  *   selection       the layers demo with the Select tool active (no selection yet);
  *                   --es pxpaint.selshape rectangle|ellipse|lasso|polygon
  *   color           the colour workspace
@@ -33,7 +34,7 @@ import com.paintengine.pxpaint.core.BrushTool
 object DebugDemo {
     data class Script(
         val panel: String, val filter: BrushFilter?, val brush: String?, val pin: String? = null, val motion: String? = null,
-        val shape: String? = null,
+        val shape: String? = null, val theme: String? = null,
     )
 
     fun from(intent: Intent?): Script? {
@@ -41,7 +42,7 @@ object DebugDemo {
         val state = intent.getStringExtra("pxpaint.demo") ?: return null
         val filter = intent.getStringExtra("pxpaint.filter")?.let { f -> BrushFilter.entries.firstOrNull { it.name.equals(f, true) } }
         return Script(state, filter, intent.getStringExtra("pxpaint.brush"), intent.getStringExtra("pxpaint.pin"), intent.getStringExtra("pxpaint.motion"),
-            intent.getStringExtra("pxpaint.selshape"))
+            intent.getStringExtra("pxpaint.selshape"), intent.getStringExtra("pxpaint.theme"))
     }
 
     fun start(host: PxHost, s: Script) {
@@ -52,6 +53,10 @@ object DebugDemo {
         // --es pxpaint.motion full|reduced|off (frame-time comparisons, reduced-motion screenshots).
         com.paintengine.pxpaint.core.MotionLevel.entries.firstOrNull { it.name.equals(s.motion ?: "", true) }?.let {
             host.updateSettings(host.settings.copy(motionLevel = it), rebuild = false)
+        }
+        // --es pxpaint.theme deep_blue|pure_black|warm_beige (Block 11 screenshots of every theme).
+        com.paintengine.pxpaint.core.ThemeMode.entries.firstOrNull { it.name.equals(s.theme ?: "", true) }?.let {
+            host.updateSettings(host.settings.copy(theme = it), rebuild = false)
         }
         if (s.panel == "settings") {
             host.push(SettingsScreen(host))

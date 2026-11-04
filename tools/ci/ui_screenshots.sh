@@ -181,23 +181,27 @@ tapc 74-selection-pasted "Clear" exact
 shot 75-selection-cleared
 # A brush stroke across the whole canvas stays inside the selection.
 tapc 75-selection-cleared "Brush" exact
-adb shell input swipe 60 1100 1020 1180 800; sleep 3
+adb shell input swipe 150 1100 930 1180 800; sleep 3   # (not from the screen edge: that is the system back gesture)
 shot 76-selection-clipped-stroke
 # Lasso, added to the selection; then inverted; then undo.
-tapc 76-selection-clipped-stroke "Select" exact
-tapc 76b-select-tool "Select" exact
-tapc 76c-selection-options "Lasso" exact
-tapc 76d-selection-options "Add" exact
+tapc 76-selection-clipped-stroke "More tools" exact
+tapc 76b-more-tools "Select" exact
+tapc 76c-select-tool "More tools" exact
+tapc 76d-more-tools "Select" exact
+tapc 76e-selection-options "Lasso" exact
+tapc 76f-selection-options "Add" exact
 shot 77-selection-options
 adb shell input keyevent KEYCODE_BACK; sleep 1
 lasso 560 1750 260
 shot 78-selection-lasso-add
-tapc 78-selection-lasso-add "Invert" exact
+tapc 78-selection-lasso-add "More selection actions" exact
+tapc 78b-selection-overflow "Invert" exact
 shot 79-selection-inverted
 tapc 79-selection-inverted "Undo"
 shot 80-selection-undo-invert
 # Polygon: three corners, then the first corner again closes it.
-tapc 80-selection-undo-invert "Select" exact
+tapc 80-selection-undo-invert "More tools" exact
+tapc 80a-more-tools "Select" exact
 tapc 80b-selection-options "Polygon" exact
 tapc 80c-selection-options "New" exact
 adb shell input keyevent KEYCODE_BACK; sleep 1
@@ -213,6 +217,54 @@ pull_rec 70-selection-ops 1
 adb logcat -d -s PxPaint:I | grep -E "Selection:" > "$OUT/selection-log.txt" || true
 python3 tools/ci/motion_perf.py "$OUT" "selection ants=gfxinfo-selection-ants.txt" | tee "$OUT/selection-perf.txt" || true
 
+# ---------------- Redesign (Block 11): themes, brush selector, layer drag, distraction-free canvas
+for t in deep_blue pure_black warm_beige; do
+  start --es pxpaint.demo canvas --es pxpaint.theme "$t"
+  shot "90-workspace-$t"
+  dump "90-workspace-$t"
+done
+start --es pxpaint.demo library --es pxpaint.theme deep_blue
+shot 91-brush-selector
+tapc 91-brush-selector "Ink Pen"
+shot 92-brush-selected-panel-closed
+adb shell input swipe 300 900 800 1100 400; sleep 2
+shot 92b-drawing-with-selected-brush
+start --es pxpaint.demo library --es pxpaint.theme warm_beige
+shot 91w-brush-selector-warm-beige
+start --es pxpaint.demo library --es pxpaint.theme pure_black
+shot 91b-brush-selector-pure-black
+# Layers: press and hold a row, drag it down (finger still down for the screenshot), release, undo.
+start --es pxpaint.demo layers --es pxpaint.theme deep_blue
+shot 93-layers-panel
+dump 93-layers-panel
+if xy=$(centre 93-layers-panel "Glow"); then
+  set -- $xy
+  record 94-layer-drag 12
+  adb shell "input motionevent DOWN $1 $2; sleep 0.6; for d in 20 40 60 80 100 120 140 160 180 200; do input motionevent MOVE $1 \$(( $2 + d )); done"
+  sleep 1
+  shot 94-layer-dragging
+  adb shell input motionevent UP "$1" "$(( $2 + 200 ))"; sleep 2
+  shot 95-layer-dropped
+  tapc 95-layer-dropped "Undo"
+  shot 96-layer-reorder-undone
+  pull_rec 94-layer-drag 1
+else echo "  no layer row 'Glow'"; fi
+start --es pxpaint.demo layers --es pxpaint.theme warm_beige
+shot 93w-layers-warm-beige
+start --es pxpaint.demo layers --es pxpaint.theme pure_black
+shot 93b-layers-pure-black
+start --es pxpaint.demo fullscreen --es pxpaint.theme deep_blue
+shot 97-distraction-free
+start --es pxpaint.demo canvas --es pxpaint.theme deep_blue
+tapc 98-workspace "More tools" exact
+shot 98-more-tools-menu
+# Settings: the three theme previews; switching applies at once.
+start --es pxpaint.demo settings
+shot 99-settings-themes
+dump 99-settings-themes
+if xy=$(centre 99-settings-themes "Warm Beige" exact); then adb shell input tap $xy; sleep 3; shot 99b-settings-warm-beige; fi
+dump 99b-settings-warm-beige
+
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
 start --es pxpaint.demo canvas
@@ -227,6 +279,10 @@ start --es pxpaint.demo selection --es pxpaint.selshape rectangle
 adb shell input swipe 900 300 1500 800 600; sleep 3
 shot 23-phone-landscape-selection
 dump 23-phone-landscape-selection
+start --es pxpaint.demo library --es pxpaint.theme warm_beige
+shot 24-phone-landscape-brush-selector-warm-beige
+start --es pxpaint.demo layers --es pxpaint.theme pure_black
+shot 25-phone-landscape-layers-pure-black
 
 # ---------------- Tablet portrait (emulated window 1600x2560 @320 -> 800x1280 dp)
 display 1600x2560 320

@@ -40,7 +40,7 @@ class QuickSlider(
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = theme.chrome }
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; color = theme.outline; strokeWidth = theme.dpF(1f)
+        style = Paint.Style.STROKE; color = theme.edge; strokeWidth = theme.dpF(1f)
     }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = theme.textSecondary }
     private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = theme.text }
@@ -173,7 +173,7 @@ class SliderBubble(context: Context, private val theme: PxTheme) : View(context)
     private var color = 0
     private var zoom = 1.0
     private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = theme.chrome }
-    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = theme.outline; strokeWidth = theme.dpF(1f) }
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = theme.edge; strokeWidth = theme.dpF(1f) }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG)
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = theme.text

@@ -129,23 +129,60 @@ class WorkspaceUiTest {
     // ------------------------------------------------------------ tokens / accessibility
     @Test
     fun textContrastMeetsWcagOnEverySurface() {
-        for (dark in listOf(true, false)) for (hc in listOf(false, true)) {
-            val c = DesignTokens.colors(dark, hc)
+        for (mode in ThemeMode.entries) for (hc in listOf(false, true)) {
+            val c = DesignTokens.colors(mode, hc)
             for (surface in listOf(c.bg, c.surface, c.raised)) {
-                val name = "dark=$dark hc=$hc surface=${ColorMath.toHex(surface)}"
+                val name = "$mode hc=$hc surface=${ColorMath.toHex(surface)}"
                 assertTrue("$name text", ColorMath.contrast(c.text, surface) >= 7.0)
                 assertTrue("$name secondary", ColorMath.contrast(c.textSecondary, surface) >= 4.5)
                 assertTrue("$name tertiary", ColorMath.contrast(c.textTertiary, surface) >= 3.0)
                 assertTrue("$name accent", ColorMath.contrast(c.accent, surface) >= 4.5)
                 assertTrue("$name danger", ColorMath.contrast(c.danger, surface) >= 4.5)
             }
-            assertTrue("dark=$dark on accent", ColorMath.contrast(c.onAccent, c.accent) >= 4.5)
-            // The translucent chrome over a white or black canvas still keeps text readable.
+            assertTrue("$mode on accent", ColorMath.contrast(c.onAccent, c.accent) >= 4.5)
+            // The translucent glass over a white or black canvas still keeps text readable.
             for (under in listOf(0xFFFFFFFF.toInt(), 0xFF000000.toInt())) {
-                val chrome = ColorMath.over(c.chrome, under)
-                assertTrue("dark=$dark chrome", ColorMath.contrast(c.text, chrome) >= 7.0)
+                for (glass in listOf(c.chrome, c.panel)) {
+                    val g = ColorMath.over(glass, under)
+                    assertTrue("$mode glass text over ${ColorMath.toHex(under)}", ColorMath.contrast(c.text, g) >= 7.0)
+                    assertTrue("$mode glass secondary over ${ColorMath.toHex(under)}", ColorMath.contrast(c.textSecondary, g) >= 4.5)
+                    assertTrue("$mode glass accent over ${ColorMath.toHex(under)}", ColorMath.contrast(c.accent, g) >= 3.0)
+                }
             }
         }
+    }
+
+    @Test
+    fun threeDistinctThemesWithTheRequestedCharacter() {
+        val blue = DesignTokens.colors(ThemeMode.DEEP_BLUE, false)
+        val black = DesignTokens.colors(ThemeMode.PURE_BLACK, false)
+        val beige = DesignTokens.colors(ThemeMode.WARM_BEIGE, false)
+        assertEquals(3, ThemeMode.entries.size)
+        // The suggested palettes, as given (accent / secondary of the beige theme darkened for contrast).
+        assertEquals(0xFF101A2B.toInt(), blue.bg); assertEquals(0xFF20344E.toInt(), blue.raised); assertEquals(0xFF6FA8E8.toInt(), blue.accent)
+        assertEquals(0xFF08090B.toInt(), black.bg); assertEquals(0xFF1B1E23.toInt(), black.raised); assertEquals(0xFFA6B7D4.toInt(), black.accent)
+        assertEquals(0xFFD8C8A8.toInt(), beige.bg); assertEquals(0xFFF0E6D3.toInt(), beige.raised); assertEquals(0xFF30291F.toInt(), beige.text)
+        assertTrue(blue.isDark && black.isDark && !beige.isDark)
+        // Deep Blue is blue (b > r), Pure Black near black, Warm Beige warm (r > b).
+        assertTrue((blue.bg and 0xFF) > ((blue.bg shr 16) and 0xFF))
+        assertTrue(ColorMath.luminance(black.bg) < 0.005)
+        assertTrue(((beige.bg shr 16) and 0xFF) > (beige.bg and 0xFF))
+        // Glass: translucent, the chrome more than panels.
+        for (c in listOf(blue, black, beige)) {
+            assertTrue((c.chrome ushr 24) in 0xC0..0xF0)
+            assertTrue((c.panel ushr 24) > (c.chrome ushr 24) && (c.panel ushr 24) < 0xFF)
+        }
+    }
+
+    @Test
+    fun legacyThemeNamesMigrate() {
+        assertEquals(ThemeMode.DEEP_BLUE, ThemeMode.parse("DARK"))
+        assertEquals(ThemeMode.DEEP_BLUE, ThemeMode.parse("SYSTEM"))
+        assertEquals(ThemeMode.WARM_BEIGE, ThemeMode.parse("LIGHT"))
+        assertEquals(ThemeMode.PURE_BLACK, ThemeMode.parse("PURE_BLACK"))
+        assertEquals(null, ThemeMode.parse("NEON"))
+        assertEquals(ThemeMode.DEEP_BLUE, AppSettings.decode(mapOf(AppSettings.K_THEME to "NEON")).theme)
+        assertEquals(ThemeMode.DEEP_BLUE, AppSettings().theme)
     }
 
     @Test
@@ -164,7 +201,7 @@ class WorkspaceUiTest {
             stylusButtonPick = false, sliderSide = Side.RIGHT, pinnedPanel = PinnedPanel.LAYERS, panelWidthDp = 400)
         assertEquals(st, AppSettings.decode(st.encode()))
         val old = AppSettings.decode(mapOf(AppSettings.K_THEME to "LIGHT"))
-        assertEquals(ThemeMode.LIGHT, old.theme)
+        assertEquals(ThemeMode.WARM_BEIGE, old.theme)   // Blocks 2-10 light theme -> Warm Beige
         assertTrue(old.tapUndo && old.tapRedo && old.quickPinchFit && old.stylusButtonPick)
         assertEquals(PinnedPanel.NONE, old.pinnedPanel)
         assertEquals(LayoutPolicy.PANEL_DEFAULT_DP, old.panelWidthDp)

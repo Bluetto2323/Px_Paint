@@ -12,6 +12,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import com.paintengine.engine.NativeEngine.LayerOp
 import com.paintengine.pxpaint.core.BlendMode
+import com.paintengine.pxpaint.core.LayerDrag
 import com.paintengine.pxpaint.core.LayerInfo
 import com.paintengine.pxpaint.core.LayerStack
 import com.paintengine.pxpaint.core.MotionPolicy
@@ -81,9 +82,24 @@ class LayersPanel(private val host: PxHost, private val ops: Ops, private val st
             addView(more)
         })
         if (stack == null) return@apply
-        val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        if (stack.layers.size > 1) addView(theme.text(context, tr(S.LAYER_DRAG_HINT), PxTheme.Type.CAPTION, theme.textTertiary, lines = 2).apply {
+            setPadding(0, theme.dp(2), 0, 0)
+        })
+        // Rows: tap selects (tap the selected one: options), press and hold drags it to a new place.
+        val gap = theme.dp(4)
+        val list = LayerList(context, theme, gap)
         for (l in stack.topDown) list.addView(row(l, l.id == stack.activeId), LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = theme.dp(4) })
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = gap })
+        list.onDrop = { id, to, visualTop ->
+            // The rebuilt list animates from where the rows are now (FLIP): the dropped row from under the finger.
+            for (i in 0 until list.childCount) {
+                val r = list.getChildAt(i)
+                val rid = r.tag as? Int ?: continue
+                state.tops[rid] = if (rid == id) visualTop else (r.top + r.translationY).toInt()
+            }
+            val n = stack.layers.size
+            ops.run(LayerOp.MOVE, id, LayerDrag.engineIndex(to, n), done = S.LAYER_DONE_MOVED)
+        }
         animateChanges(list, stack)
         addView(list, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = theme.dp(6)
@@ -159,8 +175,7 @@ class LayersPanel(private val host: PxHost, private val ops: Ops, private val st
         isSelected = active
         isClickable = true
         contentDescription = "${l.name}${if (active) ", " + tr(S.LAYER_SELECTED, "") else ""}"
-        setOnClickListener { if (!active) ops.run(LayerOp.ACTIVE, l.id) }
-        setOnLongClickListener { layerMenu(this, l); true }
+        setOnClickListener { if (!active) ops.run(LayerOp.ACTIVE, l.id) else layerMenu(this, l) }
         alpha = if (l.visible) 1f else ROW_HIDDEN_ALPHA
         tag = l.id
         val thumb = LayerThumb(context, theme)
@@ -177,12 +192,18 @@ class LayersPanel(private val host: PxHost, private val ops: Ops, private val st
             val sub = subtitle(l)
             if (sub.isNotEmpty()) addView(theme.text(context, sub, PxTheme.Type.CAPTION, theme.textSecondary, lines = 1))
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(IconButton(context, theme, if (l.locked) Icon.LOCK else Icon.UNLOCK, tr(if (l.locked) S.LAYER_UNLOCK else S.LAYER_LOCK), sizeDp = 34f).apply {
-            isSelected = l.locked
-            alpha = if (l.locked) 1f else 0.45f
-            setOnClickListener { ops.run(LayerOp.LOCKED, l.id, if (l.locked) 0 else 1) }
+        // A locked layer shows its lock (tap: unlock); options and visibility never start a drag.
+        if (l.locked) addView(IconButton(context, theme, Icon.LOCK, tr(S.LAYER_UNLOCK), sizeDp = 34f).apply {
+            tag = LayerList.NO_DRAG
+            isSelected = true
+            setOnClickListener { ops.run(LayerOp.LOCKED, l.id, 0) }
         })
+        val options = IconButton(context, theme, Icon.MORE, tr(S.LAYER_OPTIONS_OF, l.name), sizeDp = 34f)
+        options.tag = LayerList.NO_DRAG
+        options.setOnClickListener { layerMenu(options, l) }
+        addView(options)
         addView(IconButton(context, theme, if (l.visible) Icon.EYE else Icon.EYE_OFF, tr(if (l.visible) S.LAYER_HIDE else S.LAYER_SHOW), sizeDp = 34f).apply {
+            tag = LayerList.NO_DRAG
             setOnClickListener { ops.run(LayerOp.VISIBLE, l.id, if (l.visible) 0 else 1) }
         })
     }

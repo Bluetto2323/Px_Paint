@@ -2,7 +2,6 @@ package com.paintengine.pxpaint.ui
 
 import android.content.Context
 import android.content.res.ColorStateList
-import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -26,12 +25,8 @@ import kotlin.math.roundToInt
  * primary action and focus. The light theme is a warm paper tone.
  */
 class PxTheme(context: Context, val settings: AppSettings) {
-    val dark: Boolean = when (settings.theme) {
-        ThemeMode.DARK -> true
-        ThemeMode.LIGHT -> false
-        ThemeMode.SYSTEM ->
-            (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-    }
+    /** One of the three interface themes (core/DesignTokens): every colour below comes from it. */
+    val mode: ThemeMode = settings.theme
     val scale: Float = settings.uiSize.scale
     private val density: Float = context.resources.displayMetrics.density
     val reduceMotion: Boolean = settings.reduceMotion
@@ -42,7 +37,8 @@ class PxTheme(context: Context, val settings: AppSettings) {
     )
 
     // --- colours (core/DesignTokens) -------------------------------------------
-    val colors = com.paintengine.pxpaint.core.DesignTokens.colors(dark, settings.highContrast)
+    val colors = com.paintengine.pxpaint.core.DesignTokens.colors(mode, settings.highContrast)
+    val dark: Boolean = colors.isDark
     val bg = colors.bg
     val surface = colors.surface
     val raised = colors.raised
@@ -58,8 +54,14 @@ class PxTheme(context: Context, val settings: AppSettings) {
     val scrim = colors.scrim
     /** Around the canvas in the workspace (passed to the engine). */
     val workspace = colors.workspace
-    /** Floating chrome over the canvas: slightly translucent surface. */
+    /** Floating chrome over the canvas: the panel colour, translucent (text keeps >= 7:1 over any artwork). */
     val chrome = colors.chrome
+    /** Floating panels (brushes, layers, colour...): translucent, a little more opaque than the chrome. */
+    val panel = colors.panel
+    /** Hairline edge of floating glass surfaces. */
+    val edge = colors.edge
+    /** Shadow colour of floating surfaces (Android 9+ tints elevation shadows with it). */
+    val shadow = colors.shadow
     val ripple = colors.ripple
 
     // --- metrics --------------------------------------------------------------
@@ -125,6 +127,24 @@ class PxTheme(context: Context, val settings: AppSettings) {
         arrayOf(intArrayOf(android.R.attr.state_selected), intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
         intArrayOf(selected, textTertiary, normal),
     )
+
+    /** Translucent "glass" surface: [fill] (chrome or panel colour) with a hairline edge. */
+    fun glass(radius: Float = radiusL, fill: Int = chrome): GradientDrawable = rounded(fill, radius, edge, 1f)
+
+    /**
+     * Makes [v] float over the canvas: soft shadow (tinted on Android 9+),
+     * glass background. No blur: Android cannot blur what is under a view
+     * when it is the GPU canvas (a SurfaceView), and blurring the canvas
+     * itself would cost GPU time while painting (Block 11 brief).
+     */
+    fun float(v: View, radius: Float = radiusL, fill: Int = chrome, elevationDp: Float = 6f) {
+        v.background = glass(radius, fill)
+        v.elevation = dpF(elevationDp)
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            v.outlineAmbientShadowColor = shadow
+            v.outlineSpotShadowColor = shadow
+        }
+    }
 
     fun applyCardOutline(v: View, radius: Float = radiusM, fill: Int = surface) {
         v.background = pressable(rounded(fill, radius, outline), radius)

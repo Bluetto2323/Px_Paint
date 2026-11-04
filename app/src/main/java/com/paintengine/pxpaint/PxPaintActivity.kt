@@ -32,11 +32,11 @@ import com.paintengine.pxpaint.core.LanguagePref
 import com.paintengine.pxpaint.core.ProjectStore
 import com.paintengine.pxpaint.core.RenderPreference
 import com.paintengine.pxpaint.core.S
-import com.paintengine.pxpaint.core.ThemeMode
 import com.paintengine.pxpaint.screens.DebugDemo
 import com.paintengine.pxpaint.screens.GalleryScreen
 import com.paintengine.pxpaint.screens.PxHost
 import com.paintengine.pxpaint.screens.Screen
+import com.paintengine.pxpaint.screens.WorkspaceScreen
 import com.paintengine.pxpaint.ui.Motion
 import com.paintengine.pxpaint.ui.BrushPreviews
 import com.paintengine.pxpaint.ui.OverlayHost
@@ -110,7 +110,6 @@ class PxPaintActivity : Activity(), PxHost {
     private var engine: NativeEngine? = null
     private var engineFailed = false
     private var resumed = false
-    private var uiNightMode = 0
     private var locale = ""
     private var fontScale = 1f
     private var densityDpi = 0
@@ -201,14 +200,12 @@ class PxPaintActivity : Activity(), PxHost {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val oldNight = uiNightMode
         val oldLocale = locale
         val oldFont = fontScale
         val oldDensity = densityDpi
         readConfiguration(newConfig)
-        val themeFollowsSystem = settings.theme == ThemeMode.SYSTEM && oldNight != uiNightMode
         val languageFollowsSystem = settings.language == LanguagePref.SYSTEM && oldLocale != locale
-        if (themeFollowsSystem || languageFollowsSystem || oldFont != fontScale || oldDensity != densityDpi) {
+        if (languageFollowsSystem || oldFont != fontScale || oldDensity != densityDpi) {
             retheme()
         } else {
             layoutChanged()
@@ -395,6 +392,13 @@ class PxPaintActivity : Activity(), PxHost {
     }
 
     private fun retheme() {
+        // Theme change: the old interface fades out over the new one (not over the GPU canvas,
+        // whose SurfaceView cannot be captured without a readback).
+        val snapshot = if (theme.motion.enabled && top() !is WorkspaceScreen && content.width > 0 && content.height > 0)
+            runCatching {
+                android.graphics.Bitmap.createBitmap(content.width, content.height, android.graphics.Bitmap.Config.ARGB_8888)
+                    .also { content.draw(android.graphics.Canvas(it)) }
+            }.getOrNull() else null
         theme = makeTheme()
         rememberSplashTheme()
         overlays.setTheme(theme)
@@ -403,14 +407,19 @@ class PxPaintActivity : Activity(), PxHost {
         // Every screen is rebuilt with the new theme (lazily for hidden ones).
         for (other in stack) if (other !== s) views.remove(other)
         rebuild(s)
+        snapshot?.let { bmp ->
+            val iv = android.widget.ImageView(this).apply { setImageBitmap(bmp); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+            transitionLayer.addView(iv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            iv.animate().alpha(0f).setDuration(theme.motion.d(MotionTokens.MEDIUM)).withEndAction {
+                transitionLayer.removeView(iv)
+                bmp.recycle()
+            }.start()
+        }
     }
 
     private fun makeTheme(): PxTheme {
         S.applyLanguage(settings.language, resources.configuration.locales[0] ?: Locale.getDefault())
-        val effective = if (settings.theme == ThemeMode.SYSTEM) {
-            settings.copy(theme = if (uiNightMode == Configuration.UI_MODE_NIGHT_NO) ThemeMode.LIGHT else ThemeMode.DARK)
-        } else settings
-        return PxTheme(this, effective)
+        return PxTheme(this, settings)
     }
 
     override fun pressureTable(): FloatArray {
@@ -505,7 +514,6 @@ class PxPaintActivity : Activity(), PxHost {
         windowWidthDp = c.screenWidthDp
         windowHeightDp = c.screenHeightDp
         smallestWidthDp = c.smallestScreenWidthDp
-        uiNightMode = c.uiMode and Configuration.UI_MODE_NIGHT_MASK
         locale = c.locales[0]?.toLanguageTag() ?: ""
         fontScale = c.fontScale
         densityDpi = c.densityDpi

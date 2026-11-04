@@ -8,7 +8,22 @@ package com.paintengine.pxpaint.core
  * Unknown keys are ignored and invalid values fall back to the default, so
  * settings written by a newer version never break an older one (and vice versa).
  */
-enum class ThemeMode { SYSTEM, DARK, LIGHT }
+/**
+ * The three interface themes (Block 11). They change the whole interface,
+ * never the artwork. Names of Blocks 2-10 migrate: dark / system -> Deep
+ * Blue, light -> Warm Beige.
+ */
+enum class ThemeMode(val label: S) {
+    DEEP_BLUE(S.THEME_DEEP_BLUE), PURE_BLACK(S.THEME_PURE_BLACK), WARM_BEIGE(S.THEME_WARM_BEIGE);
+
+    companion object {
+        fun parse(v: String?): ThemeMode? = when (v) {
+            "DARK", "SYSTEM" -> DEEP_BLUE
+            "LIGHT" -> WARM_BEIGE
+            else -> entries.firstOrNull { it.name == v }
+        }
+    }
+}
 
 enum class UiSize(val scale: Float) { COMPACT(0.9f), DEFAULT(1.0f), LARGE(1.15f), EXTRA_LARGE(1.3f) }
 
@@ -23,7 +38,7 @@ enum class BackendChoice(val engineName: String) { AUTO("auto"), VULKAN("vulkan"
 enum class LanguagePref { SYSTEM, ENGLISH, ITALIAN }
 
 data class AppSettings(
-    val theme: ThemeMode = ThemeMode.DARK,
+    val theme: ThemeMode = ThemeMode.DEEP_BLUE,
     val uiSize: UiSize = UiSize.DEFAULT,
     val language: LanguagePref = LanguagePref.SYSTEM,
     // Toolbar
@@ -123,7 +138,7 @@ data class AppSettings(
         fun decode(map: Map<String, String>): AppSettings {
             val d = AppSettings()
             return AppSettings(
-                theme = enumOr(map[K_THEME], d.theme),
+                theme = ThemeMode.parse(map[K_THEME]) ?: d.theme,
                 uiSize = enumOr(map[K_UI_SIZE], d.uiSize),
                 language = enumOr(map[K_LANGUAGE], d.language),
                 dockSide = enumOr(map[K_DOCK_SIDE], d.dockSide),

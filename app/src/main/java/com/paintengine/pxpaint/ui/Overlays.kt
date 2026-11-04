@@ -108,8 +108,7 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
         val scrim = FrameLayout(context).apply { isClickable = true }
         val list = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = theme.rounded(theme.raised, theme.radiusM, theme.outline)
-            elevation = theme.dpF(8f)
+            theme.float(this, theme.radiusM, theme.panel, 8f)
             setPadding(0, theme.dp(6), 0, theme.dp(6))
         }
         for (item in items) {
@@ -120,8 +119,18 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
                 setPadding(theme.dp(14), 0, theme.dp(20), 0)
                 background = theme.pressable(null, 0f)
                 isEnabled = item.enabled
+                isClickable = true
+                contentDescription = item.label
                 alpha = if (item.enabled) 1f else 0.45f
-                val color = if (item.destructive) theme.danger else theme.text
+                val color = when {
+                    item.destructive -> theme.danger
+                    item.selected -> theme.accent
+                    else -> theme.text
+                }
+                if (item.selected) {
+                    background = theme.pressable(theme.rounded(theme.accentSoft, 0f), 0f)
+                    isSelected = true
+                }
                 if (item.icon != null) addView(View(context).apply { background = IconDrawable(item.icon, color) },
                     LinearLayout.LayoutParams(theme.dp(20), theme.dp(20)).apply { marginEnd = theme.dp(14) })
                 addView(theme.text(context, item.label, PxTheme.Type.BODY, color, lines = 1))
@@ -151,6 +160,8 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
 
     data class MenuItem(
         val label: String, val icon: Icon? = null, val destructive: Boolean = false, val enabled: Boolean = true,
+        /** The current choice (active tool): accent colour and a soft background. */
+        val selected: Boolean = false,
         val action: () -> Unit,
     )
 

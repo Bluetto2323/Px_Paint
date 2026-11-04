@@ -54,9 +54,19 @@ class SettingsScreen(host: PxHost) : Screen(host) {
 
         // --- Appearance
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_APPEARANCE)))
-        page.addView(choice(tr(S.THEME), null, listOf(
-            ThemeMode.DARK to tr(S.THEME_DARK), ThemeMode.LIGHT to tr(S.THEME_LIGHT), ThemeMode.SYSTEM to tr(S.THEME_SYSTEM),
-        ), s.theme) { set(s.copy(theme = it)) })
+        // Three themes, each previewed with its own tokens; applied at once (no restart).
+        page.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(theme.pad, theme.dp(8), theme.pad, theme.dp(8))
+            addView(theme.text(context, tr(S.THEME), PxTheme.Type.BODY))
+            addView(theme.text(context, tr(S.THEME_DESC), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(8)) })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                for (m in ThemeMode.entries) addView(com.paintengine.pxpaint.ui.ThemePreview(context, theme, m, m == s.theme).apply {
+                    setOnClickListener { if (m != host.settings.theme) set(host.settings.copy(theme = m)) }
+                }, LinearLayout.LayoutParams(0, theme.dp(132), 1f).apply { marginEnd = if (m != ThemeMode.entries.last()) theme.dp(8) else 0 })
+            })
+        })
         page.addView(choice(tr(S.UI_SIZE), null, listOf(
             UiSize.COMPACT to "90%", UiSize.DEFAULT to "100%", UiSize.LARGE to "115%", UiSize.EXTRA_LARGE to "130%",
         ), s.uiSize) { set(s.copy(uiSize = it)) })

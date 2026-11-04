@@ -279,6 +279,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     override fun onPause() {
         router.interrupt()   // a stroke interrupted by the system keeps what was drawn
+        if (selInfo.moving) runSelection(SelectionAction.MOVE_DONE)   // leaving the app lands moved content
         save()
     }
 
@@ -604,7 +605,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 s.optInt("canvasDrawCalls"), Format.bytes(s.optLong("canvasBytesUploaded")),
             )
         }
-        if (loaded && SystemClock.uptimeMillis() - lastAutosave > AUTOSAVE_MS) save()
+        // Autosave waits while selected content is being moved (a save lands the move: it would end it).
+        if (loaded && !selInfo.moving && SystemClock.uptimeMillis() - lastAutosave > AUTOSAVE_MS) save()
     }
 
     private fun updateViewport(v: NativeEngine.ViewportInfo) {
@@ -613,9 +615,27 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val chip = zoomChip ?: return
         val txt = "${Format.zoomPercent(v.zoom)} · ${Format.degrees(v.rotation)}"
         if (chip.text != txt) {
+            val first = chip.text.isEmpty()
             chip.text = txt
             chip.contentDescription = tr(S.ZOOM_CHIP_DESC, Format.zoomPercent(v.zoom), Format.degrees(v.rotation))
+            // Minimal permanent UI: the chip shows while the view changes, then fades away.
+            if (!first && loaded) showZoomChip()
         }
+    }
+
+    private val hideZoomChip = Runnable {
+        zoomChip?.let { c -> if (c.visibility == View.VISIBLE) motion.exit(c, dyDp = 0f) { c.visibility = View.INVISIBLE } }
+    }
+
+    private fun showZoomChip() {
+        val c = zoomChip ?: return
+        if (fullscreen) return
+        handler.removeCallbacks(hideZoomChip)
+        if (c.visibility != View.VISIBLE || c.alpha < 1f) {
+            c.visibility = View.VISIBLE
+            motion.fadeTo(c, 1f, from = c.alpha)
+        }
+        handler.postDelayed(hideZoomChip, ZOOM_CHIP_HOLD_MS)
     }
 
     private fun viewOp(op: ViewOp, vararg args: Double) {
@@ -865,7 +885,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var sizeSlider: QuickSlider? = null
     private var opacitySlider: QuickSlider? = null
     private var sliderBubble: SliderBubble? = null
-    private var libraryButton: IconButton? = null
     private var pinnedView: View? = null
     private var slidersView: View? = null
     private val colorState = ColorPanel.State()
@@ -890,7 +909,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (fullscreen) {
             // Only a small corner button (and the four-finger tap) brings the interface back.
             c.addView(IconButton(context, theme, Icon.FULLSCREEN_EXIT, tr(S.FULLSCREEN_EXIT)).apply {
-                background = theme.pressable(theme.rounded(theme.chrome, theme.radiusPill, theme.outline), theme.radiusPill)
+                background = theme.pressable(theme.glass(theme.radiusPill), theme.radiusPill)
                 alpha = 0.85f
                 setOnClickListener { setFullscreen(false) }
             }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
@@ -900,47 +919,57 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             hud = null
             return
         }
-        val barH = theme.touchTarget + theme.dp(if (s.compactTopBar) 4 else 12)
         val pinnedW = if (s.pinned != PinnedPanel.NONE) theme.dp(s.panelWidthDp) + m + theme.touchTarget else 0
         val pinnedLeft = s.pinned != PinnedPanel.NONE && s.panelSide == Side.LEFT
         val pinnedRight = s.pinned != PinnedPanel.NONE && s.panelSide == Side.RIGHT
 
-        // Top bar (actions; on tablets also the tools)
-        val railW = if (s.toolbar == ToolbarPlacement.SIDE) theme.touchTarget + theme.dp(8) + m else 0
-        c.addView(topBar(s), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
-            setMargins(ins.left + m + (if (s.railSide == Side.LEFT) railW else 0), ins.top + m,
-                ins.right + m + (if (s.railSide == Side.RIGHT) railW else 0), 0)
+        // Floating glass controls (Block 11), no permanent bar: navigation top-left,
+        // undo / redo top-right (on tablets with the tools beside them), the tools in one
+        // capsule where the thumb reaches (bottom in portrait, the rail side in landscape).
+        val railW = if (s.toolbar == ToolbarPlacement.SIDE) theme.touchTarget + theme.dp(12) + m else 0
+        val railLeft = s.railSide == Side.LEFT
+        val barH = theme.touchTarget + theme.dp(8)
+        c.addView(navCluster(s), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.START).apply {
+            setMargins(ins.left + m + (if (s.toolbar == ToolbarPlacement.SIDE && railLeft) railW else 0), ins.top + m, 0, 0)
+        })
+        c.addView(historyCluster(s), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.END).apply {
+            setMargins(0, ins.top + m, ins.right + m + (if (s.toolbar == ToolbarPlacement.SIDE && !railLeft) railW else 0), 0)
         })
         val belowBar = ins.top + m + barH + m
 
-        // Pinned panel (tablets): beside the canvas, under the top bar.
+        // Pinned panel (tablets): beside the canvas, under the floating controls.
         if (s.pinned != PinnedPanel.NONE) pinnedPanel(c, s, belowBar)
 
-        // Zoom / rotation chip, centred over the canvas area.
+        // Zoom / rotation chip: appears while the view changes, then fades (tap: fit; long press: canvas menu).
         zoomChip = theme.text(context, "", PxTheme.Type.LABEL, theme.text).apply {
             gravity = Gravity.CENTER
             minHeight = theme.touchTarget
             minWidth = theme.touchTarget
             setPadding(theme.dp(14), 0, theme.dp(14), 0)
-            background = theme.pressable(theme.rounded(theme.chrome, theme.radiusPill, theme.outline), theme.radiusPill)
+            theme.float(this, theme.radiusPill, theme.chrome, 3f)
+            background = theme.pressable(theme.glass(theme.radiusPill), theme.radiusPill)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             isClickable = true
+            alpha = 0f
+            visibility = View.INVISIBLE
             setOnClickListener { viewOp(ViewOp.FIT); motion.pop(this) }
             setOnLongClickListener { canvasMenu(this); true }
         }
         c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = belowBar
+            topMargin = ins.top + m
             // Centred over the canvas area: FrameLayout shifts a centred child by the whole margin.
             if (pinnedRight) rightMargin = pinnedW / 2
             if (pinnedLeft) leftMargin = pinnedW / 2
         })
         updateViewport(view)
 
-        // Contextual selection actions, under the zoom chip (over the canvas area).
+        // Contextual selection actions, under the floating controls (over the canvas area).
         selBar = selectionBar().also { bar ->
             c.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                topMargin = belowBar + theme.touchTarget + m
+                topMargin = belowBar
                 val side = (if (s.toolbar == ToolbarPlacement.SIDE) railW else 0) + theme.touchTarget + theme.dp(8)
                 leftMargin = ins.left + side + (if (pinnedLeft) pinnedW else 0)
                 rightMargin = ins.right + side + (if (pinnedRight) pinnedW else 0)
@@ -948,25 +977,25 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         refreshSelectionBar()
 
-        // Tools: bottom dock / side rail (on tablets they are in the top bar).
+        // Tools capsule.
         var dockH = 0
         when (s.toolbar) {
             ToolbarPlacement.BOTTOM -> {
-                c.addView(dock(s, vertical = false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = ins.bottom + theme.dp(12) })
-                dockH = theme.touchTarget + theme.dp(12) + theme.dp(if (s.toolLabels) 18 else 0) + theme.dp(12)
+                c.addView(toolCapsule(s, vertical = false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = ins.bottom + theme.dp(14) })
+                dockH = theme.touchTarget + theme.dp(8) + theme.dp(if (s.toolLabels) 18 else 0) + theme.dp(14)
             }
             ToolbarPlacement.SIDE -> {
-                // Full height from the top (the top bar starts beside it): fits short landscape windows; scrolls if not.
-                val left = s.railSide == Side.LEFT
                 val rail = android.widget.ScrollView(context).apply {
                     isVerticalScrollBarEnabled = false
                     isFillViewport = false
-                    addView(dock(s, vertical = true))
+                    clipToPadding = false
+                    setPadding(0, theme.dp(8), 0, theme.dp(8))
+                    addView(toolCapsule(s, vertical = true))
                 }
                 c.addView(rail, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                    (if (left) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL).apply {
-                    if (left) marginStart = ins.left + m else marginEnd = ins.right + m
+                    (if (railLeft) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL).apply {
+                    if (railLeft) marginStart = ins.left + m else marginEnd = ins.right + m
                     topMargin = ins.top + m
                     bottomMargin = ins.bottom + m
                 })
@@ -1004,7 +1033,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         // Performance overlay
         hud = if (host.settings.performanceOverlay) theme.text(context, "", PxTheme.Type.CAPTION, theme.textSecondary).apply {
             typeface = Typeface.MONOSPACE
-            background = theme.rounded(theme.chrome, theme.radiusS, theme.outline)
+            background = theme.glass(theme.radiusS)
             setPadding(theme.dp(10), theme.dp(6), theme.dp(10), theme.dp(6))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }.also {
@@ -1051,7 +1080,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             val card = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
+                background = theme.glass(theme.radiusL)
                 setPadding(theme.dp(24), theme.dp(20), theme.dp(24), theme.dp(18))
                 addView(ring)
                 addView(theme.text(context, tr(S.OPENING_PROJECT, meta.name), PxTheme.Type.LABEL, lines = 1).apply {
@@ -1076,26 +1105,31 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         motion.exit(l, dyDp = 0f) { chrome?.removeView(l) }
     }
 
-    private fun topBar(s: WorkspaceSpec): View = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-        val v = theme.dp(if (s.compactTopBar) 0 else 4)
-        setPadding(theme.dp(4), v, theme.dp(4), v)
-        addView(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY)).apply { setOnClickListener { host.pop() } })
+    /** A floating glass capsule (horizontal or vertical). */
+    private fun capsule(vertical: Boolean): LinearLayout = LinearLayout(context).apply {
+        orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        theme.float(this, theme.radiusPill)
+        val p = theme.dp(4)
+        setPadding(p, p, p, p)
+    }
+
+    private fun capsuleButton(b: IconButton): IconButton = b.apply { round = true }
+
+    /** Top-left: back to the gallery, the project name on tablets, compositing and save state. */
+    private fun navCluster(s: WorkspaceSpec): View = capsule(false).apply {
+        addView(capsuleButton(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY))).apply { setOnClickListener { host.pop() } })
         if (s.showTitle) {
-            val title = theme.text(context, meta.name, if (s.compactTopBar) PxTheme.Type.LABEL else PxTheme.Type.HEADLINE, lines = 1).apply {
-                setPadding(theme.dp(6), 0, theme.dp(6), 0)
+            addView(theme.text(context, meta.name, PxTheme.Type.LABEL, lines = 1).apply {
+                setPadding(theme.dp(4), 0, theme.dp(8), 0)
                 gravity = Gravity.CENTER_VERTICAL
                 minHeight = theme.touchTarget
-                background = theme.pressable(null, theme.radiusS)
+                maxWidth = theme.dp(220)
+                background = theme.pressable(null, theme.radiusPill)
                 isClickable = true
                 contentDescription = "${tr(S.ACTION_RENAME)}: ${meta.name}"
                 setOnClickListener { rename() }
-            }
-            addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        } else {
-            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            })
         }
         // Status: compositing ring (heavy layer updates) and save state.
         compositeIndicator = ProgressIndicator(context, theme, sizeDp = 16f, strokeDp = 2f).apply {
@@ -1106,12 +1140,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             it.show(saveTracker.state)
             addView(it)
         }
-        // Undo / redo: tap = one step, long-press = the History panel.
-        undoButton = IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}").apply {
+    }
+
+    /** Top-right: undo / redo (long press: History); on tablets the tools follow. */
+    private fun historyCluster(s: WorkspaceSpec): View = capsule(false).apply {
+        undoButton = capsuleButton(IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}")).apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
         }.also { addView(it) }
-        redoButton = IconButton(context, theme, Icon.REDO, "${tr(S.REDO)} — ${tr(S.REDO_DESC)}").apply {
+        redoButton = capsuleButton(IconButton(context, theme, Icon.REDO, "${tr(S.REDO)} — ${tr(S.REDO_DESC)}")).apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.REDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
         }.also { addView(it) }
@@ -1120,69 +1157,82 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             addView(separator(vertical = false))
             addTools(this, s)
         }
-        val more = IconButton(context, theme, Icon.MORE, tr(S.CANVAS_MENU))
-        more.setOnClickListener { canvasMenu(more) }
-        addView(more)
     }
+
+    private fun toolCapsule(s: WorkspaceSpec, vertical: Boolean): View = capsule(vertical).apply { addTools(this, s) }
 
     private fun separator(vertical: Boolean): View = View(context).apply { setBackgroundColor(theme.outline) }.also {
-        it.layoutParams = if (vertical) LinearLayout.LayoutParams(theme.dp(24), maxOf(1, theme.dp(1f))).apply { setMargins(0, theme.dp(6), 0, theme.dp(6)) }
-        else LinearLayout.LayoutParams(maxOf(1, theme.dp(1f)), theme.dp(24)).apply { setMargins(theme.dp(6), 0, theme.dp(6), 0) }
+        it.layoutParams = if (vertical) LinearLayout.LayoutParams(theme.dp(22), maxOf(1, theme.dp(1f))).apply { setMargins(0, theme.dp(4), 0, theme.dp(4)) }
+        else LinearLayout.LayoutParams(maxOf(1, theme.dp(1f)), theme.dp(22)).apply { setMargins(theme.dp(4), 0, theme.dp(4), 0) }
     }
 
-    /** Brush, eraser, move | library, colour, layers: the same group in every layout. */
+    private var moreButton: IconButton? = null
+
+    /**
+     * Brush, eraser, colour, layers, more tools: the same group in every
+     * layout. Tapping the active brush (or eraser) opens its brush selector;
+     * long press opens its settings. Selection, move, eyedropper, history,
+     * hiding the interface and canvas options are under "more".
+     */
     private fun addTools(box: LinearLayout, s: WorkspaceSpec) {
         val vertical = box.orientation == LinearLayout.VERTICAL
-        for (t in Tool.entries) {
-            val b = IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null)
-            b.setOnClickListener { selectTool(t) }
-            if (t.paints) b.setOnLongClickListener {
-                // Long press: straight to the brush library of that tool.
+        for (t in listOf(Tool.MARKER, Tool.ERASER)) {
+            val b = capsuleButton(IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null))
+            b.setOnClickListener {
+                if (tool == t) togglePanel(Panel.LIBRARY) else selectTool(t)
+            }
+            b.setOnLongClickListener {
                 if (tool != t) selectTool(t)
-                setPanel(Panel.LIBRARY)
+                setPanel(Panel.TOOL)
                 refreshDock()
                 true
             }
             toolButtons[t] = b
             box.addView(b, toolLp(vertical))
         }
-        box.addView(separator(vertical))
-        val preset = host.brushes.selectedPreset(brushTool(if (!tool.paints) Tool.MARKER else tool))
-        libraryButton = IconButton(context, theme, Icon.LIBRARY, tr(S.BRUSH_LIBRARY_DESC, preset.displayName()),
-            label = if (s.toolLabels) tr(S.BRUSH_LIBRARY) else null).apply {
-            setOnClickListener { togglePanel(Panel.LIBRARY) }
-        }.also { box.addView(it, toolLp(vertical)) }
         val swatch = FrameLayout(context).apply {
             minimumWidth = theme.touchTarget
             minimumHeight = theme.touchTarget
             contentDescription = tr(S.COLOR)
             tooltipText = tr(S.COLOR)
             isClickable = true
-            background = theme.pressable(null, theme.radiusS)
-            addView(View(context).apply { background = theme.oval(color, theme.text) },
-                FrameLayout.LayoutParams(theme.dp(28), theme.dp(28), Gravity.CENTER))
+            background = theme.pressable(null, theme.radiusPill)
+            addView(View(context).apply { background = theme.oval(color, theme.edge) },
+                FrameLayout.LayoutParams(theme.dp(26), theme.dp(26), Gravity.CENTER))
             setOnClickListener { togglePanel(Panel.COLOR) }
         }
         colorButton = swatch
         box.addView(swatch, toolLp(vertical))
-        box.addView(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null).apply {
+        box.addView(capsuleButton(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null)).apply {
             setOnClickListener { togglePanel(Panel.LAYERS) }
         }, toolLp(vertical))
+        val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS), label = if (s.toolLabels) tr(S.MORE_TOOLS_SHORT) else null))
+        more.setOnClickListener { moreTools(more) }
+        moreButton = more
+        box.addView(more, toolLp(vertical))
+    }
+
+    /** The tools that are not always on screen, and the canvas / app actions. */
+    private fun moreTools(anchor: View) {
+        host.overlays.menu(anchor, listOf(
+            OverlayHost.MenuItem(tr(S.TOOL_SELECT), Icon.SELECT, selected = tool == Tool.SELECT) {
+                if (tool == Tool.SELECT) setPanel(Panel.TOOL) else selectTool(Tool.SELECT)
+            },
+            OverlayHost.MenuItem(tr(S.TOOL_MOVE), Icon.MOVE, selected = tool == Tool.MOVE) { selectTool(Tool.MOVE) },
+            OverlayHost.MenuItem(tr(S.EYEDROPPER), Icon.EYEDROPPER) { armEyedropper() },
+            OverlayHost.MenuItem(tr(S.BRUSH_SETTINGS), Icon.SLIDERS) {
+                if (!tool.paints) selectTool(Tool.MARKER)
+                setPanel(Panel.TOOL)
+            },
+            OverlayHost.MenuItem(tr(S.HISTORY), Icon.HISTORY) { setPanel(Panel.HISTORY) },
+            OverlayHost.MenuItem(tr(S.FULLSCREEN), Icon.FULLSCREEN) { setFullscreen(true) },
+            OverlayHost.MenuItem(tr(S.CANVAS_MENU) + "…", Icon.INFO) { canvasMenu(anchor) },
+        ))
     }
 
     private fun toolLp(vertical: Boolean) = if (vertical)
         LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL }
     else LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_VERTICAL }
-
-    private fun dock(s: WorkspaceSpec, vertical: Boolean): View = LinearLayout(context).apply {
-        orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER
-        background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-        elevation = theme.dpF(4f)
-        val p = theme.dp(if (vertical) 4 else 6)
-        setPadding(p, p, p, p)
-        addTools(this, s)
-    }
 
     /** Size and opacity of the current tool, on a screen edge; a bubble shows the value while dragging. */
     private fun quickSliders(s: WorkspaceSpec, lengthPx: Int): View = LinearLayout(context).apply {
@@ -1218,12 +1268,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private fun refreshDock() {
         for ((t, b) in toolButtons) b.isSelected = t == tool
-        (colorButton as? FrameLayout)?.getChildAt(0)?.background = theme.oval(color, theme.text)
+        (colorButton as? FrameLayout)?.getChildAt(0)?.background = theme.oval(color, theme.edge)
+        // "More": shows the extra tool in use (select / move), highlighted.
+        moreButton?.let { mb ->
+            mb.setIcon(when (tool) { Tool.SELECT -> Icon.SELECT; Tool.MOVE -> Icon.MOVE; else -> Icon.MORE })
+            mb.isSelected = !tool.paints
+        }
         val bt = currentBrushTool()
         val b = host.brushes.effective(bt)
         sizeSlider?.setValue(BrushState.sizeToSlider(b.size))
         opacitySlider?.setValue(b.opacity)
-        libraryButton?.contentDescription = tr(S.BRUSH_LIBRARY_DESC, host.brushes.selectedPreset(bt).displayName())
         for (sl in listOfNotNull(sizeSlider, opacitySlider)) (sl.parent as? View)?.alpha = if (!tool.paints) theme.disabledAlpha else 1f
     }
 
@@ -1461,7 +1515,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         selBarShown = false
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = theme.rounded(theme.chrome, theme.radiusPill, theme.outline)
+            background = theme.glass(theme.radiusPill)
             elevation = theme.dpF(3f)
             setPadding(theme.dp(4), theme.dp(2), theme.dp(4), theme.dp(2))
             contentDescription = tr(S.SEL_ACTIONS)
@@ -1483,13 +1537,21 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (key != selBarKey) {
             selBarKey = key
             row.removeAllViews()
-            for (a in actions) {
+            val (chipsShown, overflow) = SelectionAction.split(actions)
+            for (a in chipsShown) {
                 val primary = a == SelectionAction.MOVE_DONE || a == SelectionAction.POLYGON_CLOSE
                 row.addView(Widgets.chip(context, theme, tr(a.label), primary) { runSelection(a) }.apply {
                     contentDescription = tr(a.label)
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, theme.touchTarget).apply {
                     marginStart = theme.dp(2); marginEnd = theme.dp(2)
                 })
+            }
+            if (overflow.isNotEmpty()) {
+                val more = IconButton(context, theme, Icon.MORE, tr(S.SEL_MORE_ACTIONS)).apply { round = true }
+                more.setOnClickListener {
+                    host.overlays.menu(more, overflow.map { a -> OverlayHost.MenuItem(tr(a.label)) { runSelection(a) } })
+                }
+                row.addView(more)
             }
         }
         val show = actions.isNotEmpty() && !fullscreen
@@ -1540,14 +1602,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var panelView: View? = null
 
     private fun pinnedPanelOf(s: WorkspaceSpec?): Panel = when (s?.pinned) {
-        PinnedPanel.BRUSHES -> Panel.TOOL
+        PinnedPanel.BRUSHES -> Panel.LIBRARY
         PinnedPanel.COLOR -> Panel.COLOR
         PinnedPanel.LAYERS -> Panel.LAYERS
         else -> Panel.NONE
     }
 
     private fun pinnable(p: Panel): PinnedPanel? = when (p) {
-        Panel.TOOL -> PinnedPanel.BRUSHES
+        Panel.LIBRARY -> PinnedPanel.BRUSHES
         Panel.COLOR -> PinnedPanel.COLOR
         Panel.LAYERS -> PinnedPanel.LAYERS
         else -> null
@@ -1664,8 +1726,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private fun panelFrame(p: Panel, content: View, s: WorkspaceSpec, sheet: Boolean, docked: Boolean, maxHeight: Int): View {
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
-            elevation = theme.dpF(if (docked) 2f else 8f)
+            theme.float(this, theme.radiusL, theme.panel, if (docked) 2f else 10f)
             isClickable = true
         }
         val header = FrameLayout(context).apply {
@@ -1875,14 +1936,20 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private fun libraryPanel(): View {
         val t = if (!tool.paints) Tool.MARKER else tool
-        val panel = BrushLibraryPanel(host, brushTool(t), libraryState,
+        val lp = BrushLibraryPanel(host, brushTool(t), libraryState,
             onEdit = { bt -> host.push(BrushEditorScreen(host, bt)) },
             onChanged = {
                 showPanel(Panel.LIBRARY)
                 if (spec?.pinned == PinnedPanel.BRUSHES) refreshPinned()
                 refreshDock()
             })
-        return panel.view()
+        // One tap: the brush is active and the panel closes (a pinned panel stays); drawing continues at once.
+        lp.onSelected = {
+            refreshDock()
+            if (spec?.pinned == PinnedPanel.BRUSHES) refreshPinned() else handler.postDelayed({ if (panel == Panel.LIBRARY) setPanel(Panel.NONE) }, motion.d(MotionTokens.MICRO))
+        }
+        lp.onSettings = { setPanel(Panel.TOOL) }
+        return lp.view()
     }
 
     /** Pressure / tilt dynamics of the tool (stylus strokes only). */
@@ -2366,6 +2433,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     companion object {
         /** Longer side of the coverage image used to dim the unselected area. */
         const val SELECTION_PREVIEW_PX = 512
+        /** How long the zoom chip stays after the view stops changing. */
+        const val ZOOM_CHIP_HOLD_MS = 1500L
         const val TIP_GESTURES = "workspace.gestures"
         private const val AUTOSAVE_MS = 20_000L
         private const val EXPORT_BATCH = 32

@@ -294,7 +294,16 @@ enum class SelectionAction(val label: S) {
     MOVE_DONE(S.SEL_ACT_MOVE_DONE), MOVE_CANCEL(S.SEL_ACT_MOVE_CANCEL), POLYGON_CLOSE(S.SEL_ACT_POLYGON_CLOSE),
     POLYGON_UNDO(S.SEL_ACT_POLYGON_UNDO), POLYGON_CANCEL(S.SEL_ACT_POLYGON_CANCEL);
 
+    /** Shown in the contextual bar itself; the others go to its overflow menu (minimal bar on phones). */
+    val primary: Boolean get() = this !in OVERFLOW
+
     companion object {
+        private val OVERFLOW = setOf(COPY_MERGED, CUT, DUPLICATE, INVERT)
+
+        /** Splits [actions] into the bar's chips and its overflow menu. */
+        fun split(actions: List<SelectionAction>): Pair<List<SelectionAction>, List<SelectionAction>> =
+            actions.partition { it.primary }
+
         /**
          * Actions available now. [editable]: the active layer is visible and
          * unlocked (pixel edits); [polygonPoints]: vertices of a polygon being drawn.

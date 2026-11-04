@@ -32,7 +32,7 @@ class IconButton(
     sizeDp: Float = 40f,
     private val label: String? = null,
 ) : LinearLayout(context) {
-    private val drawable = IconDrawable(icon, theme.text)
+    private var drawable = IconDrawable(icon, theme.text)
     private val iconView = View(context)
     private val labelView: TextView?
 
@@ -78,6 +78,17 @@ class IconButton(
         refresh()
     }
 
+    /** Swaps the icon (e.g. the "more tools" button shows the active extra tool). */
+    fun setIcon(icon: Icon) {
+        drawable = IconDrawable(icon, theme.text)
+        iconView.background = drawable
+        refresh()
+    }
+
+    /** Round selection background (floating capsules) instead of the rounded square. */
+    var round = false
+        set(v) { field = v; refresh() }
+
     override fun setEnabled(enabled: Boolean) {
         super.setEnabled(enabled)
         refresh()
@@ -91,9 +102,8 @@ class IconButton(
         }
         drawable.setColor(color)
         labelView?.setTextColor(if (isSelected) theme.accent else theme.textSecondary)
-        background = theme.pressable(
-            if (isSelected) theme.rounded(theme.accentSoft, theme.radiusS) else null, theme.radiusS,
-        )
+        val r = if (round) theme.radiusPill else theme.radiusS
+        background = theme.pressable(if (isSelected) theme.rounded(theme.accentSoft, r) else null, r)
         alpha = if (isEnabled) 1f else 0.55f
     }
 }
@@ -411,5 +421,61 @@ class MaxHeight(context: Context, private val maxH: Int) : FrameLayout(context) 
             else -> MeasureSpec.makeMeasureSpec(minOf(maxH, MeasureSpec.getSize(heightMeasureSpec)), MeasureSpec.AT_MOST)
         }
         super.onMeasure(widthMeasureSpec, spec)
+    }
+}
+
+/**
+ * Equal-width tiles in as many columns as fit (at least two): each column is
+ * at least [minTile] wide, [spacing] between tiles; each row as tall as its
+ * tallest tile. A child that is not a tile (an empty-list message) spans the row.
+ */
+class TileGrid(context: Context, private val minTile: Int, private val spacing: Int) : ViewGroup(context) {
+    var columns = 2
+        private set
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+        columns = maxOf(2, (w + spacing) / (minTile + spacing))
+        val tileW = ((w - (columns - 1) * spacing) / columns).coerceAtLeast(1)
+        var y = 0
+        var col = 0
+        var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            if (c is android.widget.TextView) {
+                measureChild(c, MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), heightMeasureSpec)
+                if (col > 0) { y += rowH + spacing; col = 0; rowH = 0 }
+                y += c.measuredHeight + spacing
+                continue
+            }
+            c.measure(MeasureSpec.makeMeasureSpec(tileW, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            rowH = maxOf(rowH, c.measuredHeight)
+            if (++col == columns) { y += rowH + spacing; col = 0; rowH = 0 }
+        }
+        if (col > 0) y += rowH + spacing
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), (y - spacing).coerceAtLeast(0) + paddingTop + paddingBottom)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val w = r - l - paddingLeft - paddingRight
+        val tileW = ((w - (columns - 1) * spacing) / columns).coerceAtLeast(1)
+        var y = paddingTop
+        var col = 0
+        var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            if (c is android.widget.TextView) {
+                if (col > 0) { y += rowH + spacing; col = 0; rowH = 0 }
+                c.layout(paddingLeft, y, paddingLeft + c.measuredWidth, y + c.measuredHeight)
+                y += c.measuredHeight + spacing
+                continue
+            }
+            val x = paddingLeft + col * (tileW + spacing)
+            c.layout(x, y, x + tileW, y + c.measuredHeight)
+            rowH = maxOf(rowH, c.measuredHeight)
+            if (++col == columns) { y += rowH + spacing; col = 0; rowH = 0 }
+        }
     }
 }

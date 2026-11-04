@@ -8,13 +8,12 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.TextView
 import com.paintengine.pxpaint.core.BrushFilter
 import com.paintengine.pxpaint.core.BrushLibrary
 import com.paintengine.pxpaint.core.BrushPreset
-import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.BrushTool
 import com.paintengine.pxpaint.core.MotionPolicy
 import com.paintengine.pxpaint.core.MotionTokens
@@ -24,17 +23,19 @@ import com.paintengine.pxpaint.ui.BrushPreviewView
 import com.paintengine.pxpaint.ui.Icon
 import com.paintengine.pxpaint.ui.IconButton
 import com.paintengine.pxpaint.ui.OverlayHost
-import com.paintengine.pxpaint.ui.PxSlider
 import com.paintengine.pxpaint.ui.PxTheme
+import com.paintengine.pxpaint.ui.TileGrid
 import com.paintengine.pxpaint.ui.Widgets
-import kotlin.math.roundToInt
 
 /**
- * The brush library: a floating panel over the workspace (the canvas stays
- * visible around it). Filters (all, favourites, recent, categories, the
- * user's own), search, quick size / opacity of the selected brush, and one
- * row per brush with a live preview rendered by the engine, a favourite star
- * and a menu (edit, duplicate, rename, reset, delete).
+ * The brush selector (Block 11): a compact floating panel over the
+ * workspace. Search, filters (all, recent, favourites, categories, the
+ * user's own), a strip of the recently used brushes, then a grid of tiles:
+ * each one the brush's real stroke (rendered by the engine's brush code,
+ * cached by BrushPreviews) and its name; the current brush is outlined in
+ * the accent colour. One tap selects the brush and closes the panel (unless
+ * it is pinned); the star marks a favourite; a long press opens the brush's
+ * menu (edit, duplicate, rename, reset, delete).
  *
  * State that must survive a rebuild (filter, query) lives in [State], owned
  * by the workspace.
@@ -55,21 +56,23 @@ class BrushLibraryPanel(
     private val context: Context get() = host.context
     private val theme: PxTheme get() = host.theme
     private val lib: BrushLibrary get() = host.brushes
-    private var list: LinearLayout? = null
+    private var grid: TileGrid? = null
     private var chips: LinearLayout? = null
-    private var sizeSlider: PxSlider? = null
-    private var opacitySlider: PxSlider? = null
-    private var sizeValue: TextView? = null
-    private var opacityValue: TextView? = null
-    private val rows = HashMap<String, View>()
+    private val tiles = HashMap<String, View>()
+
+    /** Called after a brush is chosen (the workspace closes the panel unless it is pinned). */
+    var onSelected: (() -> Unit)? = null
+    /** Opens the tool's settings (size, opacity, editor, pressure). */
+    var onSettings: (() -> Unit)? = null
 
     fun view(): View = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        // Header: title, search, new brush from the current one.
+        // Header: title (which tool), search, settings, new brush from the current one.
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(theme.text(context, tr(S.BRUSHES), PxTheme.Type.HEADLINE), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(theme.text(context, tr(if (tool == BrushTool.ERASER) S.ERASER_BRUSHES else S.BRUSHES), PxTheme.Type.HEADLINE),
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(IconButton(context, theme, Icon.SEARCH, tr(S.SEARCH_BRUSHES)).apply {
                 isSelected = state.searching
                 setOnClickListener {
@@ -78,6 +81,7 @@ class BrushLibraryPanel(
                     onChanged()
                 }
             })
+            onSettings?.let { open -> addView(IconButton(context, theme, Icon.SLIDERS, tr(S.BRUSH_SETTINGS)).apply { setOnClickListener { open() } }) }
             addView(IconButton(context, theme, Icon.PLUS, tr(S.SAVE_AS_NEW)).apply {
                 setOnClickListener { duplicate(lib.selectedId(tool)) }
             })
@@ -93,12 +97,24 @@ class BrushLibraryPanel(
             })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(8) })
         buildChips()
-        addView(quickControls())
-        addView(LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            list = this
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(10) })
-        buildList()
+        // Quick access: the recently used brushes (all brushes view, no search).
+        val recent = if (state.filter == BrushFilter.ALL && state.query.isBlank())
+            lib.recents.mapNotNull { lib.get(it) }.filter { it.id != lib.selectedId(tool) }.take(RECENT_STRIP) else emptyList()
+        if (recent.isNotEmpty()) {
+            addView(theme.text(context, tr(S.RECENT_BRUSHES), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(10), 0, theme.dp(6)) })
+            addView(HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    for (p in recent) addView(tile(p, compact = true), LinearLayout.LayoutParams(theme.dp(96), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        marginEnd = theme.dp(8)
+                    })
+                })
+            })
+        }
+        addView(TileGrid(context, theme.dp(TILE_MIN_DP), theme.dp(8)).also { grid = it },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(10) })
+        buildGrid()
     }
 
     private fun searchField(): View = EditText(context).apply {
@@ -109,15 +125,15 @@ class BrushLibraryPanel(
         imeOptions = EditorInfo.IME_ACTION_SEARCH
         theme.style(this, PxTheme.Type.BODY)
         setHintTextColor(theme.textTertiary)
-        background = theme.rounded(theme.sunken, theme.radiusS, theme.outline)
-        setPadding(theme.dp(12), theme.dp(8), theme.dp(12), theme.dp(8))
+        background = theme.rounded(theme.sunken, theme.radiusPill, theme.outline)
+        setPadding(theme.dp(14), theme.dp(8), theme.dp(14), theme.dp(8))
         contentDescription = tr(S.SEARCH_BRUSHES)
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 state.query = s?.toString() ?: ""
-                buildList()
+                buildGrid()
             }
         })
         post { if (state.query.isEmpty()) requestFocus() }
@@ -128,61 +144,19 @@ class BrushLibraryPanel(
         c.removeAllViews()
         for (f in BrushFilter.entries) {
             c.addView(Widgets.chip(context, theme, tr(f.label), f == state.filter) {
+                if (state.filter == f) return@chip
                 state.filter = f
-                buildChips()
-                buildList()
-                // Category change: the new list fades in (rows rise a little, a few at a time).
-                list?.let { l -> for (i in 0 until l.childCount) theme.motion.enter(l.getChildAt(i), dyDp = MotionTokens.NUDGE * 2,
-                    delay = MotionPolicy.stagger(i, theme.motion.level), duration = MotionTokens.SHORT) }
+                onChanged()   // rebuilt (the recent strip shows only in "all")
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = theme.dp(6)
             })
         }
     }
 
-    private fun quickControls(): View = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(0, theme.dp(6), 0, 0)
-        val p = lib.effective(tool)
-        addView(slider(tr(S.SIZE), BrushState.sizeToSlider(p.size), { BrushState.sizeLabel(BrushState.sliderToSize(it)) }, true) {
-            host.updateBrushes(lib.setLive(tool, size = BrushState.sliderToSize(it)))
-        })
-        addView(slider(tr(S.OPACITY), p.opacity, { "${(BrushState.sliderToOpacity(it) * 100).roundToInt()}%" }, false) {
-            host.updateBrushes(lib.setLive(tool, opacity = BrushState.sliderToOpacity(it)))
-        })
-    }
-
-    private fun slider(label: String, initial: Float, format: (Float) -> String, size: Boolean, apply: (Float) -> Unit): View =
-        LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(theme.text(context, label, PxTheme.Type.LABEL, theme.textSecondary, lines = 1), LinearLayout.LayoutParams(theme.dp(72), LinearLayout.LayoutParams.WRAP_CONTENT))
-            val value = theme.text(context, format(initial), PxTheme.Type.LABEL, theme.textSecondary, lines = 1).apply { gravity = Gravity.END }
-            val s = PxSlider(context, theme, label).apply {
-                valueText = format
-                setValue(initial)
-                onChange = { v, fromUser ->
-                    value.text = format(v)
-                    if (fromUser) apply(v)
-                }
-            }
-            addView(s, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(value, LinearLayout.LayoutParams(theme.dp(56), LinearLayout.LayoutParams.WRAP_CONTENT))
-            if (size) { sizeSlider = s; sizeValue = value } else { opacitySlider = s; opacityValue = value }
-        }
-
-    private fun refreshQuick() {
-        val p = lib.effective(tool)
-        sizeSlider?.setValue(BrushState.sizeToSlider(p.size))
-        sizeValue?.text = BrushState.sizeLabel(p.size)
-        opacitySlider?.setValue(p.opacity)
-        opacityValue?.text = "${(p.opacity * 100).roundToInt()}%"
-    }
-
-    private fun buildList() {
-        val l = list ?: return
-        l.removeAllViews()
-        rows.clear()
+    private fun buildGrid() {
+        val g = grid ?: return
+        g.removeAllViews()
+        tiles.clear()
         val items = lib.list(state.filter, state.query)
         if (items.isEmpty()) {
             val msg = when {
@@ -192,81 +166,69 @@ class BrushLibraryPanel(
                 state.filter == BrushFilter.MINE -> tr(S.NO_MINE)
                 else -> tr(S.NO_BRUSHES, "")
             }
-            l.addView(theme.text(context, msg, PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(12), 0, theme.dp(12)) })
+            g.addView(theme.text(context, msg, PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(12), 0, theme.dp(12)) })
             return
         }
-        for (p in items) {
-            val r = row(p)
-            rows[p.id] = r
-            l.addView(r, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = theme.dp(6)
-            })
+        for ((i, p) in items.withIndex()) {
+            val t = tile(p, compact = false)
+            tiles[p.id] = t
+            g.addView(t)
+            theme.motion.enter(t, dyDp = MotionTokens.NUDGE * 2, delay = MotionPolicy.stagger(i, theme.motion.level), duration = MotionTokens.SHORT)
         }
     }
 
-    private fun row(p: BrushPreset): View = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = theme.touchTarget + theme.dp(8)
-        setPadding(theme.dp(6), theme.dp(4), 0, theme.dp(4))
+    /** One brush: its real stroke, its name; the current brush outlined; a star for favourites. */
+    private fun tile(p: BrushPreset, compact: Boolean): View = FrameLayout(context).apply {
         val selected = lib.selectedId(tool) == p.id
-        background = theme.pressable(theme.rounded(if (selected) theme.accentSoft else theme.surface, theme.radiusS,
-            if (selected) theme.accent else theme.outline), theme.radiusS)
+        val fav = lib.isFavorite(p.id)
+        background = theme.pressable(theme.rounded(if (selected) theme.accentSoft else theme.surface, theme.radiusM,
+            if (selected) theme.accent else theme.outline, if (selected) 2f else 1f), theme.radiusM)
         isSelected = selected
         isClickable = true
-        contentDescription = p.displayName()
+        contentDescription = p.displayName() + (if (selected) ", " + tr(S.BRUSH_CURRENT) else "") + (if (fav) ", " + tr(S.FILTER_FAVORITES) else "")
         setOnClickListener { select(p.id) }
         setOnLongClickListener { menu(this, p); true }
-        val preview = BrushPreviewView(context, theme, host.previews, false) { host.pressureTable() }
-        addView(preview, LinearLayout.LayoutParams(theme.dp(104), theme.dp(40)))
-        preview.show(p.params)
-        addView(LinearLayout(context).apply {
+        val col = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(theme.dp(10), 0, theme.dp(4), 0)
-            addView(theme.text(context, p.displayName(), PxTheme.Type.LABEL, lines = 1))
-            val sub = buildString {
-                append(tr(p.category.label))
-                if (lib.isModified(p.id)) append(" · ").append(tr(S.BRUSH_MODIFIED))
-            }
-            addView(theme.text(context, sub, PxTheme.Type.CAPTION, if (lib.isModified(p.id)) theme.accent else theme.textSecondary, lines = 1))
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        val fav = lib.isFavorite(p.id)
-        addView(IconButton(context, theme, if (fav) Icon.STAR_FILLED else Icon.STAR, tr(if (fav) S.FAVORITE_REMOVE else S.FAVORITE_ADD), sizeDp = 40f).apply {
+            setPadding(theme.dp(6), theme.dp(6), theme.dp(6), theme.dp(6))
+            val preview = BrushPreviewView(context, theme, host.previews, false) { host.pressureTable() }
+            addView(preview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, theme.dp(if (compact) 36 else 46)))
+            preview.show(p.params)
+            addView(theme.text(context, p.displayName(), PxTheme.Type.CAPTION, if (selected) theme.accent else theme.text, lines = 1).apply {
+                setPadding(theme.dp(2), theme.dp(6), theme.dp(if (compact) 2 else 22), 0)
+            })
+        }
+        addView(col, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+        if (!compact) addView(IconButton(context, theme, if (fav) Icon.STAR_FILLED else Icon.STAR, tr(if (fav) S.FAVORITE_REMOVE else S.FAVORITE_ADD), sizeDp = 30f).apply {
             isSelected = fav
+            minimumWidth = theme.dp(36)
+            minimumHeight = theme.dp(36)
             setOnClickListener {
                 host.updateBrushes(lib.toggleFavorite(p.id))
-                replaceRow(p.id)
-                if (state.filter == BrushFilter.FAVORITES) buildList()
+                if (state.filter == BrushFilter.FAVORITES) buildGrid() else replaceTile(p.id)
             }
-        })
-        val more = IconButton(context, theme, Icon.MORE, tr(S.MORE_OPTIONS), sizeDp = 40f)
-        more.setOnClickListener { menu(more, p) }
-        addView(more)
+        }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
     }
 
-    private fun replaceRow(id: String) {
-        val l = list ?: return
-        val old = rows[id] ?: return
-        val i = l.indexOfChild(old)
+    private fun replaceTile(id: String) {
+        val g = grid ?: return
+        val old = tiles[id] ?: return
+        val i = g.indexOfChild(old)
         val p = lib.get(id) ?: return
-        val r = row(p)
-        rows[id] = r
-        l.removeViewAt(i)
-        l.addView(r, i, old.layoutParams)
+        val t = tile(p, compact = false)
+        tiles[id] = t
+        g.removeViewAt(i)
+        g.addView(t, i)
     }
 
     private fun select(id: String) {
         val prev = lib.selectedId(tool)
         host.updateBrushes(lib.select(tool, id))
-        replaceRow(prev)
-        replaceRow(id)
-        rows[id]?.let { theme.motion.pop(it, 1.03f) }   // brush selection: the chosen row answers
-        refreshQuick()
+        replaceTile(prev)
+        replaceTile(id)
+        tiles[id]?.let { theme.motion.pop(it, 1.04f) }   // the chosen brush answers
         onSelected?.invoke()
     }
-
-    /** Called after a brush is chosen (the workspace refreshes its brush row). */
-    var onSelected: (() -> Unit)? = null
 
     private fun menu(anchor: View, p: BrushPreset) {
         val items = ArrayList<OverlayHost.MenuItem>()
@@ -314,6 +276,10 @@ class BrushLibraryPanel(
     }
 
     companion object {
+        const val RECENT_STRIP = 6
+        /** Narrowest grid tile (3 columns in a phone sheet, more on tablets). */
+        const val TILE_MIN_DP = 104
+
         /** A fresh user preset id (time + random, checked against the library). */
         fun newUserId(lib: BrushLibrary): String {
             while (true) {

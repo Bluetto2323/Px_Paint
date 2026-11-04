@@ -14,7 +14,7 @@ class AppSettingsTest {
     @Test
     fun everyFieldRoundTrips() {
         val s = AppSettings(
-            theme = ThemeMode.LIGHT, uiSize = UiSize.EXTRA_LARGE, language = LanguagePref.ITALIAN,
+            theme = ThemeMode.WARM_BEIGE, uiSize = UiSize.EXTRA_LARGE, language = LanguagePref.ITALIAN,
             dockSide = DockSide.RIGHT, showToolLabels = true, twoFingerRotate = false, rotationSnap = false,
             fingerMode = FingerMode.GESTURES_ONLY, pressureCurve = PressureCurve.SOFT, pressureSensitivity = -0.5f,
             pressureSmoothing = 0.8f, render = RenderPreference.SMOOTH, backend = BackendChoice.GLES,
@@ -25,12 +25,12 @@ class AppSettingsTest {
 
     @Test
     fun invalidValuesFallBackToDefaults() {
-        val map = AppSettings(theme = ThemeMode.LIGHT).encode().toMutableMap()
+        val map = AppSettings(theme = ThemeMode.PURE_BLACK).encode().toMutableMap()
         map[AppSettings.K_UI_SIZE] = "GIGANTIC"
         map[AppSettings.K_ROTATE] = "maybe"
         map["some_future_key"] = "x"
         val s = AppSettings.decode(map)
-        assertEquals(ThemeMode.LIGHT, s.theme)
+        assertEquals(ThemeMode.PURE_BLACK, s.theme)
         assertEquals(UiSize.DEFAULT, s.uiSize)
         assertEquals(true, s.twoFingerRotate)
     }

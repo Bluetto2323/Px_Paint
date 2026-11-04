@@ -5,13 +5,14 @@ package com.paintengine.pxpaint.core
  * sizes). The view theme (ui/Theme.kt) turns them into pixels and drawables;
  * no screen hard-codes a colour or a size of its own.
  *
- * Identity: a quiet graphite interface ("ink") that steps back from the
- * artwork, one warm accent ("ember") for the active tool, the primary action
- * and focus. The light theme is a warm paper tone.
+ * Block 11: three complete themes (Deep Blue, Pure Black, Warm Beige) of
+ * translucent "glass" surfaces floating over the canvas. One accent per
+ * theme marks the active tool, the selection and the primary action.
  */
 data class ColorTokens(
     val bg: Int,
     val surface: Int,
+    /** Floating panels and controls (the "glass"), opaque value; see [panel] and [chrome]. */
     val raised: Int,
     val sunken: Int,
     val outline: Int,
@@ -23,40 +24,70 @@ data class ColorTokens(
     val onAccent: Int,
     val danger: Int,
     val scrim: Int,
-    /** Around the canvas (passed to the engine). */
+    /** Around the canvas (passed to the engine; never the paper or the artwork). */
     val workspace: Int,
     val ripple: Int,
 ) {
-    /** Selected background: accent at low alpha. */
-    val accentSoft: Int get() = (accent and 0x00FFFFFF) or (if (isDark) 0x2E000000 else 0x24000000)
-    /** Floating chrome over the canvas: the raised surface, slightly translucent. */
-    val chrome: Int get() = (raised and 0x00FFFFFF) or 0xF2000000.toInt()
     val isDark: Boolean get() = ColorMath.luminance(bg) < 0.2
+    /** Selected background: accent at low alpha. */
+    val accentSoft: Int get() = (accent and 0x00FFFFFF) or (if (isDark) 0x33000000 else 0x2E000000)
+    /** Floating controls over the canvas: the glass colour at 90 % (text >= 7:1 over white or black artwork). */
+    val chrome: Int get() = (raised and 0x00FFFFFF) or (CHROME_ALPHA shl 24)
+    /** Floating panels: the glass colour at 95 % (long text, lists). */
+    val panel: Int get() = (raised and 0x00FFFFFF) or (PANEL_ALPHA shl 24)
+    /** Hairline edge of glass surfaces: a light rim on dark themes, the border colour on the light one. */
+    val edge: Int get() = if (isDark) 0x24FFFFFF else (outline and 0x00FFFFFF) or 0xE6000000.toInt()
+    /** Soft shadow tint. */
+    val shadow: Int get() = if (isDark) 0xFF000000.toInt() else 0xFF5A4630.toInt()
+
+    companion object {
+        const val CHROME_ALPHA = 0xE6
+        const val PANEL_ALPHA = 0xF2
+    }
 }
 
 object DesignTokens {
-    // --- colours ----------------------------------------------------------
-    fun colors(dark: Boolean, highContrast: Boolean): ColorTokens {
-        val base = if (dark) DARK else LIGHT
-        return if (!highContrast) base else base.copy(
-            outline = if (dark) 0xFF9AA1A9.toInt() else 0xFF5A5E64.toInt(),
-            textSecondary = if (dark) 0xFFC9CED4.toInt() else 0xFF3E4248.toInt(),
-            textTertiary = if (dark) 0xFFA3A9B0.toInt() else 0xFF5E636A.toInt(),
+    // --- colours: three complete themes (Block 11) ------------------------
+    fun colors(theme: ThemeMode, highContrast: Boolean): ColorTokens {
+        val base = when (theme) {
+            ThemeMode.DEEP_BLUE -> DEEP_BLUE
+            ThemeMode.PURE_BLACK -> PURE_BLACK
+            ThemeMode.WARM_BEIGE -> WARM_BEIGE
+        }
+        if (!highContrast) return base
+        return if (base.isDark) base.copy(
+            outline = 0xFF9AA4B2.toInt(), textSecondary = 0xFFD0D7E0.toInt(), textTertiary = 0xFFAAB3BF.toInt(),
+        ) else base.copy(
+            outline = 0xFF6B5A44.toInt(), textSecondary = 0xFF3E3428.toInt(), textTertiary = 0xFF55483A.toInt(),
         )
     }
 
-    val DARK = ColorTokens(
-        bg = 0xFF0F1012.toInt(), surface = 0xFF17191C.toInt(), raised = 0xFF1F2226.toInt(), sunken = 0xFF0B0C0E.toInt(),
-        outline = 0xFF2B2F35.toInt(), text = 0xFFEEF0F2.toInt(), textSecondary = 0xFFA3A9B0.toInt(),
-        textTertiary = 0xFF80868E.toInt(), accent = 0xFFFF7A59.toInt(), onAccent = 0xFF1A0D08.toInt(),
-        danger = 0xFFFF5C6C.toInt(), scrim = 0xB3000000.toInt(), workspace = 0xFF121316.toInt(), ripple = 0x33FFFFFF,
+    /** Dark navy, midnight blue, cool blue-grey; soft silver text; calm blue accent. */
+    val DEEP_BLUE = ColorTokens(
+        bg = 0xFF101A2B.toInt(), surface = 0xFF17263B.toInt(), raised = 0xFF20344E.toInt(), sunken = 0xFF0B1320.toInt(),
+        outline = 0xFF354A65.toInt(), text = 0xFFE6EDF7.toInt(), textSecondary = 0xFFA9BAD0.toInt(),
+        textTertiary = 0xFF8899B2.toInt(), accent = 0xFF6FA8E8.toInt(), onAccent = 0xFF0B1626.toInt(),
+        danger = 0xFFFF7A88.toInt(), scrim = 0xB3050A12.toInt(), workspace = 0xFF0C1524.toInt(), ripple = 0x33DCE8FF,
     )
 
-    val LIGHT = ColorTokens(
-        bg = 0xFFF4F2EE.toInt(), surface = 0xFFFFFFFF.toInt(), raised = 0xFFFBFAF8.toInt(), sunken = 0xFFE9E6E0.toInt(),
-        outline = 0xFFDDD9D2.toInt(), text = 0xFF18191B.toInt(), textSecondary = 0xFF5E636A.toInt(),
-        textTertiary = 0xFF7A7F86.toInt(), accent = 0xFFC24020.toInt(), onAccent = 0xFFFFFFFF.toInt(),
-        danger = 0xFFC42D3D.toInt(), scrim = 0x80101012.toInt(), workspace = 0xFFE4E1DB.toInt(), ripple = 0x22000000,
+    /** Deep black, graphite, neutral grey; one cool, quiet accent. */
+    val PURE_BLACK = ColorTokens(
+        bg = 0xFF08090B.toInt(), surface = 0xFF111317.toInt(), raised = 0xFF1B1E23.toInt(), sunken = 0xFF040506.toInt(),
+        outline = 0xFF30343B.toInt(), text = 0xFFF3F4F6.toInt(), textSecondary = 0xFFA2A7B0.toInt(),
+        textTertiary = 0xFF80868F.toInt(), accent = 0xFFA6B7D4.toInt(), onAccent = 0xFF0B0D10.toInt(),
+        danger = 0xFFFF6B78.toInt(), scrim = 0xCC000000.toInt(), workspace = 0xFF050607.toInt(), ripple = 0x2EFFFFFF,
+    )
+
+    /**
+     * Warm paper, sand, cream, muted brown, graphite text. The suggested
+     * accent (#9B7850) and secondary text (#766957) are darkened (#6F4F2C,
+     * #5C4F40) so text keeps WCAG AA on every surface, beige background included.
+     */
+    val WARM_BEIGE = ColorTokens(
+        bg = 0xFFD8C8A8.toInt(), surface = 0xFFE6D9BF.toInt(), raised = 0xFFF0E6D3.toInt(), sunken = 0xFFCDBC9A.toInt(),
+        outline = 0xFFC6B697.toInt(), text = 0xFF30291F.toInt(), textSecondary = 0xFF5C4F40.toInt(),
+        textTertiary = 0xFF6E604B.toInt(), accent = 0xFF6F4F2C.toInt(), onAccent = 0xFFFBF6EC.toInt(),
+        danger = 0xFF922530.toInt(), scrim = 0x80241C12.toInt(), workspace = 0xFFC8B793.toInt(), ripple = 0x26302010,
     )
 
     // --- spacing (dp) -------------------------------------------------------
@@ -69,7 +100,7 @@ object DesignTokens {
     // --- corner radii (dp) --------------------------------------------------
     const val RADIUS_S = 10f
     const val RADIUS_M = 16f
-    const val RADIUS_L = 24f
+    const val RADIUS_L = 22f
     const val RADIUS_PILL = 999f
 
     // --- icons (dp) ---------------------------------------------------------
