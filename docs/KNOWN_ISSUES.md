@@ -310,6 +310,33 @@ be found on the A33, this was why; the REPORT for KI-1 can now be opened from
   A deleted row disappears at once; the rows around it close the gap.
 * **Not animated:**
   * rotation or resize transitions of the chrome (it is rebuilt);
-  * selection and transform tools (not implemented);
+  * transform tools (not implemented); the selection's own feedback is
+    described in KI-15;
   * import and export (not implemented).
+
+## KI-15 — Selection: limits of the Block 10 implementation
+
+* **Not saved with the project.** The selection, like the history, is
+  editing state: it is gone when the project is closed. The clipboard lasts
+  for the app session and is not the Android clipboard (no exchange with
+  other apps).
+* **Moving is by whole canvas pixels, without rotation or scaling.** That
+  is Block 11 (transform), which extends the same floating content.
+* **Lifting a soft edge.** Moving content lifted with an antialiased edge
+  leaves a faint halo where it was, and the moved edge is drawn over what is
+  there (src-over), as in other painting apps. At offset 0 (lifted and
+  dropped in place) nothing changes.
+* **Big canvases.** A shape is rasterised over its bounding box on the CPU:
+  * ≈50 ms on a 4096² canvas and ≈200 ms on 8192² on the CI / desktop CPU;
+  * more on a phone (unmeasured on the A33).
+
+  It runs off the UI thread; the preview stays until the outline arrives.
+* **Outline at 50 % coverage.** The ants follow pixel edges, so they are
+  stepped when zoomed far in on an antialiased edge. The dim shows the
+  partial coverage.
+* **Selection from content** uses every visible layer, not only the active
+  one.
+* **Emulator only.** Screenshots, recordings and UI frame times come from the
+  CI emulator (SwiftShader). Touch latency with a selection on the A33 is
+  unmeasured. The CPU / GPU host tests measure the engine side.
 

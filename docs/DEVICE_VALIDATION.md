@@ -507,3 +507,28 @@ Installa `PxPaint-block9-debug-….apk` sopra la build precedente.
 
 Riporta OK / KO e, se puoi, una registrazione dello schermo dell'avvio.
 
+# Blocco 10 — Selezione: checklist sul Galaxy A33
+
+Installa `PxPaint-block10-debug-….apk` sopra la build precedente e apri un
+progetto con qualche tratto su due livelli.
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1 | Strumento *Seleziona* (rettangolo tratteggiato), trascina un rettangolo | contorno tratteggiato animato, fuori dalla selezione la tela è leggermente scurita; compare la barra delle azioni |
+| 2 | Pennello, poi un tratto che attraversa tutta la tela | il colore resta dentro la selezione; fuori nulla cambia; il tratto non è più lento di prima |
+| 3 | Gomma sul bordo di un'ellisse | cancella dentro, il bordo sfuma |
+| 4 | *Seleziona* di nuovo → Lazo + Aggiungi, disegna un'altra area | le due aree si uniscono |
+| 5 | Sottrai e Interseca | il contorno si aggiorna come atteso |
+| 6 | *Inverti*, poi *Deseleziona* | si seleziona il resto; poi la selezione sparisce |
+| 7 | *Sposta*, trascina, *Fatto* | i pixel selezionati si spostano col dito, il resto non cambia; Annulla li riporta indietro insieme alla selezione |
+| 8 | *Copia*, *Incolla* | nuovo livello sopra quello attivo, trasparenza conservata |
+| 9 | *Copia unito* | il messaggio dice che unisce tutti i livelli visibili |
+| 10 | *Taglia*, *Svuota*, *Duplica* | tagliare e svuotare non eliminano il livello; Duplica crea un nuovo livello |
+| 11 | Poligono: tocca 4 punti, poi il primo | si chiude; *Togli punto* / *Annulla* funzionano durante il disegno |
+| 12 | Ruota e ingrandisci la tela con una selezione | il contorno resta sul bordo giusto, spessore costante |
+| 13 | Livello bloccato o nascosto | Sposta / Taglia / Svuota spariscono dalla barra |
+| 14 | Annulla / Ripeti più volte (anche con due / tre dita) | pixel e selezione tornano esattamente agli stati precedenti |
+| 15 | Chiudi e riapri il progetto | i pixel sono salvati; la selezione no (per scelta) |
+
+Riporta OK / KO e, se puoi, una registrazione dello schermo dei punti 2, 7 e 12.
+

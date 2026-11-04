@@ -221,11 +221,11 @@ object SelectionGeometry {
     /** Screen points of a canvas box's outline: 4 corners, or [segments] points of the inscribed ellipse. */
     fun outline(toScreen: Affine, box: DoubleArray, ellipse: Boolean, segments: Int, out: FloatArray): Int {
         if (!ellipse) {
-            val xs = doubleArrayOf(box[0], box[2], box[2], box[0])
-            val ys = doubleArrayOf(box[1], box[1], box[3], box[3])
             for (i in 0 until 4) {
-                out[i * 2] = toScreen.x(xs[i], ys[i]).toFloat()
-                out[i * 2 + 1] = toScreen.y(xs[i], ys[i]).toFloat()
+                val px = if (i == 1 || i == 2) box[2] else box[0]
+                val py = if (i >= 2) box[3] else box[1]
+                out[i * 2] = toScreen.x(px, py).toFloat()
+                out[i * 2 + 1] = toScreen.y(px, py).toFloat()
             }
             return 4
         }
@@ -240,9 +240,11 @@ object SelectionGeometry {
         return segments
     }
 
-    /** Whole canvas pixels of a screen drag (the move offset), through the inverse view. */
-    fun canvasOffset(toCanvas: Affine, sdx: Double, sdy: Double): Pair<Int, Int> =
-        toCanvas.dx(sdx, sdy).roundToInt() to toCanvas.dy(sdx, sdy).roundToInt()
+    /** Whole canvas pixels of a screen drag (the move offset), through the inverse view, into [out] (x, y). */
+    fun canvasOffset(toCanvas: Affine, sdx: Double, sdy: Double, out: IntArray) {
+        out[0] = toCanvas.dx(sdx, sdy).roundToInt()
+        out[1] = toCanvas.dy(sdx, sdy).roundToInt()
+    }
 }
 
 /** The engine's outline format: [loops, n0, x, y, ... (n0 points), n1, ...]. */

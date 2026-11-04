@@ -166,6 +166,26 @@ Status fields: `historyUndo`, `historyRedo`, `historyBytes`, `historyBudget`,
 `historyMaxSteps`, `historyDropped`, `historyRefused`, `historyLastUndoMs`,
 `historyLastRedoMs`, `historyLastRecordMs`. Details: `docs/HISTORY.md`.
 
+## Selection (Block 10)
+
+| Call | Notes |
+|---|---|
+| `select(shape, mode, antialias, xy, points, canvasSpace)` | `RECT` / `ELLIPSE`: 2 points (drag start, end), axis-aligned on the canvas, the rectangle snapped to whole pixels. `POLYGON` (lasso, polygon): >= 3 vertices. Points in screen pixels (mapped through the current view), or canvas pixels with `canvasSpace`. `mode`: `REPLACE` / `ADD` / `SUBTRACT` / `INTERSECT`. Returns a layer error code (0 = done). |
+| `selectionOp(op, mode)` | `SELECT_ALL`, `DESELECT`, `INVERT`, `FROM_CONTENT` (combined with `mode`), `CLEAR`, `COPY`, `COPY_MERGED`, `CUT`, `PASTE`, `DUPLICATE`, `MOVE_BEGIN`, `MOVE_COMMIT`, `MOVE_CANCEL`. `LayerResult.newId` = the layer made by `PASTE` / `DUPLICATE`. |
+| `selectionMove(dx, dy)` | After `MOVE_BEGIN`: offset of the lifted content in whole canvas pixels (absolute, from where it was lifted). |
+| `selectionInfo()` | active, bounds, area, mask bytes, version, moving + offset, clipboard + its bytes. |
+| `selectionVersion()` | `(version shl 1) or active`: cheap, changes with every selection change (undo / redo too). |
+| `selectionContours()` | Outline loops in canvas pixels: `[loops, n0, x, y, ..., n1, ...]` (`pxpaint.core.SelectionOutline`). |
+| `selectionPreview(maxSide, size)` | Inverse coverage bytes (255 = not selected), longer side <= `maxSide`. |
+| `viewMatrix(out)` | Canvas -> screen affine `a, b, c, d, tx, ty` (allocation-free; overlays). |
+
+Errors: 5 locked, 6 hidden, 7 too many layers, 8 memory, 9 nothing to act
+on (no selection, nothing selected on the layer, empty clipboard). History
+kinds: 15 selection, 16 clear selection, 17 cut, 18 paste, 19 duplicate
+selection, 20 move selection (pixels + selection in one step). With a
+selection, strokes and the eraser are clipped to it. Details:
+`docs/SELECTION.md`.
+
 ## Canvas content and persistence
 
 The canvas pixels are a **CPU raster** (`canvas/RasterStore`): premultiplied
@@ -243,6 +263,7 @@ Invariants, checked by `pe_canvas_test`:
 * Pressure / stylus (Block 4): `StrokePoint` already carries the sample time; pressure and tilt join it, and `BrushSettings` gains dynamics. The path and compositor do not change.
 * Layers: done in Block 6 (`docs/LAYERS.md`).
 * Undo: done in Block 7 (`docs/HISTORY.md`).
+* Selection: done in Block 10 (`docs/SELECTION.md`); transform (Block 11) extends `CanvasDocument::Move`.
 
 The UI already reserves the entry points (Undo/Redo, Layers, tool settings),
 shown disabled with an explanation.

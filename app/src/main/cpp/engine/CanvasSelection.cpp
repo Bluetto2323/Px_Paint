@@ -348,8 +348,9 @@ void CanvasDocument::composeMoveTileLocked(Layer& l, int32_t index, std::vector<
         it = move_.orig.emplace(index, std::move(keep)).first;
     }
     const uint8_t* orig = it->second.get();
-    px.assign(kPx * 4, 0);
+    px.resize(kPx * 4);
     if (orig) std::memcpy(px.data(), orig, kPx * 4);
+    else std::fill(px.begin(), px.end(), 0);
     const int32_t dx = move_.dx, dy = move_.dy;
     if (dx != 0 || dy != 0) {
         // Hole.
@@ -408,7 +409,9 @@ LayerError CanvasDocument::moveTo(int32_t dx, int32_t dy) {
     RasterStore& ls = a->store;
     const int32_t cols = ls.columns(), rows = ls.rows();
     // Tiles of the new offset: where the content was lifted from, and where it lands.
-    std::vector<int32_t> next;
+    // (Scratch vectors of the move are reused: no allocation per drag step once warm.)
+    std::vector<int32_t>& next = move_.next;
+    next.clear();
     if (dx != 0 || dy != 0) {
         const RasterStore& f = move_.floating;
         for (int32_t ty = 0; ty < f.rows(); ++ty)
@@ -426,13 +429,13 @@ LayerError CanvasDocument::moveTo(int32_t dx, int32_t dy) {
     std::sort(next.begin(), next.end());
     next.erase(std::unique(next.begin(), next.end()), next.end());
     // Recomposed: the new set, plus tiles of the previous offset that it no longer covers (back to original).
-    std::vector<int32_t> work = next;
+    std::vector<int32_t>& work = move_.work;
+    work.assign(next.begin(), next.end());
     work.insert(work.end(), move_.shown.begin(), move_.shown.end());
     std::sort(work.begin(), work.end());
     work.erase(std::unique(work.begin(), work.end()), work.end());
-    std::vector<uint8_t> scratch;
-    for (int32_t i : work) composeMoveTileLocked(*a, i, scratch);
-    move_.shown = std::move(next);
+    for (int32_t i : work) composeMoveTileLocked(*a, i, move_.scratch);
+    move_.shown.assign(next.begin(), next.end());
     bumpRevision();
     return LayerError::None;
 }

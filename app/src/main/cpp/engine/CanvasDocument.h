@@ -305,6 +305,8 @@ private:
         // Original pixels of every layer tile touched so far (null: no tile).
         std::unordered_map<int32_t, std::unique_ptr<uint8_t[]>> orig;
         std::vector<int32_t> shown;               // tiles rewritten for the current offset
+        std::vector<int32_t> next, work;          // scratch (reused while dragging)
+        std::vector<uint8_t> scratch;
         std::vector<uint8_t> selectionBefore;
         int32_t dx = 0, dy = 0;
     } move_;

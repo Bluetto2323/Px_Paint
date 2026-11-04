@@ -112,9 +112,10 @@ class SelectionTest {
         assertEquals(456.0, c.y(x, y), 1e-3)
         assertEquals(2.0, s.scale, 1e-6)
         // A 100 px screen drag to the right at zoom 2 moves the content 50 canvas px along the rotated axis.
-        val (dx, dy) = SelectionGeometry.canvasOffset(c, 100.0, 0.0)
-        assertEquals(Math.round(50 * cos(r)).toInt(), dx)
-        assertEquals(Math.round(-50 * sin(r)).toInt(), dy)
+        val d = IntArray(2)
+        SelectionGeometry.canvasOffset(c, 100.0, 0.0, d)
+        assertEquals(Math.round(50 * cos(r)).toInt(), d[0])
+        assertEquals(Math.round(-50 * sin(r)).toInt(), d[1])
         assertFalse(Affine().also { it.set(floatArrayOf(0f, 0f, 0f, 0f, 1f, 1f)) }.invertInto(c))
     }
 

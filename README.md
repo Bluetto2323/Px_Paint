@@ -1,4 +1,4 @@
-# PxPaint — Blocco 9 (motion design) sul motore Paint Engine
+# PxPaint — Blocco 10 (selezione) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -79,6 +79,18 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   * Indicatori di caricamento e di salvataggio.
   * Impostazione Animazioni: complete, ridotte o disattivate.
   * Dettagli: `docs/MOTION.md`, `docs/BLOCK9_REPORT.md`.
+* **Blocco 10**: **selezione**.
+  * Rettangolo, ellisse, lazo, poligono, selezione dal contenuto visibile;
+    bordi antialias.
+  * Nuova, aggiungi, sottrai, interseca, inverti, seleziona tutto,
+    deseleziona.
+  * Maschera nativa a tile (vuoti / pieni senza memoria), indipendente dai
+    livelli; pennello e gomma restano dentro la selezione.
+  * Svuota, copia, copia unito, taglia, incolla e duplica in un nuovo
+    livello; spostamento dei pixel selezionati.
+  * Ogni operazione è un passo della cronologia (pixel e selezione).
+  * Formiche in marcia, area esterna scurita, barra delle azioni contestuale.
+  * Dettagli: `docs/SELECTION.md`, `docs/BLOCK10_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).
@@ -117,7 +129,8 @@ app/src/main/
     engine/                        Engine (render thread), TestScene, CanvasController,
                                    CanvasDocument (raster + pennello, thread-safe)
     canvas/                        Viewport, TileGrid, StoragePolicy, RasterStore,
-                                   CanvasSurface, CanvasRenderer, CanvasSelfTest
+                                   CanvasSurface, CanvasRenderer, CanvasSelfTest,
+                                   SelectionMask (maschera di selezione a tile)
     jni/                           JniBridge
     shaders/                       sorgenti GLSL + header SPIR-V generato
 tools/

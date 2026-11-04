@@ -125,6 +125,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var selBar: LinearLayout? = null
     private var selBarRow: LinearLayout? = null
     private var selBarKey = ""
+    private var selBarShown = false
     private var selRefreshing = false
     private var selRefreshAgain = false
     // Moving selected content: drag start (screen), offset at the drag start and now (canvas px).
@@ -134,6 +135,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var moveBaseY = 0
     private var moveX = 0
     private var moveY = 0
+    private val moveTarget = java.util.concurrent.atomic.AtomicLong()
+    private val moveQueued = java.util.concurrent.atomic.AtomicBoolean()
+    private val moveDelta = IntArray(2)
+    // Applies the latest drag offset (made once: no allocation per pointer move).
+    private val moveRunnable = Runnable {
+        moveQueued.set(false)
+        val t = moveTarget.get()
+        engine?.selectionMove((t shr 32).toInt(), t.toInt())
+    }
     private val selMatrix = FloatArray(6)
     private val selToScreen = Affine()
     private val selToCanvas = Affine()
@@ -866,6 +876,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val t0 = SystemClock.elapsedRealtimeNanos()
         val c = chrome ?: return
         c.removeAllViews()
+        selBar = null
+        selBarRow = null
         toolButtons.clear()
         panelView = null
         pinnedView = null
@@ -1219,11 +1231,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (t == tool && t != Tool.MOVE) {
             togglePanel(Panel.TOOL)
         } else {
-            // Leaving the selection tool: content being moved lands, a polygon in progress is dropped.
-            if (tool == Tool.SELECT && t != Tool.SELECT) {
-                if (selInfo.moving) runSelection(SelectionAction.MOVE_DONE)
-                selGesture.cancel()
-            }
+            leavingSelectTool(t)
             tool = t
             selOverlay?.showDim = t == Tool.SELECT
             refreshSelectionBar()
@@ -1272,13 +1280,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             if (!engine.viewMatrix(selMatrix)) return
             selToScreen.set(selMatrix)
             if (!selToScreen.invertInto(selToCanvas)) return
-            val (dx, dy) = SelectionGeometry.canvasOffset(selToCanvas, e.getX(i) - moveStartX, e.getY(i) - moveStartY)
-            val nx = moveBaseX + dx
-            val ny = moveBaseY + dy
+            SelectionGeometry.canvasOffset(selToCanvas, e.getX(i) - moveStartX, e.getY(i) - moveStartY, moveDelta)
+            val nx = moveBaseX + moveDelta[0]
+            val ny = moveBaseY + moveDelta[1]
             if (nx != moveX || ny != moveY) {
                 moveX = nx
                 moveY = ny
-                engine.selectionMove(nx, ny)
+                // Off the UI thread, coalesced: only the latest offset is applied when the worker is busy.
+                moveTarget.set((nx.toLong() shl 32) or (ny.toLong() and 0xFFFFFFFFL))
+                if (moveQueued.compareAndSet(false, true)) layerExec.execute(moveRunnable)
                 selOverlay?.setMoveOffset(nx, ny)
             }
             return
@@ -1432,6 +1442,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             "Selection: %s %.2f ms (error %d)", what, ms, error))
     }
 
+    /** Leaving the Select tool: content being moved lands, a polygon in progress is dropped. */
+    private fun leavingSelectTool(next: Tool) {
+        if (tool != Tool.SELECT || next == Tool.SELECT) return
+        if (selInfo.moving) runSelection(SelectionAction.MOVE_DONE)
+        selGesture.cancel()
+        selOverlay?.showDim = false
+        selOverlay?.invalidate()
+    }
+
     private fun selectionEditable(): Boolean = layerStack?.active?.let { it.visible && !it.locked } ?: false
 
     /** The contextual bar: only actions that can act now; hidden when there is nothing to do. */
@@ -1439,6 +1458,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         selBarRow = row
         selBarKey = ""
+        selBarShown = false
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             background = theme.rounded(theme.chrome, theme.radiusPill, theme.outline)
@@ -1473,8 +1493,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             }
         }
         val show = actions.isNotEmpty() && !fullscreen
-        if (show && bar.visibility != View.VISIBLE) { bar.visibility = View.VISIBLE; motion.enter(bar, dyDp = -MotionTokens.SHIFT) }
-        else if (!show && bar.visibility == View.VISIBLE) motion.exit(bar, dyDp = -MotionTokens.SHIFT) { bar.visibility = View.GONE }
+        if (show == selBarShown) return
+        selBarShown = show
+        if (show) {
+            bar.visibility = View.VISIBLE
+            motion.enter(bar, dyDp = -MotionTokens.SHIFT)
+        } else {
+            motion.exit(bar, dyDp = -MotionTokens.SHIFT) { if (!selBarShown) bar.visibility = View.GONE }
+        }
     }
 
     /** Selection tool options (the tool's panel): shape, mode, edges, whole-canvas actions. */
@@ -1953,8 +1979,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         host.updateBrush(host.brush.copy(color = c))
         colorButton?.let { motion.pop(it) }      // colour selection: the swatch answers
         if (tool != Tool.MARKER) {
+            leavingSelectTool(Tool.MARKER)
             tool = Tool.MARKER
             refreshDock()
+            refreshSelectionBar()
         }
         remember(c)
     }
