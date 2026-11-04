@@ -29,6 +29,13 @@ start() {   # every adb call is bounded: one stuck launch must not stall the who
   timeout 60 adb shell pm clear "$PKG" > /dev/null || echo "  start: pm clear timed out"
   timeout 60 adb shell am start -W -n "$ACT" "$@" > /dev/null || echo "  start: launch not reported within 60 s"
   sleep 12
+  # A stuck launch leaves the launcher in front: launch once more.
+  if ! adb shell dumpsys window | grep -m1 mCurrentFocus | grep -q "$PKG"; then
+    echo "  start: app not in front, launching again"
+    timeout 30 adb shell am force-stop "$PKG"
+    timeout 60 adb shell am start -W -n "$ACT" "$@" > /dev/null || echo "  start: second launch not reported"
+    sleep 12
+  fi
 }
 shot() {
   adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS > /dev/null || true
