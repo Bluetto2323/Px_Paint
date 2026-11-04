@@ -321,7 +321,7 @@ be found on the A33, this was why; the REPORT for KI-1 can now be opened from
   for the app session and is not the Android clipboard (no exchange with
   other apps).
 * **Moving is by whole canvas pixels, without rotation or scaling.** That
-  is Block 11 (transform), which extends the same floating content.
+  is the job of a future transform block, which extends the same floating content.
 * **Lifting a soft edge.** Moving content lifted with an antialiased edge
   leaves a faint halo where it was, and the moved edge is drawn over what is
   there (src-over), as in other painting apps. At offset 0 (lifted and
@@ -339,4 +339,27 @@ be found on the A33, this was why; the REPORT for KI-1 can now be opened from
 * **Emulator only.** Screenshots, recordings and UI frame times come from the
   CI emulator (SwiftShader). Touch latency with a selection on the A33 is
   unmeasured. The CPU / GPU host tests measure the engine side.
+
+## KI-16 — Interface redesign: limits of the Block 11 implementation
+
+* **No background blur.** Android can blur behind whole windows only, not
+  behind a view over the GPU canvas (a SurfaceView). Panels are translucent
+  glass with a hairline edge instead, as the brief allows when blur is
+  unavailable or too expensive.
+* **Beige palette adjusted.** The suggested beige accent (#9B7850) and
+  secondary text (#766957) were darkened (#6F4F2C, #5C4F40) to keep WCAG AA on
+  the beige background.
+* **Brush button.**
+  * A tap on an inactive brush or eraser selects it; only a tap on the
+    active one opens the selector. This avoids a panel every time you switch
+    between brush and eraser.
+  * A long press opens the tool's settings.
+* **Theme cross-fade.** In the workspace the interface is rebuilt without the
+  fade: the GPU canvas cannot be captured without a readback. Themes are
+  normally changed from Settings, where the fade runs.
+* **Layer drag.** Reordering is within the visible panel list (with
+  auto-scroll). There is no drag between panels and no multi-selection.
+* **Emulator only.** Screenshots and frame times come from the CI emulator
+  (SwiftShader). The Galaxy A33 checks are in the Blocco 11 device checklist
+  and are not done yet.
 

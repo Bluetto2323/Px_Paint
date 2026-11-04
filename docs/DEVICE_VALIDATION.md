@@ -532,3 +532,27 @@ progetto con qualche tratto su due livelli.
 
 Riporta OK / KO e, se puoi, una registrazione dello schermo dei punti 2, 7 e 12.
 
+# Blocco 11 — Nuova interfaccia: checklist sul Galaxy A33
+
+Installa `PxPaint-block11-debug-….apk` sopra la build precedente (progetti e
+impostazioni restano).
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1 | Apri un progetto in verticale | niente barra fissa: capsule traslucide in alto (galleria; annulla / ripeti) e in basso (pennello, gomma, colore, livelli, altro); la tela occupa quasi tutto lo schermo |
+| 2 | Testo e icone sopra un disegno chiaro e sopra uno scuro | sempre leggibili |
+| 3 | Pennello attivo → toccalo di nuovo | si apre il selettore: griglia con anteprime vere, filtri, ricerca, recenti, preferiti |
+| 4 | Tocca un pennello | diventa attivo e il pannello si chiude da solo; puoi disegnare subito |
+| 5 | Cerca "pen", stella su un pennello, filtro Preferiti | ricerca e preferiti funzionano |
+| 6 | Livelli: tocca un livello, poi tocca di nuovo quello selezionato | il primo tocco lo seleziona, il secondo apre il menu (rinomina, duplica, unisci, blocca, elimina) |
+| 7 | Tieni premuto un livello (~0,3 s) e trascinalo | vibrazione breve, la riga segue il dito, le altre si spostano, un riquadro tratteggiato mostra la destinazione; vicino ai bordi la lista scorre |
+| 8 | Rilascia, poi Annulla | l'ordine cambia subito; Annulla lo ripristina |
+| 9 | Scorri la lista dei livelli velocemente; tocca l'occhio | lo scorrimento non trascina mai una riga; l'occhio mostra / nasconde senza trascinare |
+| 10 | Impostazioni → Tema: Blu profondo, Nero puro, Beige caldo | cambia tutta l'interfaccia subito, senza riavvio; i colori del disegno non cambiano |
+| 11 | Ruota in orizzontale | strumenti in una capsula verticale sul lato, tela al centro |
+| 12 | Altro → Nascondi interfaccia (o tocco con quattro dita) | solo la tela e un pulsantino nell'angolo |
+| 13 | Disegna mentre apri e chiudi pannelli rapidamente | il tratto parte subito, nessun ritardo |
+| 14 | Altro → Seleziona, poi una selezione e Sposta | la selezione del Blocco 10 funziona come prima |
+
+Riporta OK / KO e, se puoi, una registrazione dei punti 3–4 e 7–8.
+

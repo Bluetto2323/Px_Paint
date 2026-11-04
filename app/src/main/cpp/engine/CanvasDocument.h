@@ -186,7 +186,7 @@ public:
     // Moving the selected pixels of the active layer (whole canvas pixels):
     // begin lifts them into a floating layer above it, moveTo offsets that,
     // commit drops them (one history step with the selection), cancel restores.
-    // Block 11 (transform) extends this floating content.
+    // A future transform engine extends this floating content.
     LayerError moveBegin();
     LayerError moveTo(int32_t dx, int32_t dy);
     LayerError moveCommit();
@@ -297,7 +297,7 @@ private:
     // layer's affected tiles show the hole (1 - selection) with the floating
     // pixels drawn over them, so what is displayed during the drag is exactly
     // what the drop records, with the layer's own opacity and blend mode.
-    // Block 11 replaces the integer offset by a transform of `floating`.
+    // A future transform engine replaces the integer offset by a transform of `floating`.
     struct Move {
         bool active = false;
         uint32_t layerId = 0;                     // the active layer being edited

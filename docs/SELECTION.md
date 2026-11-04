@@ -106,7 +106,7 @@ pixel of the canvas.
   fits. The clipboard lasts for the app session; it is not the system
   clipboard.
 
-## Moving selected content (and Block 11)
+## Moving selected content (and the transform engine)
 
 1. **Begin.** The selected pixels of the active layer are lifted into
    `move_.floating` (pixels × coverage, at offset 0). Nothing changes on
@@ -126,7 +126,7 @@ pixel of the canvas.
 A stroke, a layer operation, undo, an export or a save during a move commits
 the move first, so it lands before them in the history.
 
-**Block 11 integration point:** `CanvasDocument::Move` holds the lifted
+**Transform integration point (future block):** `CanvasDocument::Move` holds the lifted
 pixels, the selection before, the original tiles and the tiles currently
 shown. A transform engine replaces the integer offset in
 `composeMoveTileLocked` with a resampled affine transform of `floating`. There
@@ -134,13 +134,14 @@ is no separate floating layer or GPU path to reconcile.
 
 ## Interface
 
-* **Select tool** in the dock / rail / toolbar: dashed rectangle icon.
+* **Select tool**: under *More tools* in the floating tool capsule (Block 11);
+  while it is active, the More button shows its dashed-rectangle icon.
   * With it, one pointer selects: a finger whatever the finger mode, a stylus
     or a mouse.
   * Two fingers still move, zoom and rotate the view. A second finger right
     after the first cancels the shape (a pinch).
   * Taps with two / three fingers still undo / redo.
-* **Options** (tap the tool again):
+* **Options** (*More tools → Select* again):
   * shape: Rectangle, Ellipse, Lasso, Polygon;
   * mode: New, Add, Subtract, Intersect;
   * Smooth edges (antialiasing);
@@ -153,9 +154,10 @@ is no separate floating layer or GPU path to reconcile.
     shape*, closes it; *Remove point* and *Cancel* are in the bar.
   * A tap without a drag deselects in New mode.
   * Back cancels a shape in progress or a move.
-* **Contextual bar** under the zoom chip. It shows only actions that can act
-  now:
-  * Move, Copy, Copy merged, Cut, Paste, Duplicate, Clear, Invert, Deselect;
+* **Contextual bar** under the floating controls. It shows only actions that
+  can act now:
+  * chips: Move, Copy, Paste, Clear, Deselect; a ⋯ menu: Copy merged, Cut,
+    Duplicate, Invert;
   * Done / Cancel while moving;
   * the polygon actions while drawing one;
   * Paste / Select all / Select content without a selection.

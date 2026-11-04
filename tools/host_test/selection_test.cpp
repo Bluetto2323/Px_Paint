@@ -466,7 +466,7 @@ void testClearCopyPaste() {
 }
 
 void testMove() {
-    section("S6 moving selected content (floating content, Block 11 integration point)");
+    section("S6 moving selected content (floating content, transform integration point)");
     const uint32_t W = 900, H = 700;
     CanvasDocument d;
     base(d);

@@ -263,7 +263,7 @@ Invariants, checked by `pe_canvas_test`:
 * Pressure / stylus (Block 4): `StrokePoint` already carries the sample time; pressure and tilt join it, and `BrushSettings` gains dynamics. The path and compositor do not change.
 * Layers: done in Block 6 (`docs/LAYERS.md`).
 * Undo: done in Block 7 (`docs/HISTORY.md`).
-* Selection: done in Block 10 (`docs/SELECTION.md`); transform (Block 11) extends `CanvasDocument::Move`.
+* Selection: done in Block 10 (`docs/SELECTION.md`); a future transform engine extends `CanvasDocument::Move`.
 
 The UI already reserves the entry points (Undo/Redo, Layers, tool settings),
 shown disabled with an explanation.

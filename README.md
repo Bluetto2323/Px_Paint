@@ -1,4 +1,4 @@
-# PxPaint — Blocco 10 (selezione) sul motore Paint Engine
+# PxPaint — Blocco 11 (nuova interfaccia) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -91,6 +91,17 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
   * Ogni operazione è un passo della cronologia (pixel e selezione).
   * Formiche in marcia, area esterna scurita, barra delle azioni contestuale.
   * Dettagli: `docs/SELECTION.md`, `docs/BLOCK10_REPORT.md`.
+* **Blocco 11**: **nuova interfaccia**.
+  * Tre temi completi: Blu profondo, Nero puro, Beige caldo. Superfici
+    traslucide, contrasto verificato.
+  * Nessuna barra fissa: capsule flottanti (galleria, annulla / ripeti,
+    pennello, gomma, colore, livelli, altri strumenti); indicatore di zoom
+    temporaneo; modalità senza interfaccia.
+  * Selettore pennelli a griglia con anteprime vere, ricerca, recenti e
+    preferiti: un tocco sceglie e chiude.
+  * Livelli: tocco per selezionare, pressione prolungata per trascinare (con
+    scorrimento automatico e annulla).
+  * Dettagli: `docs/REDESIGN.md`, `docs/BLOCK11_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).

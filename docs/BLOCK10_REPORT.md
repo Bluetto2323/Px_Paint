@@ -98,19 +98,85 @@ Each logical operation is one predictable step:
 
 ## 6. Performance measurements
 
-[to be completed with the CI numbers]
+All numbers below come from the CI runner (x86-64), host build. The
+emulator log adds the app-side timings.
+
+| Canvas | Select rectangle | Ellipse | 20 000-point lasso | Invert | From content | Outline | Copy | Clear | Move begin / step / commit | Undo move |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 4096² | 39 ms | 56 ms | 50 ms | 6 ms | 39 ms | 33 ms | 6 ms | 15 ms | 6 / ≤ 7 / 13 ms | 4 ms |
+| 8192² | 141 ms | 210 ms | 166 ms | 12 ms | 122 ms | 58 ms | 12 ms | 45 ms | 12 / ≤ 13 / 27 ms | 9 ms |
+
+* **Mask memory:** a 0.4-canvas ellipse takes 1.5 MiB on 4096² and 3.25 MiB on
+  8192². Select all takes 0 bytes.
+* **Brush cost:** 150 strokes take 296.6 ms without a selection, 297.1 ms with
+  select all, and 297.0 ms with an antialiased ellipse. That is no measurable
+  regression.
+* **Drawing latency:** input → present is 19.2 ms on GLES and 18.5 ms on
+  Vulkan, in the Block 2–9 range.
+* **GPU (S14), select → frame presented:**
+
+  | Measure | GLES | Vulkan |
+  |---|---|---|
+  | Select → frame | 10.2 ms | 11.0 ms |
+  | Drag step | 6.9 ms | 7.2 ms |
+  | Drop | 9.2 ms | 12.2 ms |
+* **Emulator, select an ellipse in the app:**
+  * on a 1600×2400 canvas: 28 ms;
+  * copy: 4 ms;
+  * paste: 1 ms;
+  * move begin: 43 ms.
 
 ## 7. Automated test results
 
-[to be completed]
+* **`pe_selection_test`: 99/99**, also under ASan/UBSan. It covers:
+  * every shape and exact areas;
+  * antialiased edges;
+  * the modes;
+  * invert;
+  * tile edges;
+  * encoding;
+  * outside pixels unchanged, checked on every pixel;
+  * the eraser edge `a·(1 − s)`;
+  * clear, copy, copy merged, cut, paste, duplicate, with transparency;
+  * moving, including live composite, unrelated pixels and the canvas edge;
+  * painting during a move;
+  * 16 mixed operations undone and redone exactly;
+  * from content;
+  * large canvases;
+  * brush cost.
+* **Host GPU suites (GLES and Vulkan): 21/21.**
+  * S14, 100/100 per backend: on screen the stroke changes only pixels inside
+    the selection (492 034 px outside unchanged); lifting is invisible;
+    dropping matches the drag; undo / redo of the move, clear and paste are
+    exact frames.
+  * GLES vs Vulkan selection frame: identical (max channel difference 0).
+* **Existing suites:** `pe_layer_test` 81/81, `pe_history_test` 63/63,
+  `pe_brush_test` 159/159, `pe_canvas_test` 37/37.
+* **JVM 148/148**, including `SelectionTest`, 11 tests:
+  * gestures, polygon, lasso;
+  * view transform and offsets;
+  * preview = engine geometry;
+  * outline format;
+  * contextual actions;
+  * errors;
+  * routing.
 
 ## 8. Screenshots and recordings of real selection operations
 
-[to be completed]
+* The emulator recording drives the real app with touches: drag, taps on the
+  real controls, lasso with `input motionevent`.
+  * Files: `70-selection-ops.mp4`, `71`–`82`; `23` (landscape), `33` / `34`
+    (tablet portrait), `43` (tablet landscape).
+* **Bug found by the first run (4c823f2):** autosave (every 20 s) landed a move
+  that had just begun, so the next drag drew a new ellipse. Fixed in ee3adeb:
+  no autosave during a move; leaving the app lands it.
+* **Script bug in the same run:** the scripted stroke started on the screen
+  edge (the system back gesture). Fixed in ee3adeb.
 
 ## 9. APK and GitHub Actions status
 
-[to be completed]
+* Runs 41814987994 and 41815756331 (commit 4c823f2): all jobs green.
+* APK: `PxPaint-block10-debug-4c823f2.apk`.
 
 ## 10. Known limitations
 
