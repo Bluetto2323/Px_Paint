@@ -201,8 +201,6 @@ class BrushLibraryPanel(
         addView(col, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         if (!compact) addView(IconButton(context, theme, if (fav) Icon.STAR_FILLED else Icon.STAR, tr(if (fav) S.FAVORITE_REMOVE else S.FAVORITE_ADD), sizeDp = 30f).apply {
             isSelected = fav
-            minimumWidth = theme.dp(36)
-            minimumHeight = theme.dp(36)
             setOnClickListener {
                 host.updateBrushes(lib.toggleFavorite(p.id))
                 if (state.filter == BrushFilter.FAVORITES) buildGrid() else replaceTile(p.id)

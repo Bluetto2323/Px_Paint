@@ -175,9 +175,12 @@ adb logcat -c
 record 70-selection-ops 180
 adb shell input swipe 250 700 850 1450 700; sleep 3
 shot 71-selection-ellipse
-tapc 71-selection-ellipse "Move" exact
+tapc 71-selection-ellipse "Transform" exact
 adb shell input swipe 550 1075 760 1300 900; sleep 2
 shot 72-selection-moving
+# Transform box: drag the bottom-right corner handle outwards (scale), then the content was moved too.
+dump 72b-transform
+
 tapc 72-selection-moving "Done" exact
 shot 73-selection-moved
 tapc 73-selection-moved "Copy" exact
@@ -271,6 +274,20 @@ dump 99-settings-themes
 if xy=$(centre 99-settings-themes "Warm Beige" exact); then adb shell input tap $xy; sleep 3; shot 99b-settings-warm-beige; fi
 dump 99b-settings-warm-beige
 
+# ---------------- Fill and gradient (Block 13): real taps / drags
+start --es pxpaint.demo canvas
+tapc 100-fill "More tools" exact
+tapc 100b-more-tools "Fill" exact
+adb shell input tap 540 1500; sleep 3
+shot 101-bucket-fill
+tapc 101-bucket-fill "More tools" exact
+tapc 101b-more-tools "Gradient" exact
+adb shell input swipe 200 600 900 1400 700; sleep 3
+shot 102-gradient-preview
+tapc 102-gradient-preview "Done" exact
+shot 103-gradient-done
+adb logcat -d -s PxPaint:I | grep -E "Selection: fill" >> "$OUT/selection-log.txt" || true
+
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
 start --es pxpaint.demo canvas
@@ -303,7 +320,8 @@ dump 32-tablet-portrait-layers-pinned
 start --es pxpaint.demo selection --es pxpaint.selshape ellipse
 adb shell input swipe 400 900 1200 1700 700; sleep 3
 shot 33-tablet-portrait-selection
-tapc 33-tablet-portrait-selection "Select" exact
+tapc 33-tablet-portrait-selection "More tools" exact
+tapc 33b-more-tools "Select" exact
 shot 34-tablet-portrait-selection-options
 
 # ---------------- Tablet landscape (2560x1600 @320 -> 1280x800 dp)

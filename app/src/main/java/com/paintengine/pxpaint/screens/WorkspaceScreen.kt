@@ -126,6 +126,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var selBarRow: LinearLayout? = null
     private var selBarKey = ""
     private var selBarShown = false
+    private var selBarOverflow: FrameLayout? = null
     private var selRefreshing = false
     private var selRefreshAgain = false
     // Transforming selected content (Blocks 10, 12): the box and its transform (core/Transform),
@@ -1490,6 +1491,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (key != selBarKey) {
             selBarKey = key
             row.removeAllViews()
+            selBarOverflow?.removeAllViews()
             fun chip(label: S, selected: Boolean, run: () -> Unit) = row.addView(Widgets.chip(context, theme, tr(label), selected) { run() }.apply {
                 contentDescription = tr(label)
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, theme.touchTarget).apply { marginStart = theme.dp(2); marginEnd = theme.dp(2) })
@@ -1760,16 +1762,19 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         selBarRow = row
         selBarKey = ""
         selBarShown = false
+        selBarOverflow = null
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             background = theme.glass(theme.radiusPill)
             elevation = theme.dpF(3f)
             setPadding(theme.dp(4), theme.dp(2), theme.dp(4), theme.dp(2))
             contentDescription = tr(S.SEL_ACTIONS)
+            // The chips scroll if they do not fit; the overflow (⋯) stays visible at the end.
             addView(android.widget.HorizontalScrollView(context).apply {
                 isHorizontalScrollBarEnabled = false
                 addView(row)
-            })
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(FrameLayout(context).also { selBarOverflow = it })
             visibility = View.GONE
         }
     }
@@ -1794,6 +1799,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     marginStart = theme.dp(2); marginEnd = theme.dp(2)
                 })
             }
+            selBarOverflow?.removeAllViews()
             if (overflow.isNotEmpty()) {
                 val more = IconButton(context, theme, Icon.MORE, tr(S.SEL_MORE_ACTIONS)).apply { round = true }
                 more.setOnClickListener {
@@ -1808,7 +1814,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                         OverlayHost.MenuItem(tr(a.label), if (on) Icon.CHECK else null, selected = on) { runSelection(a) }
                     })
                 }
-                row.addView(more)
+                selBarOverflow?.addView(more)
             }
         }
         val show = actions.isNotEmpty() && !fullscreen
