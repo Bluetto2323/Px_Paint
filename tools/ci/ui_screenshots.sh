@@ -24,17 +24,17 @@ sleep 15
 adb shell wm size > "$OUT/device.txt"
 adb shell getprop ro.build.version.release >> "$OUT/device.txt"
 
-start() {
-  adb shell am force-stop "$PKG"
-  adb shell pm clear "$PKG" > /dev/null
-  adb shell am start -W -n "$ACT" "$@" > /dev/null
+start() {   # every adb call is bounded: one stuck launch must not stall the whole job
+  timeout 30 adb shell am force-stop "$PKG" || echo "  start: force-stop timed out"
+  timeout 60 adb shell pm clear "$PKG" > /dev/null || echo "  start: pm clear timed out"
+  timeout 60 adb shell am start -W -n "$ACT" "$@" > /dev/null || echo "  start: launch not reported within 60 s"
   sleep 12
 }
 shot() {
   adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS > /dev/null || true
   sleep 1
   adb shell dumpsys window | grep -E "mCurrentFocus" | head -1 | sed "s/^/  $1 focus: /"
-  adb exec-out screencap -p > "$OUT/$1.png"
+  timeout 30 adb exec-out screencap -p > "$OUT/$1.png" || echo "  shot $1: screencap timed out"
   echo "captured $1 ($(stat -c %s "$OUT/$1.png") bytes)"
 }
 
