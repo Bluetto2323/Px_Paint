@@ -275,6 +275,15 @@ LayerError CanvasDocument::gradientSet(const GradientSpec& g) {
     premul(g.argb1, c1);
     const double dx = g.x1 - g.x0, dy = g.y1 - g.y0, len2 = dx * dx + dy * dy;
     const double radius = std::sqrt(len2);
+    // Colour ramp: 1024 premultiplied steps (interpolated in premultiplied space, so a
+    // transparency gradient keeps its colour); pixels index it by their position t.
+    constexpr int kSteps = 1024;
+    std::vector<uint8_t> ramp(kSteps * 4);
+    for (int i = 0; i < kSteps; ++i) {
+        const float f = static_cast<float>(i) / (kSteps - 1);
+        for (int c = 0; c < 4; ++c) ramp[i * 4 + c] = static_cast<uint8_t>(std::clamp(c0[c] + (c1[c] - c0[c]) * f + 0.5f, 0.0f, 255.0f));
+        for (int c = 0; c < 3; ++c) ramp[i * 4 + c] = std::min(ramp[i * 4 + c], ramp[i * 4 + 3]);
+    }
     std::vector<uint8_t> px(kPx * 4);
     std::vector<int32_t> now;
     for (int32_t ty = area.y / kT; ty <= (area.bottom() - 1) / kT; ++ty)
@@ -283,23 +292,32 @@ LayerError CanvasDocument::gradientSet(const GradientSpec& g) {
             if (st == SelectionMask::TileState::Empty) continue;
             const uint8_t* mask = selection_.active() ? selection_.tile(tx, ty) : nullptr;
             const RectI tr = ls.tileRect(tx, ty);
-            if (const uint8_t* o = ls.tile(tx, ty)) std::memcpy(px.data(), o, px.size());
+            const uint8_t* orig = ls.tile(tx, ty);
+            if (orig) std::memcpy(px.data(), orig, px.size());
             else std::fill(px.begin(), px.end(), 0);
-            for (int32_t y = tr.y; y < tr.bottom(); ++y)
+            for (int32_t y = tr.y; y < tr.bottom(); ++y) {
+                // Linear: t grows by a constant step along a row.
+                const double rowT = len2 < 1e-9 ? 1.0 : ((tr.x + 0.5 - g.x0) * dx + (y + 0.5 - g.y0) * dy) / len2;
+                const double stepT = len2 < 1e-9 ? 0.0 : dx / len2;
+                const double ry2 = (y + 0.5 - g.y0) * (y + 0.5 - g.y0);
                 for (int32_t x = tr.x; x < tr.right(); ++x) {
                     const size_t i = static_cast<size_t>(y - ty * kT) * kT + (x - tx * kT);
-                    const float k = mask ? mask[i] / 255.0f : 1.0f;
-                    if (k <= 0.0f) continue;
+                    const uint32_t k = mask ? mask[i] : 255u;
+                    if (!k) continue;
                     double t;
                     if (len2 < 1e-9) t = 1.0;
-                    else if (g.radial) t = std::hypot(x + 0.5 - g.x0, y + 0.5 - g.y0) / radius;
-                    else t = ((x + 0.5 - g.x0) * dx + (y + 0.5 - g.y0) * dy) / len2;
-                    const float f = static_cast<float>(std::clamp(t, 0.0, 1.0));
-                    // Interpolated in premultiplied space: transparency gradients keep their colour.
-                    const float s[4] = {c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f,
-                                        c0[3] + (c1[3] - c0[3]) * f};
-                    overCov(px.data() + i * 4, s, k);
+                    else if (g.radial) { const double ddx = x + 0.5 - g.x0; t = std::sqrt(ddx * ddx + ry2) / radius; }
+                    else t = rowT + stepT * (x - tr.x);
+                    const int idx = static_cast<int>(std::clamp(t, 0.0, 1.0) * (kSteps - 1) + 0.5);
+                    const uint8_t* sc = &ramp[static_cast<size_t>(idx) * 4];
+                    uint8_t* d = px.data() + i * 4;
+                    // src-over with coverage k, integer premultiplied.
+                    const uint32_t sa = (sc[3] * k + 127u) / 255u;
+                    if (sa == 255) { std::memcpy(d, sc, 4); continue; }
+                    for (int c = 0; c < 4; ++c)
+                        d[c] = static_cast<uint8_t>(std::min<uint32_t>(255, (sc[c] * k + 127u) / 255u + (d[c] * (255u - sa) + 127u) / 255u));
                 }
+            }
             const int32_t idx = ty * ls.columns() + tx;
             if (tileEmpty(px.data())) grad_.preview.releaseTile(tx, ty);
             else std::memcpy(grad_.preview.tileForWrite(tx, ty), px.data(), px.size());

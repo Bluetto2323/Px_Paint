@@ -40,7 +40,13 @@ shot() {
 
 # UI dump of the current screen (for the accessibility audit), with the density in use.
 dump() {
-  adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 && adb pull /sdcard/ui.xml "$OUT/$1.xml" > /dev/null 2>&1 || true
+  # uiautomator waits for an idle UI: never let one screen stall the whole job.
+  adb shell rm -f /sdcard/ui.xml > /dev/null 2>&1
+  if ! timeout 40 adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1; then
+    echo "  dump $1: UI not idle within 40 s (accessibility events below)"
+    timeout 4 adb shell uiautomator events 2>/dev/null | head -20 | sed 's/^/    /' || true
+  fi
+  adb pull /sdcard/ui.xml "$OUT/$1.xml" > /dev/null 2>&1 || true
   echo "$1 $(adb shell wm density | tail -1 | grep -o '[0-9]*$')" >> "$OUT/dumps.txt"
 }
 # Centre of the first node whose content-desc starts with $2 (equals it if $3 = exact) in dump $1.
