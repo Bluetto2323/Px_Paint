@@ -145,6 +145,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private val selToCanvas = Affine()
     enum class Tool(val icon: Icon, val label: S, val desc: S) {
         MARKER(Icon.BRUSH, S.TOOL_MARKER, S.TOOL_MARKER_DESC),
+        SMUDGE(Icon.SMUDGE, S.TOOL_SMUDGE, S.TOOL_SMUDGE_DESC),
         ERASER(Icon.ERASER, S.TOOL_ERASER, S.TOOL_ERASER_DESC),
         SELECT(Icon.SELECT, S.TOOL_SELECT, S.TOOL_SELECT_DESC),
         FILL(Icon.FILL, S.TOOL_FILL, S.TOOL_FILL_DESC),
@@ -152,7 +153,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         MOVE(Icon.MOVE, S.TOOL_MOVE, S.TOOL_MOVE_DESC);
 
         /** Brush tools (size / opacity sliders and the brush library apply). */
-        val paints: Boolean get() = this == MARKER || this == ERASER
+        val paints: Boolean get() = this == MARKER || this == ERASER || this == SMUDGE
     }
 
     private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY, HISTORY }
@@ -804,12 +805,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             // The first sample: this pointer's current state (no history before the stroke).
             if (!StylusInput.append(e, pointerId, kind, strokeT0, samples, includeHistory = false)) return
             // The selected library preset of the tool, with its quick size / opacity.
-            val p = host.brushes.effective(if (eraser) BrushTool.ERASER else BrushTool.PAINT)
+            // Smudge (Block 14): its own preset; the stylus eraser end still erases.
+            val smudge = !eraser && tool == Tool.SMUDGE
+            val p = host.brushes.effective(if (eraser) BrushTool.ERASER else if (smudge) BrushTool.SMUDGE else BrushTool.PAINT)
             val accepted = engine.strokeBegin(
                 samples.first(),
                 NativeEngine.Brush(
                     BrushEncoding.params(p, pressureSmoothing = host.settings.pressureSmoothing),
-                    BrushEncoding.flags(p, eraser),
+                    BrushEncoding.flags(p, eraser, smudge),
                     if (eraser) 0xFF000000.toInt() else color,
                     host.pressureTable(),
                 ),
@@ -901,7 +904,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
     }
 
-    private fun brushTool(t: Tool): BrushTool = if (t == Tool.ERASER) BrushTool.ERASER else BrushTool.PAINT
+    private fun brushTool(t: Tool): BrushTool = when (t) {
+        Tool.ERASER -> BrushTool.ERASER
+        Tool.SMUDGE -> BrushTool.SMUDGE
+        else -> BrushTool.PAINT
+    }
 
     /** Changes the selected preset of [t] (a built-in keeps it as a resettable customisation). */
     private fun updatePreset(t: Tool, change: (BrushParams) -> BrushParams) {
@@ -1213,7 +1220,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
      */
     private fun addTools(box: LinearLayout, s: WorkspaceSpec) {
         val vertical = box.orientation == LinearLayout.VERTICAL
-        for (t in listOf(Tool.MARKER, Tool.ERASER)) {
+        for (t in listOf(Tool.MARKER, Tool.SMUDGE, Tool.ERASER)) {
             val b = capsuleButton(IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null))
             b.setOnClickListener {
                 if (tool == t) togglePanel(Panel.LIBRARY) else selectTool(t)
@@ -1323,6 +1330,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val b = host.brushes.effective(bt)
         sizeSlider?.setValue(BrushState.sizeToSlider(b.size))
         opacitySlider?.setValue(b.opacity)
+        opacitySlider?.contentDescription = tr(if (tool == Tool.SMUDGE) S.QUICK_STRENGTH else S.QUICK_OPACITY)
         for (sl in listOfNotNull(sizeSlider, opacitySlider)) (sl.parent as? View)?.alpha = if (!tool.paints) theme.disabledAlpha else 1f
     }
 

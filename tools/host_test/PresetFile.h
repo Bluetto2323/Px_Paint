@@ -51,6 +51,8 @@ inline void applyKey(TestPreset& p, const std::string& k, const std::string& v) 
     else if (k == "grain_depth") s.grainDepth = f;
     else if (k == "grain_pressure") s.grainPressure = f;
     else if (k == "wet_edge") s.wetEdge = f;
+    else if (k == "mix") { s.mix = f; s.wet = f > 0.0f ? WetMode::Mix : WetMode::None; }
+    else if (k == "pickup") s.pickup = f;
     else if (k == "pressure_size") s.pressureSize = b;
     else if (k == "min_size") s.minSizeFraction = f;
     else if (k == "pressure_opacity") s.pressureOpacity = b;

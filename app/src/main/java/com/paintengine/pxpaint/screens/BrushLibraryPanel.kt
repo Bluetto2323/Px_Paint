@@ -71,7 +71,7 @@ class BrushLibraryPanel(
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(theme.text(context, tr(if (tool == BrushTool.ERASER) S.ERASER_BRUSHES else S.BRUSHES), PxTheme.Type.HEADLINE),
+            addView(theme.text(context, tr(when (tool) { BrushTool.ERASER -> S.ERASER_BRUSHES; BrushTool.SMUDGE -> S.SMUDGE_BRUSHES; else -> S.BRUSHES }), PxTheme.Type.HEADLINE),
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(IconButton(context, theme, Icon.SEARCH, tr(S.SEARCH_BRUSHES)).apply {
                 isSelected = state.searching

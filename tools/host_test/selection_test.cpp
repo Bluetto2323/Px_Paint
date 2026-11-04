@@ -8,6 +8,7 @@
 // side (what is displayed on Vulkan and GLES) is host_test --suite brush (S14).
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -961,6 +962,176 @@ void testBrushLatency() {
     check(all < none * 1.25 + 20 && ell < none * 1.5 + 20, fmt("S10: clipped painting cost %.0f %% / %.0f %% of unclipped", 100 * all / none, 100 * ell / none));
 }
 
+// ---------------------------------------------------------------- Block 14
+pe::brush::BrushSettings smudger(float dia, float strength, float pickup = 1.0f) {
+    pe::brush::BrushSettings b = brush(dia, 0xFF000000u, strength);
+    b.hardness = 0.5f;
+    b.wet = pe::brush::WetMode::Smudge;
+    b.pickup = pickup;
+    return b;
+}
+pe::brush::BrushSettings mixer(float dia, uint32_t argb, float mix, float pickup = 0.5f) {
+    pe::brush::BrushSettings b = brush(dia, argb);
+    b.wet = pe::brush::WetMode::Mix;
+    b.mix = mix;
+    b.pickup = pickup;
+    return b;
+}
+void straight(CanvasDocument& d, const pe::brush::BrushSettings& b, double x0, double y0, double x1, double y1, int n = 60) {
+    std::vector<pe::brush::StrokePoint> p;
+    for (int i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / (n - 1);
+        p.push_back({x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, i * 4.0});
+    }
+    d.strokeBegin(b, p[0]);
+    d.strokeSamples(p.data() + 1, p.size() - 1);
+    d.strokeEnd();
+    (void)d.layerPixel(1, 0, 0);   // processes the queued input
+}
+// White layer with a blue block (x 100..400, y 200..500).
+void whiteBlue(CanvasDocument& d) {
+    base(d, 900, 700);
+    d.bucketFill(5, 5, 0xFFFFFFFFu, {});
+    sel(d, rect(100, 200, 400, 500), Mode::Replace, false);
+    d.bucketFill(200, 300, 0xFF2050E0u, {});
+    d.deselect();
+}
+double changedSum(const std::vector<Rgba8>& a, const std::vector<Rgba8>& b) {
+    double s = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+        s += std::abs(a[i].r - b[i].r) + std::abs(a[i].g - b[i].g) + std::abs(a[i].b - b[i].b) + std::abs(a[i].a - b[i].a);
+    return s;
+}
+
+void testWetMedia() {
+    section("S13 smudge and colour mixing (Block 14)");
+    constexpr uint32_t W = 900, H = 700;
+    {   // Smudge drags the blue into the white along the stroke, no new colours.
+        CanvasDocument d;
+        whiteBlue(d);
+        const auto before = grab(d, 1, W, H);
+        const Snapshot s0 = snap(d);
+        const int64_t t0 = pe::nowNs();
+        straight(d, smudger(60, 0.85f), 250, 350, 650, 350);
+        const double t = ms(t0);
+        const auto after = grab(d, 1, W, H);
+        const Snapshot s1 = snap(d);
+        const Rgba8 p = after[350 * W + 460], q = before[350 * W + 460];
+        check(q.r == 255 && p.b > p.r + 40, fmt("S13: smudged: white pixel 60 px past the blue edge is now blue-ish (r %.0f b %.0f)", p.r, p.b));
+        bool hull = true, premul = true;
+        size_t changed = 0, farChanged = 0;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                const Rgba8 a = after[y * W + x];
+                if (a.r > a.a || a.g > a.a || a.b > a.a) premul = false;
+                if (a == before[y * W + x]) continue;
+                ++changed;
+                if (x > 700 || y < 300 || y > 400) ++farChanged;
+                if (a.r < 0x20 - 1 || a.g < 0x50 - 1 || a.b < 0xE0 - 1) hull = false;   // between blue and white only
+            }
+        check(changed > 3000 && farChanged == 0, fmt("S13: %.0f px changed, all under the stroke (%.0f elsewhere)", changed, farChanged));
+        check(hull && premul, "S13: smudge adds no colour (every result between the blue and the white), valid premultiplied");
+        const auto e = d.historyEntries();
+        check(!e.empty() && e.back().kind == HistoryKind::Smudge, "S13: one 'smudge' history step");
+        check(d.undo() == 1 && snap(d) == s0, "S13: undo restores every pixel exactly");
+        check(d.redo() == 1 && snap(d) == s1, "S13: redo gives the same smudge back");
+        std::printf("     smudge stroke, 60 px, 400 px long: %.1f ms\n", t);
+        // Strength: a weak smudge moves less paint.
+        d.undo();
+        straight(d, smudger(60, 0.2f), 250, 350, 650, 350);
+        const double weak = changedSum(before, grab(d, 1, W, H));
+        const double strong = changedSum(before, after);
+        check(weak < strong * 0.6, fmt("S13: strength 20 %% changes %.0f %% of what 85 %% does", 100.0 * weak / strong));
+        // The spacing does not change the result (rates are per distance, not per dab).
+        auto spaced = [&](float sp) {
+            d.undo();
+            auto b = smudger(60, 0.6f);
+            b.spacing = sp;
+            straight(d, b, 250, 350, 650, 350);
+            return changedSum(before, grab(d, 1, W, H));
+        };
+        const double sDense = spaced(0.04f), sSparse = spaced(0.16f);
+        check(std::abs(sDense - sSparse) < 0.2 * sDense, fmt("S13: spacing 4 %% vs 16 %%: %.0f %% difference", 100.0 * std::abs(sDense - sSparse) / sDense));
+        // Pickup: a low pickup keeps the first colour on the brush longer (drags it further).
+        auto blueAt = [&](float pickup, int x) {
+            d.undo();
+            straight(d, smudger(60, 0.5f, pickup), 250, 350, 650, 350);
+            const Rgba8 c = d.layerPixel(1, x, 350);
+            return c.b - c.r;
+        };
+        const int hi = blueAt(1.0f, 470), lo = blueAt(0.15f, 470);
+        check(lo > hi + 10, fmt("S13: 70 px past the edge: blue excess %.0f with pickup 15 %%, %.0f with 100 %%", lo, hi));
+    }
+    {   // Selection: nothing changes outside it.
+        CanvasDocument d;
+        whiteBlue(d);
+        sel(d, ellipse(300, 250, 600, 450));
+        const auto before = grab(d, 1, W, H);
+        straight(d, smudger(80, 1.0f), 150, 350, 750, 350);
+        const Diff df = diff(d, before, grab(d, 1, W, H), W, H);
+        check(df.outsideChanged == 0 && df.insideChanged > 2000,
+              fmt("S13: smudge in a selection: %.0f px changed inside, %.0f outside", df.insideChanged, df.outsideChanged));
+        d.deselect();
+    }
+    {   // Transparency: smudging out of an opaque blob on a transparent layer.
+        CanvasDocument d;
+        base(d, W, H);
+        sel(d, rect(100, 200, 400, 500), Mode::Replace, false);
+        d.bucketFill(200, 300, 0xFFE03020u, {});
+        d.deselect();
+        straight(d, smudger(60, 0.6f), 250, 350, 650, 350);
+        const Rgba8 out = d.layerPixel(1, 460, 350), in = d.layerPixel(1, 300, 350);
+        bool premul = true;
+        for (uint32_t y = 300; y < 400; ++y)
+            for (uint32_t x = 200; x < 700; ++x) {
+                const Rgba8 a = d.layerPixel(1, x, y);
+                if (a.r > a.a || a.g > a.a || a.b > a.a) premul = false;
+            }
+        check(out.a > 30 && out.a < 255 && premul, fmt("S13: smudged into transparency: partial alpha %.0f, premultiplied valid", out.a));
+        check(in.a == 255, "S13: dragging starts inside the paint: the paint behind stays opaque");
+        // Back the other way: transparency dragged into the paint thins it.
+        straight(d, smudger(60, 0.9f), 700, 420, 250, 420);
+        check(d.layerPixel(1, 380, 420).a < 250, fmt("S13: transparency smudged into paint lowers its alpha (%.0f)", d.layerPixel(1, 380, 420).a));
+    }
+    {   // Colour mixing.
+        CanvasDocument d;
+        whiteBlue(d);
+        const uint32_t yellow = 0xFFF0D020u;
+        straight(d, mixer(40, yellow, 0.0f), 150, 260, 750, 260);
+        const Rgba8 plain = d.layerPixel(1, 250, 260);
+        check(plain.r == 0xF0 && plain.g == 0xD0 && plain.b == 0x20, "S13: mix 0: the brush colour exactly (classic stroke)");
+        d.undo();
+        straight(d, mixer(40, yellow, 0.6f), 150, 300, 750, 300);
+        const Rgba8 m = d.layerPixel(1, 300, 300), w = d.layerPixel(1, 700, 300);
+        check(m.a == 255 && m.g > m.r && m.g > m.b, fmt("S13: yellow paint over blue mixes to an opaque green (r %.0f g %.0f b %.0f)", m.r, m.g, m.b));
+        check(w.a == 255 && w.b < m.b && w.r > m.r, "S13: past the blue, the paint drifts back towards the brush colour + white");
+        int jump = 0;
+        for (int x = 160; x < 740; ++x) {
+            const Rgba8 a = d.layerPixel(1, x, 300), b = d.layerPixel(1, x + 1, 300);
+            jump = std::max({jump, std::abs(a.r - b.r), std::abs(a.g - b.g), std::abs(a.b - b.b)});
+        }
+        check(jump <= 24, fmt("S13: smooth colour transition along the stroke (largest step %.0f / 255)", jump));
+        const auto e = d.historyEntries();
+        check(e.back().kind == HistoryKind::Stroke && d.undo() == 1 && d.layerPixel(1, 300, 300) == Rgba8{0x20, 0x50, 0xE0, 0xFF},
+              "S13: a mixing stroke is one 'stroke' step, undo exact");
+        // On a transparent layer the paint keeps its colour (transparent pixels add none).
+        uint32_t top = 0;
+        d.addLayer(1, "Empty", top);
+        straight(d, mixer(40, yellow, 0.6f), 150, 300, 750, 300);
+        const Rgba8 t = d.layerPixel(top, 300, 300);
+        check(t.a == 255 && t.r == 0xF0 && t.b == 0x20, "S13: mixing on a transparent layer: the brush colour, opaque");
+    }
+    {   // Cost: large smudge brush.
+        CanvasDocument d;
+        whiteBlue(d);
+        const int64_t t0 = pe::nowNs();
+        straight(d, smudger(300, 0.8f), 100, 350, 800, 350, 120);
+        const double t = ms(t0);
+        std::printf("     smudge stroke, 300 px brush, 700 px long: %.1f ms\n", t);
+        check(t < 1500, fmt("S13: large smudge stroke %.0f ms", t));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -977,6 +1148,7 @@ int main() {
     testFromContent();
     testLarge();
     testBrushLatency();
+    testWetMedia();
     std::printf("=== %d/%d checks passed ===\n", gChecks - gFailures, gChecks);
     return gFailures == 0 ? 0 : 1;
 }

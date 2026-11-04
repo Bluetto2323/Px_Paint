@@ -1,6 +1,7 @@
 #include "brush/StrokeCompositor.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -12,6 +13,50 @@ using canvas::RectI;
 namespace {
 constexpr int32_t kTile = RasterStore::kTile;
 constexpr size_t kPlane = static_cast<size_t>(kTile) * kTile;
+
+// sRGB <-> linear light (colour mixing happens in linear light: no muddy,
+// darkened midpoints between saturated colours).
+const float* srgbToLinearTable() {
+    static const auto table = [] {
+        std::array<float, 256> t{};
+        for (int i = 0; i < 256; ++i) {
+            const double c = i / 255.0;
+            t[static_cast<size_t>(i)] = static_cast<float>(c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4));
+        }
+        return t;
+    }();
+    return table.data();
+}
+// Pigment-like mixing: hue and saturation from the weighted geometric mean of
+// the linear reflectances (subtractive: yellow + blue -> green, not grey),
+// luminance from the additive mix (no muddy darkening).
+struct PaintColour {
+    double logc[3] = {0, 0, 0};   // ln(linear channel)
+    double lum = 0;               // linear luminance
+};
+constexpr double kLogFloor = 1e-3;
+PaintColour paintFromLinear(const float* c) {
+    PaintColour p;
+    for (int i = 0; i < 3; ++i) p.logc[i] = std::log(std::max(kLogFloor, static_cast<double>(c[i])));
+    p.lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    return p;
+}
+void mixInto(PaintColour& p, const PaintColour& q, double t) {
+    for (int i = 0; i < 3; ++i) p.logc[i] += (q.logc[i] - p.logc[i]) * t;
+    p.lum += (q.lum - p.lum) * t;
+}
+void paintToLinear(const PaintColour& p, double* out) {
+    double y = 0;
+    for (int i = 0; i < 3; ++i) out[i] = std::exp(p.logc[i]);
+    y = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+    const double k = y > 1e-6 ? p.lum / y : 0.0;
+    for (int i = 0; i < 3; ++i) out[i] = std::min(1.0, out[i] * k);
+}
+uint8_t linearToSrgb8(double v) {
+    v = std::clamp(v, 0.0, 1.0);
+    const double c = v <= 0.0031308 ? v * 12.92 : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+    return static_cast<uint8_t>(std::lround(std::clamp(c, 0.0, 1.0) * 255.0));
+}
 }  // namespace
 
 DabShape DabShape::forDiameter(double diameter) {
@@ -70,6 +115,45 @@ void StrokeCompositor::begin(RasterStore& store, const BrushSettings& settings, 
                 std::lround(std::clamp(wetEdgeTransfer(static_cast<double>(i) / n, settings_.wetEdge), 0.0, 1.0) * 65535.0));
     }
     dabIndex_ = 0;
+    wet_ = settings_.wet != WetMode::None;
+    smudge_ = settings_.wet == WetMode::Smudge;
+    if (wet_) {
+        // Per-dab rates from per-diameter ones: the result does not depend on the spacing.
+        const double dia = settings_.diameter;
+        const double step = std::clamp(settings_.spacingPx(dia) / dia, 1e-3, 2.0);
+        if (smudge_) {
+            // Per dab the carried image (the pixels one step back) replaces `strength` of the pixels:
+            // the paint travels at `strength` x the finger's speed whatever the spacing, so it is
+            // left behind after about strength / (1 - strength) brush diameters (100 %: dragged along).
+            wetA_ = settings_.opacity;
+            wetPick_ = static_cast<float>(1.0 - std::pow(1.0 - std::max(0.02, static_cast<double>(settings_.pickup)), step));
+            // Carry grid: the largest footprint around the dab centre (size jitter, tilt, scatter).
+            const double major = dia * 0.5 * (1.0 + settings_.sizeJitter) * (settings_.tiltShape ? 1.0 + 1.5 * settings_.tiltStrength : 1.0);
+            const double extent = major * (1.0 + 2.0 * settings_.scatter) + 3.0;
+            const int32_t need = 2 * static_cast<int32_t>(std::ceil(extent)) + 1;
+            carryCell_ = std::max<int32_t>(1, (need + kMaxCarry - 1) / kMaxCarry);
+            carryN_ = (need + carryCell_ - 1) / carryCell_ + 2;
+            carryHalf_ = carryN_ / 2;
+            carry_.assign(static_cast<size_t>(carryN_) * carryN_ * 4, 0.0f);  // reuses the capacity
+            for (size_t i = 3; i < carry_.size(); i += 4) carry_[i] = -1.0f;  // nothing picked up yet
+        } else {
+            // A pixel is covered by ~1/step dabs: per dab coverage m deposits 1 - (1 - T m)^step, so
+            // the stroke reaches its opacity T (and soft edges / pressure keep their fall-off).
+            const double T = std::clamp(static_cast<double>(paintA_), 0.0, 1.0);
+            mixLut_.resize(kMixLut + 1);
+            for (int i = 0; i <= kMixLut; ++i)
+                mixLut_[static_cast<size_t>(i)] = static_cast<float>(1.0 - std::pow(std::max(0.0, 1.0 - T * i / kMixLut), step));
+            wetPick_ = static_cast<float>(1.0 - std::pow(1.0 - static_cast<double>(settings_.pickup), step));
+            const float* lin = srgbToLinearTable();
+            brushLin_[0] = lin[static_cast<size_t>(paintR_)];
+            brushLin_[1] = lin[static_cast<size_t>(paintG_)];
+            brushLin_[2] = lin[static_cast<size_t>(paintB_)];
+            const PaintColour b = paintFromLinear(brushLin_);
+            for (int i = 0; i < 3; ++i) brushMix_[i] = b.logc[i];
+            brushMix_[3] = b.lum;
+            paintLoaded_ = false;
+        }
+    }
     if (slot_.size() != store.tileCount()) slot_.assign(store.tileCount(), -1);
     active_ = true;
     stats_.strokeTiles = 0;
@@ -460,11 +544,135 @@ void StrokeCompositor::rasterGeneric(RasterStore& store, const Dab& d, bool toTa
 
 void StrokeCompositor::addDabs(RasterStore& store, const Dab* dabs, size_t count) {
     if (!active_) return;
+    if (wet_) {
+        for (size_t i = 0; i < count; ++i) {
+            if (!std::isfinite(dabs[i].x) || !std::isfinite(dabs[i].y)) continue;
+            rasterDab(store, dabs[i], true, dabIndex_++);   // this dab's coverage -> scratch plane
+            applyWet(store, dabs[i]);
+        }
+        return;
+    }
     for (size_t i = 0; i < count; ++i) rasterDab(store, dabs[i], false, dabIndex_++);
 }
 
+void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
+    constexpr float kInv16 = 1.0f / 65535.0f;
+    const bool clipped = clip_ && clip_->active();
+    uint8_t paint[4] = {0, 0, 0, 255};
+    if (!smudge_) {
+        // Colour under the dab as it was before this stroke (the stroke's own fresh paint is
+        // not picked up again): coverage-weighted, transparent pixels add no colour.
+        const float* lin = srgbToLinearTable();
+        const int32_t stride = std::max<int32_t>(1, static_cast<int32_t>(settings_.diameter / 24.0f));
+        double sw = 0.0, swa = 0.0, sc[3] = {0.0, 0.0, 0.0};
+        for (const auto& stp : tiles_) {
+            const StrokeTile& st = *stp;
+            if (st.tailRect.empty()) continue;
+            const uint8_t* px = st.storeHadTile ? st.base.get() : nullptr;
+            const int32_t ox = st.tx * kTile, oy = st.ty * kTile;
+            for (int32_t y = st.tailRect.y; y < st.tailRect.bottom(); y += stride) {
+                const size_t row = static_cast<size_t>(y - oy) * kTile;
+                for (int32_t x = st.tailRect.x; x < st.tailRect.right(); x += stride) {
+                    const size_t i = row + static_cast<size_t>(x - ox);
+                    const uint16_t m = st.tail[i];
+                    if (!m) continue;
+                    const double w = m * kInv16;
+                    sw += w;
+                    if (!px || !px[i * 4 + 3]) continue;
+                    const uint8_t* p = px + i * 4;
+                    const double wa = w * p[3] / 255.0;
+                    swa += wa;
+                    const float k = 255.0f / p[3];
+                    for (int c = 0; c < 3; ++c)
+                        sc[c] += wa * lin[std::min(255, static_cast<int>(p[c] * k + 0.5f))];
+                }
+            }
+        }
+        PaintColour loaded, brushC;
+        for (int c = 0; c < 3; ++c) brushC.logc[c] = brushMix_[c];
+        brushC.lum = brushMix_[3];
+        if (!paintLoaded_) {
+            for (int c = 0; c < 4; ++c) paintMix_[c] = brushMix_[c];
+            paintLoaded_ = true;
+        }
+        for (int c = 0; c < 3; ++c) loaded.logc[c] = paintMix_[c];
+        loaded.lum = paintMix_[3];
+        if (sw > 0.0 && swa > 1e-9) {
+            float under[3];
+            for (int c = 0; c < 3; ++c) under[c] = static_cast<float>(sc[c] / swa);
+            // The first dab loads the colour it lands on at once; later ones at the pickup rate.
+            const double pick = (dabIndex_ <= 1 ? 1.0 : wetPick_) * (swa / sw);
+            mixInto(loaded, paintFromLinear(under), pick);
+            for (int c = 0; c < 3; ++c) paintMix_[c] = loaded.logc[c];
+            paintMix_[3] = loaded.lum;
+        }
+        PaintColour dabC = brushC;
+        mixInto(dabC, loaded, settings_.mix);
+        double rgb[3];
+        paintToLinear(dabC, rgb);
+        for (int c = 0; c < 3; ++c) paint[c] = linearToSrgb8(rgb[c]);
+    }
+    const int32_t ix = static_cast<int32_t>(std::floor(d.x)), iy = static_cast<int32_t>(std::floor(d.y));
+    const int32_t off = carryHalf_ * carryCell_;
+    for (auto& stp : tiles_) {
+        StrokeTile& st = *stp;
+        const RectI r = st.tailRect;
+        if (r.empty()) continue;
+        st.tailRect = {};
+        st.dirty = {};
+        const int32_t ox = st.tx * kTile, oy = st.ty * kTile;
+        uint16_t* plane = st.tail.get();
+        const auto clipState = clipped ? clip_->state(st.tx, st.ty) : canvas::SelectionMask::TileState::Full;
+        if (clipState == canvas::SelectionMask::TileState::Empty && !smudge_) {
+            for (int32_t y = r.y; y < r.bottom(); ++y)
+                std::memset(plane + static_cast<size_t>(y - oy) * kTile + (r.x - ox), 0, static_cast<size_t>(r.w) * sizeof(uint16_t));
+            continue;
+        }
+        const uint8_t* clipPx = clipped && clipState != canvas::SelectionMask::TileState::Empty ? clip_->tile(st.tx, st.ty) : nullptr;
+        const bool noWrite = clipState == canvas::SelectionMask::TileState::Empty;
+        uint8_t* dst = store.tileForWrite(st.tx, st.ty);
+        for (int32_t y = r.y; y < r.bottom(); ++y) {
+            const size_t row = static_cast<size_t>(y - oy) * kTile;
+            const int32_t cy = (y - iy + off) / carryCell_;
+            for (int32_t x = r.x; x < r.right(); ++x) {
+                const size_t i = row + static_cast<size_t>(x - ox);
+                const uint16_t m = plane[i];
+                if (!m) continue;
+                plane[i] = 0;
+                const float cov = m * kInv16;
+                float covW = noWrite ? 0.0f : cov;   // deposit: inside the selection only
+                if (clipPx) covW *= clipPx[i] * (1.0f / 255.0f);
+                uint8_t* o = dst + i * 4;
+                if (smudge_) {
+                    const int32_t cx = (x - ix + off) / carryCell_;
+                    if (cx < 0 || cy < 0 || cx >= carryN_ || cy >= carryN_) continue;
+                    float* k = carry_.data() + (static_cast<size_t>(cy) * carryN_ + cx) * 4;
+                    if (k[3] < 0.0f) {   // first touch: pick up what is there
+                        for (int c = 0; c < 4; ++c) k[c] = o[c];
+                        continue;
+                    }
+                    const float a = wetA_ * covW;
+                    const float pk = wetPick_ * cov;
+                    for (int c = 0; c < 4; ++c) {
+                        const float out = o[c] + (k[c] - o[c]) * a;
+                        o[c] = static_cast<uint8_t>(std::min(255.0f, out + 0.5f));
+                        k[c] += (out - k[c]) * pk;
+                    }
+                } else {
+                    if (covW <= 0.0f) continue;
+                    const float a = mixLut_[m >> 6] * (covW / cov);   // deposit; times the selection
+                    for (int c = 0; c < 4; ++c) o[c] = static_cast<uint8_t>(std::min(255.0f, o[c] + (paint[c] - o[c]) * a + 0.5f));
+                }
+            }
+        }
+        grow(st.touched, r);
+        store.markChanged(r);
+        stats_.compositedPixels += static_cast<uint64_t>(r.area());
+    }
+}
+
 void StrokeCompositor::setTail(RasterStore& store, const Dab* dabs, size_t count) {
-    if (!active_) return;
+    if (!active_ || wet_) return;   // wet strokes: no provisional tail (dabs read the canvas)
     for (auto& st : tiles_) {
         if (st->tailRect.empty()) continue;
         const int32_t ox = st->tx * kTile, oy = st->ty * kTile;
@@ -540,7 +748,7 @@ void StrokeCompositor::composite(RasterStore& store, StrokeTile& st) {
 }
 
 void StrokeCompositor::flush(RasterStore& store) {
-    if (!active_) return;
+    if (!active_ || wet_) return;   // wet dabs are applied as they come
     for (auto& st : tiles_)
         if (!st->dirty.empty()) composite(store, *st);
 }
@@ -556,7 +764,7 @@ void StrokeCompositor::commit(RasterStore& store) {
         for (const auto& st : tiles_)
             if (!st->touched.empty())
                 committedScratch_.push_back({st->tx, st->ty, st->storeHadTile ? st->base.get() : nullptr, st->touched});
-        if (!committedScratch_.empty()) commitHook_(store, committedScratch_, settings_.erase);
+        if (!committedScratch_.empty()) commitHook_(store, committedScratch_, settings_);
     }
     releaseTiles();
     active_ = false;

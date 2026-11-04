@@ -59,6 +59,7 @@ enum class HistoryKind : int32_t {
     MoveSelection = 20,      // selected pixels (and the selection) moved
     // Block 13 (bucket fill uses Fill = 3)
     Gradient = 21,
+    Smudge = 22,             // Block 14 (colour-mixing strokes are Stroke)
 };
 const char* historyKindName(HistoryKind k);
 

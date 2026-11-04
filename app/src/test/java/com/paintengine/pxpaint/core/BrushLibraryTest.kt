@@ -17,7 +17,7 @@ class BrushLibraryTest {
         assertEquals("builtin.round", lib.selectedId(BrushTool.PAINT))
         assertEquals("builtin.hard", lib.selectedId(BrushTool.ERASER))
         assertEquals(builtIns.first { it.id == "builtin.round" }.params, lib.effective(BrushTool.PAINT))
-        assertEquals(12, lib.all().size)
+        assertEquals(15, lib.all().size)
     }
 
     @Test
@@ -98,7 +98,7 @@ class BrushLibraryTest {
         assertEquals("builtin.round", lib.selectedId(BrushTool.PAINT))
         assertEquals("builtin.hard", lib.selectedId(BrushTool.ERASER))
         assertEquals(lib, lib.delete("builtin.round"))     // built-ins cannot be deleted
-        assertEquals(12, lib.all().size)
+        assertEquals(15, lib.all().size)
     }
 
     @Test

@@ -29,6 +29,14 @@
 // and "buildup" accumulation (mask = m + v * (1 - m)). Compositing can map
 // the mask through a wet-edge transfer curve (watercolour rim). Classic
 // round brushes keep the Block 3/4 rasteriser: same pixels, same cost.
+//
+// Wet media (Block 14, BrushSettings::wet != None): each committed dab is
+// rasterised into the tile's scratch plane (the `tail` plane, unused by wet
+// strokes) and applied at once to the store, reading the pixels as they are
+// now - colour mixing (Mix) or carrying the pixels along (Smudge). The base
+// copies still give exact cancel / undo. All arithmetic is premultiplied, so
+// transparency is carried like colour (smudge) and transparent pixels never
+// tint the paint (mix). The provisional tail is not drawn for wet strokes.
 #pragma once
 
 #include <cstdint>
@@ -67,7 +75,7 @@ public:
     };
     // Called by commit() with the store already holding the final pixels
     // (the history records the stroke from it). Not called for cancels.
-    using CommitHook = std::function<void(const canvas::RasterStore&, const std::vector<CommittedTile>&, bool erase)>;
+    using CommitHook = std::function<void(const canvas::RasterStore&, const std::vector<CommittedTile>&, const BrushSettings&)>;
     void setCommitHook(CommitHook hook) { commitHook_ = std::move(hook); }
     /** Selection the strokes are clipped to (null or inactive: not clipped). Owned by the caller. */
     void setClip(const canvas::SelectionMask* clip) { clip_ = clip; }
@@ -122,6 +130,7 @@ private:
     void rasterEllipse(canvas::RasterStore& store, const Dab& d, const DabGeometry& g, bool toTail);
     void rasterGeneric(canvas::RasterStore& store, const Dab& d, bool toTail, uint32_t index);
     void composite(canvas::RasterStore& store, StrokeTile& st);
+    void applyWet(canvas::RasterStore& store, const Dab& d);
     void releaseTiles();
     static void grow(canvas::RectI& r, const canvas::RectI& add);
 
@@ -145,6 +154,23 @@ private:
     CommitHook commitHook_;
     const canvas::SelectionMask* clip_ = nullptr;
     std::vector<CommittedTile> committedScratch_;
+
+    // Wet media state (per stroke; buffers reused between strokes).
+    bool wet_ = false;
+    bool smudge_ = false;
+    float wetA_ = 1.0f;          // per-dab deposit (mix) / strength (smudge)
+    float wetPick_ = 1.0f;       // per-dab pickup
+    float brushLin_[3] = {};     // brush colour, linear light
+    double brushMix_[4] = {};    // brush colour in the mixing space (ln r, ln g, ln b, luminance)
+    double paintMix_[4] = {};    // colour loaded on the brush, same space
+    bool paintLoaded_ = false;
+    static constexpr int kMixLut = 1023;   // mask >> 6
+    std::vector<float> mixLut_;            // mix: coverage -> per-dab deposit
+    std::vector<float> carry_;   // smudge: carried premultiplied RGBA, 0..255 (alpha < 0 = empty)
+    int32_t carryN_ = 0, carryCell_ = 1, carryHalf_ = 0;
+public:
+    // Smudge carry grid edge (cells), exposed for tests.
+    static constexpr int32_t kMaxCarry = 512;
 };
 
 }  // namespace pe::brush

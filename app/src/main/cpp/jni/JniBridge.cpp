@@ -389,13 +389,14 @@ JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeStamp(
 // --- Brush strokes ------------------------------------------------------------
 // sample: Engine::kSampleFloats floats (x, y, t, pressure, tilt, orientation; NaN = none)
 // params: diameter, opacity, spacing, minSizeFraction, minOpacityFraction, tiltStrength, pressureSmoothing
-// flags : 1 erase, 2 pressure->size, 4 pressure->opacity, 8 tilt shapes the dab
+// flags : 1 erase, 2 pressure->size, 4 pressure->opacity, 8 tilt shapes the dab, 16 angle follows
+//         the stroke, 32 smudge (Block 14)
 // curve : PressureLut::kSize floats (pressure response), or null for linear
 namespace {
 // Brush parameters from Kotlin (NativeEngine.Brush.params / flags), see
 // docs/ENGINE_API.md. Shorter arrays (older callers) keep the defaults of
 // the missing fields.
-constexpr jsize kBrushParams = 21;
+constexpr jsize kBrushParams = 23;   // + mix, pickup (Block 14)
 
 bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatArray curve, pe::brush::BrushSettings& b) {
     if (!params) return false;
@@ -410,7 +411,7 @@ bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatA
     b.minOpacityFraction = p[4];
     b.tiltStrength = p[5];
     b.pressureSmoothing = p[6];
-    if (n >= kBrushParams) {
+    if (n >= 21) {
         b.hardness = p[7];
         b.flow = p[8];
         b.roundness = p[9];
@@ -426,12 +427,19 @@ bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatA
         b.grain = static_cast<pe::brush::BrushGrain>(std::clamp(static_cast<int>(p[19]), 0, pe::brush::kBrushGrainCount - 1));
         b.accumulation = p[20] >= 1.0f ? pe::brush::Accumulation::Buildup : pe::brush::Accumulation::StrokeMax;
     }
+    if (n >= 23) {
+        b.mix = p[21];
+        b.pickup = p[22];
+    }
     b.argb = static_cast<uint32_t>(argb);
     b.erase = (flags & 1) != 0;
     b.pressureSize = (flags & 2) != 0;
     b.pressureOpacity = (flags & 4) != 0;
     b.tiltShape = (flags & 8) != 0;
     b.angleFollowsStroke = (flags & 16) != 0;
+    b.wet = (flags & 32) != 0 ? pe::brush::WetMode::Smudge
+          : b.mix > 0.0f      ? pe::brush::WetMode::Mix
+                              : pe::brush::WetMode::None;   // sanitized() drops it for the eraser
     if (curve && env->GetArrayLength(curve) == static_cast<jsize>(pe::brush::PressureLut::kSize)) {
         auto lut = std::make_shared<pe::brush::PressureLut>();
         env->GetFloatArrayRegion(curve, 0, static_cast<jsize>(pe::brush::PressureLut::kSize), lut->lut.data());

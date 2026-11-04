@@ -22,6 +22,7 @@ class BrushPresetsTest {
         val REQUIRED = listOf(
             "builtin.round", "builtin.hard", "builtin.airbrush", "builtin.pencil", "builtin.graphite", "builtin.ink",
             "builtin.fineliner", "builtin.marker", "builtin.charcoal", "builtin.chalk", "builtin.textured", "builtin.watercolor",
+            "builtin.oil", "builtin.gouache", "builtin.blender",
         )
     }
 
@@ -170,5 +171,37 @@ class BrushPresetsTest {
         val classic = BrushEncoding.params(BrushParams(), pressureSmoothing = 0f)
         assertEquals(24f, classic[0], 0f)
         assertEquals(1f, classic[7], 0f)   // hardness 1 = classic edge
+    }
+
+    @Test
+    fun wetMediaPresetsAndEncoding() {
+        val m = builtIns().associateBy { it.id }
+        // Block 14: the existing presets keep plain paint; the wet ones mix, the blender carries only canvas colour.
+        for (id in REQUIRED.take(12)) assertEquals(id, 0f, m.getValue(id).params.mix, 0f)
+        assertTrue(m.getValue("builtin.oil").params.mix in 0.3f..0.8f)
+        assertTrue(m.getValue("builtin.gouache").params.mix in 0.1f..0.6f)
+        assertEquals(1f, m.getValue("builtin.blender").params.mix, 0f)
+        // Encoded for the engine: mix and pickup after the 21 Block 5 floats; smudge is a flag, never with erase.
+        val p = BrushParams(mix = 0.4f, pickup = 0.2f)
+        val a = BrushEncoding.params(p, pressureSmoothing = 0f)
+        assertEquals(23, a.size)
+        assertEquals(0.4f, a[21], 0f)
+        assertEquals(0.2f, a[22], 0f)
+        assertEquals(BrushEncoding.FLAG_SMUDGE, BrushEncoding.flags(p, erase = false, smudge = true) and BrushEncoding.FLAG_SMUDGE)
+        assertEquals(0, BrushEncoding.flags(p, erase = true, smudge = true) and BrushEncoding.FLAG_SMUDGE)
+        assertEquals(0, BrushEncoding.flags(p, erase = false) and BrushEncoding.FLAG_SMUDGE)
+        // Saved and read back; out-of-range values clamped.
+        val sb = StringBuilder()
+        BrushPresetFormat.writeParams(sb, p)
+        val back = BrushParams.fromEntries(sb.lineSequence().filter { '=' in it }.associate { it.substringBefore('=').trim() to it.substringAfter('=').trim() })
+        assertEquals(0.4f, back.mix, 0f)
+        assertEquals(0.2f, back.pickup, 0f)
+        assertEquals(1f, BrushParams(mix = 3f, pickup = -1f).sanitized().mix, 0f)
+        assertEquals(0f, BrushParams(mix = 3f, pickup = -1f).sanitized().pickup, 0f)
+        // The smudge tool has its own brush (a soft one by default), separate from paint and eraser.
+        val lib = BrushLibrary.migrate(builtIns(), null)
+        assertEquals(BrushLibrary.DEFAULT_SMUDGE, lib.selectedId(BrushTool.SMUDGE))
+        val sized = lib.setLive(BrushTool.SMUDGE, size = 99f)
+        assertEquals(99f, sized.effective(BrushTool.SMUDGE).size, 0f)
     }
 }

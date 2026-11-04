@@ -67,6 +67,16 @@ enum class Accumulation : uint8_t {
     Buildup = 1,    // over: overlapping dabs build up (airbrush, layered graphite)
 };
 
+// Block 14: wet media. Dabs are applied one after the other onto the pixels
+// as they are now (not through the stroke's coverage mask):
+//   Mix    : paint whose colour mixes with the colours under the brush
+//            (`mix` = share of the picked-up colour in the deposited paint,
+//             `pickup` = how fast the brush takes up canvas colour).
+//   Smudge : no new paint; the pixels under the brush are carried along the
+//            stroke (`opacity` = strength, `pickup` = how fast the carried
+//            image is refreshed: low drags colour further).
+enum class WetMode : uint8_t { None = 0, Mix = 1, Smudge = 2 };
+
 struct BrushSettings {
     float diameter = 24.0f;     // canvas px
     float opacity = 1.0f;       // stroke opacity [0, 1] (overlapping dabs never exceed it)
@@ -104,6 +114,11 @@ struct BrushSettings {
     float wetEdge = 0.0f;        // 0..1: pigment collects at the stroke edge (watercolour look)
     uint32_t seed = 0;           // jitter sequence (set per stroke from its first sample)
 
+    // --- Wet media (Block 14), see WetMode.
+    WetMode wet = WetMode::None;
+    float mix = 0.0f;            // 0..1
+    float pickup = 0.5f;         // 0..1, per brush diameter travelled
+
     // Floors that keep a stroke visible whatever the pressure.
     static constexpr float kMinSizeFraction = 0.02f;
     static constexpr float kMinOpacityFraction = 0.05f;
@@ -140,6 +155,9 @@ struct BrushSettings {
         s.grainDepth = std::clamp(finite(grainDepth, 0.0f), 0.0f, 1.0f);
         s.grainPressure = std::clamp(finite(grainPressure, 0.0f), 0.0f, 1.0f);
         s.wetEdge = std::clamp(finite(wetEdge, 0.0f), 0.0f, 1.0f);
+        s.mix = std::clamp(finite(mix, 0.0f), 0.0f, 1.0f);
+        s.pickup = std::clamp(finite(pickup, 0.5f), 0.0f, 1.0f);
+        if (static_cast<int>(wet) > 2 || erase || (wet == WetMode::Mix && s.mix <= 0.0f)) s.wet = WetMode::None;
         return s;
     }
 

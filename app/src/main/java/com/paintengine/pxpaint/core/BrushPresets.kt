@@ -86,6 +86,10 @@ data class BrushParams(
     val minOpacity: Float = 0.3f,
     val tilt: Boolean = false,
     val tiltStrength: Float = 1f,
+    /** Block 14: share of the colour picked up from the canvas in the paint (0 = plain paint). */
+    val mix: Float = 0f,
+    /** Block 14: how fast the brush takes up canvas colour (mix) / refreshes what it drags (smudge). */
+    val pickup: Float = 0.5f,
 ) {
     /** Valid range and default of a numeric parameter. */
     data class Range(val key: String, val min: Float, val max: Float, val default: Float)
@@ -99,6 +103,7 @@ data class BrushParams(
             flowJitter = f(flowJitter, R_FLOW_JITTER), grainDepth = f(grainDepth, R_GRAIN_DEPTH),
             grainPressure = f(grainPressure, R_GRAIN_PRESSURE), wetEdge = f(wetEdge, R_WET_EDGE),
             minSize = f(minSize, R_MIN_SIZE), minOpacity = f(minOpacity, R_MIN_OPACITY), tiltStrength = f(tiltStrength, R_TILT_STRENGTH),
+            mix = f(mix, R_MIX), pickup = f(pickup, R_PICKUP),
         )
     }
 
@@ -114,7 +119,7 @@ data class BrushParams(
         R_ROUNDNESS to roundness, R_ANGLE to angle, R_SIZE_JITTER to sizeJitter, R_SCATTER to scatter,
         R_ANGLE_JITTER to angleJitter, R_FLOW_JITTER to flowJitter, R_GRAIN_DEPTH to grainDepth,
         R_GRAIN_PRESSURE to grainPressure, R_WET_EDGE to wetEdge, R_MIN_SIZE to minSize, R_MIN_OPACITY to minOpacity,
-        R_TILT_STRENGTH to tiltStrength,
+        R_TILT_STRENGTH to tiltStrength, R_MIX to mix, R_PICKUP to pickup,
     )
 
     /** key = value lines (all parameters, stable order). */
@@ -126,6 +131,7 @@ data class BrushParams(
         "grain_pressure" to num(grainPressure), "accumulation" to accumulation.key, "wet_edge" to num(wetEdge),
         "pressure_size" to pressureSize.toString(), "min_size" to num(minSize), "pressure_opacity" to pressureOpacity.toString(),
         "min_opacity" to num(minOpacity), "tilt" to tilt.toString(), "tilt_strength" to num(tiltStrength),
+        "mix" to num(mix), "pickup" to num(pickup),
     )
 
     /** Uses the Block 3/4 rasteriser in the engine (BrushSettings::classicRound). */
@@ -152,6 +158,8 @@ data class BrushParams(
         val R_MIN_SIZE = Range("min_size", BrushState.MIN_PRESSURE_FRACTION, 1f, 0.25f)
         val R_MIN_OPACITY = Range("min_opacity", BrushState.MIN_PRESSURE_FRACTION, 1f, 0.3f)
         val R_TILT_STRENGTH = Range("tilt_strength", 0f, 1f, 1f)
+        val R_MIX = Range("mix", 0f, 1f, 0f)
+        val R_PICKUP = Range("pickup", 0f, 1f, 0.5f)
 
         /** Angle in (-180, 180]. */
         fun normalizeAngle(a: Float): Float {
@@ -185,6 +193,7 @@ data class BrushParams(
                 pressureSize = bo("pressure_size", base.pressureSize), minSize = fl("min_size", base.minSize),
                 pressureOpacity = bo("pressure_opacity", base.pressureOpacity), minOpacity = fl("min_opacity", base.minOpacity),
                 tilt = bo("tilt", base.tilt), tiltStrength = fl("tilt_strength", base.tiltStrength),
+                mix = fl("mix", base.mix), pickup = fl("pickup", base.pickup),
             ).sanitized()
         }
     }
@@ -334,15 +343,17 @@ object BrushPresetFormat {
 
 /**
  * Engine encoding of a brush (NativeEngine.Brush params / flags, decoded by
- * JniBridge decodeBrush): 21 floats.
+ * JniBridge decodeBrush): 23 floats.
  */
 object BrushEncoding {
-    const val PARAMS = 21
+    const val PARAMS = 23
     const val FLAG_ERASE = 1
     const val FLAG_PRESSURE_SIZE = 2
     const val FLAG_PRESSURE_OPACITY = 4
     const val FLAG_TILT = 8
     const val FLAG_ANGLE_FOLLOWS_STROKE = 16
+    /** Block 14: the smudge tool (drags the pixels; opacity = strength). */
+    const val FLAG_SMUDGE = 32
 
     fun params(p: BrushParams, size: Float = p.size, opacity: Float = p.opacity, pressureSmoothing: Float): FloatArray {
         val s = p.sanitized()
@@ -350,11 +361,12 @@ object BrushEncoding {
             size, opacity, s.spacing, s.minSize, s.minOpacity, s.tiltStrength, pressureSmoothing,
             s.hardness, s.flow, s.roundness, s.angle, s.sizeJitter, s.scatter, s.angleJitter, s.flowJitter,
             s.grainDepth, s.grainPressure, s.wetEdge, s.tip.code.toFloat(), s.grain.code.toFloat(), s.accumulation.code.toFloat(),
+            s.mix, s.pickup,
         )
     }
 
-    fun flags(p: BrushParams, erase: Boolean): Int =
-        (if (erase) FLAG_ERASE else 0) or (if (p.pressureSize) FLAG_PRESSURE_SIZE else 0) or
+    fun flags(p: BrushParams, erase: Boolean, smudge: Boolean = false): Int =
+        (if (smudge && !erase) FLAG_SMUDGE else 0) or (if (erase) FLAG_ERASE else 0) or (if (p.pressureSize) FLAG_PRESSURE_SIZE else 0) or
             (if (p.pressureOpacity) FLAG_PRESSURE_OPACITY else 0) or (if (p.tilt) FLAG_TILT else 0) or
             (if (p.angleMode == AngleMode.STROKE) FLAG_ANGLE_FOLLOWS_STROKE else 0)
 }

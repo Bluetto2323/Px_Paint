@@ -288,6 +288,12 @@ tapc 102-gradient-preview "Done" exact
 shot 103-gradient-done
 adb logcat -d -s PxPaint:I | grep -E "Selection: fill" >> "$OUT/selection-log.txt" || true
 
+# ---------------- Smudge (Block 14): the tool in the dock, a real drag across the demo strokes
+start --es pxpaint.demo canvas
+tapc 104-smudge-tool "Smudge" exact
+adb shell input swipe 420 560 470 1450 1200; sleep 3
+shot 104-smudged
+
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
 start --es pxpaint.demo canvas

@@ -49,13 +49,15 @@ const char* layerErrorName(LayerError e) {
 CanvasDocument::CanvasDocument() {
     // Every committed stroke becomes one history step (called under mutex_).
     brush_.setCommitHook([this](const RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
-                                bool erase) { onStrokeCommitted(store, tiles, erase); });
+                                const brush::BrushSettings& s) {
+        onStrokeCommitted(store, tiles, s.erase ? HistoryKind::Erase : s.wet == brush::WetMode::Smudge ? HistoryKind::Smudge : HistoryKind::Stroke);
+    });
     // Strokes and erasing stay inside the selection (no selection: everywhere).
     brush_.setClip(&selection_);
 }
 
 void CanvasDocument::onStrokeCommitted(const RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
-                                       bool erase) {
+                                       HistoryKind kind) {
     const int64_t t0 = nowNs();
     Layer* a = activeLayer();
     if (!a || &a->store != &store) return;  // (always the active layer's store)
@@ -65,7 +67,7 @@ void CanvasDocument::onStrokeCommitted(const RasterStore& store, const std::vect
         patch.addTile(t.tx, t.ty, r, t.before, store.tile(t.tx, t.ty));
     }
     if (patch.empty()) return;
-    auto cmd = std::make_unique<PixelCommand>(erase ? HistoryKind::Erase : HistoryKind::Stroke, a->info.id, std::move(patch));
+    auto cmd = std::make_unique<PixelCommand>(kind, a->info.id, std::move(patch));
     cmd->setLabel(a->info.name);
     history_.push(std::move(cmd));
     history_.noteRecordTime(static_cast<double>(nowNs() - t0) / 1e6);

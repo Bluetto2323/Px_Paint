@@ -211,3 +211,51 @@ pressure_size = true
 min_size = 0.6
 pressure_opacity = true
 min_opacity = 0.3
+
+# Block 14: wet media. `mix` = share of the canvas colour in the paint,
+# `pickup` = how fast the brush takes up the colours it crosses.
+[preset builtin.oil]
+name = Oil Paint
+name.it = Pittura a olio
+category = painting
+tags = oil wet mix blend bristle paint
+tip = bristle
+size = 56
+opacity = 1
+spacing = 0.04
+angle_mode = stroke
+size_jitter = 0.03
+grain = canvas
+grain_depth = 0.15
+pressure_size = true
+min_size = 0.5
+mix = 0.55
+pickup = 0.35
+
+[preset builtin.gouache]
+name = Wet Gouache
+name.it = Guazzo bagnato
+category = painting
+tags = gouache wet mix blend opaque
+tip = round
+size = 40
+opacity = 1
+spacing = 0.05
+hardness = 0.75
+pressure_opacity = true
+min_opacity = 0.5
+mix = 0.35
+pickup = 0.25
+
+[preset builtin.blender]
+name = Blender
+name.it = Miscelatore
+category = painting
+tags = blend mix soften wet smooth
+tip = round
+size = 60
+opacity = 1
+spacing = 0.05
+hardness = 0.2
+mix = 1
+pickup = 0.6

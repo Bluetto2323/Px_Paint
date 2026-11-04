@@ -391,7 +391,7 @@ private:
         history_.push(std::move(cmd));
     }
     void onStrokeCommitted(const canvas::RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
-                           bool erase);
+                           HistoryKind kind);
     std::atomic<bool> activeEditable_{false};
     std::atomic<bool> pendingComposite_{false};
     std::atomic<uint64_t> generation_{0};

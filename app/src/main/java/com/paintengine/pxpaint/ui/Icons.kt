@@ -16,7 +16,7 @@ enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
     EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE, HISTORY,
-    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT, FILL, GRADIENT,
+    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT, FILL, GRADIENT, SMUDGE,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -97,6 +97,15 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 poly(c, 13f, 4.5f, 20f, 11.5f, 12f, 19.5f, 8f, 19.5f, 4.5f, 16f, close = true)
                 line(c, 8.5f, 9f, 15.5f, 16f)
                 line(c, 12f, 19.5f, 20f, 19.5f)
+            }
+            Icon.SMUDGE -> {
+                // A fingertip pressing down, with the smear it leaves.
+                path.reset(); path.moveTo(9f, 3.5f); path.lineTo(9f, 12.5f)
+                path.quadTo(9f, 16.5f, 12f, 16.5f); path.quadTo(15f, 16.5f, 15f, 12.5f); path.lineTo(15f, 3.5f)
+                c.drawPath(path, stroke)
+                path.reset(); path.moveTo(10.8f, 13.2f); path.quadTo(12f, 14.6f, 13.2f, 13.2f); c.drawPath(path, stroke)
+                path.reset(); path.moveTo(3.5f, 20f); path.cubicTo(7f, 17.5f, 9f, 22f, 12f, 20f); path.cubicTo(15f, 18f, 17f, 22.5f, 20.5f, 20f)
+                c.drawPath(path, stroke)
             }
             Icon.MOVE -> {
                 line(c, 12f, 3.5f, 12f, 20.5f); line(c, 3.5f, 12f, 20.5f, 12f)

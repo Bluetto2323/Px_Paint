@@ -124,6 +124,11 @@ class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host
         page.addView(slider(tr(S.P_GRAIN_PRESSURE), p.grainPressure, { pct(r2(it)) }) { v -> set { it.copy(grainPressure = r2(v)) } })
         page.addView(slider(tr(S.P_WET_EDGE), p.wetEdge, { pct(r2(it)) }) { v -> set { it.copy(wetEdge = r2(v)) } })
 
+        page.addView(header(tr(S.SEC_BRUSH_MIXING)))
+        page.addView(theme.text(context, tr(S.MIXING_NOTE), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(4)) })
+        page.addView(slider(tr(S.P_MIX), p.mix, { pct(r2(it)) }) { v -> set { it.copy(mix = r2(v)) } })
+        page.addView(slider(tr(S.P_PICKUP), p.pickup, { pct(r2(it)) }) { v -> set { it.copy(pickup = r2(v)) } })
+
         page.addView(header(tr(S.SEC_BRUSH_JITTER)))
         page.addView(slider(tr(S.P_SIZE_JITTER), p.sizeJitter, { pct(r2(it)) }) { v -> set { it.copy(sizeJitter = r2(v)) } })
         page.addView(slider(tr(S.P_SCATTER), p.scatter / 2f, { pct(r2(it * 2f)) }) { v -> set { it.copy(scatter = r2(v * 2f)) } })

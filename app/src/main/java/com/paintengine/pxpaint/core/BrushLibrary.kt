@@ -4,7 +4,7 @@ import java.text.Normalizer
 import java.util.Locale
 
 /** The tools that use a brush preset. */
-enum class BrushTool(val key: String) { PAINT("paint"), ERASER("eraser") }
+enum class BrushTool(val key: String) { PAINT("paint"), ERASER("eraser"), SMUDGE("smudge") }
 
 /** Library filters (chips). */
 enum class BrushFilter(val label: S) {
@@ -51,7 +51,7 @@ data class BrushLibrary(
     fun selectedPreset(tool: BrushTool): BrushPreset = get(selectedId(tool)) ?: fallbackPreset()
 
     private fun defaultId(tool: BrushTool): String {
-        val want = if (tool == BrushTool.ERASER) DEFAULT_ERASER else DEFAULT_PAINT
+        val want = when (tool) { BrushTool.ERASER -> DEFAULT_ERASER; BrushTool.SMUDGE -> DEFAULT_SMUDGE; else -> DEFAULT_PAINT }
         return if (get(want) != null) want else all().firstOrNull()?.id ?: want
     }
 
@@ -211,6 +211,7 @@ data class BrushLibrary(
         const val MAX_RECENTS = 12
         const val DEFAULT_PAINT = "builtin.round"
         const val DEFAULT_ERASER = "builtin.hard"
+        const val DEFAULT_SMUDGE = "builtin.airbrush"
         /** The Block 3/4 brush (classic rasteriser): where existing users' setup goes. */
         const val LEGACY_PRESET = "builtin.hard"
 

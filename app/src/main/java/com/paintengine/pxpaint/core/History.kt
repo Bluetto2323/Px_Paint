@@ -24,6 +24,7 @@ enum class HistoryKind(val code: Int, val label: S) {
     DUPLICATE_SELECTION(19, S.HIST_DUPLICATE_SELECTION),
     MOVE_SELECTION(20, S.HIST_MOVE_SELECTION),
     GRADIENT(21, S.HIST_GRADIENT),
+    SMUDGE(22, S.HIST_SMUDGE),
     OTHER(-1, S.HIST_OTHER);
 
     companion object {

@@ -979,7 +979,7 @@ void testPresetFile() {
     bool header = false;
     gPresets = pxtest::loadPresets(PE_BRUSH_ASSET, &header);
     check(header, "L1: format header 'pxbrushes 1'");
-    check(gPresets.size() == 12, fmt("L1: 12 built-in presets (%.0f)", static_cast<double>(gPresets.size())));
+    check(gPresets.size() == 15, fmt("L1: 15 built-in presets (%.0f)", static_cast<double>(gPresets.size())));
     int found = 0;
     for (const char* id : kExpectedPresets) found += pxtest::find(gPresets, id) ? 1 : 0;
     check(found == 12, "L1: every required preset is present (round, hard, airbrush, pencil, graphite, ink, fine liner, marker, charcoal, chalk, textured, watercolour)");
