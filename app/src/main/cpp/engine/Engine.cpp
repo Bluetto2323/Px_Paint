@@ -644,6 +644,29 @@ LayerError Engine::selectionTransform(const double m[6]) {
     return e;
 }
 
+LayerError Engine::bucketFill(int32_t x, int32_t y, uint32_t argb, const CanvasDocument::FillOptions& o) {
+    const LayerError e = doc_.bucketFill(x, y, argb, o);
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return e;
+}
+
+LayerError Engine::gradientOp(GradientOp op, const CanvasDocument::GradientSpec& g) {
+    LayerError e = LayerError::None;
+    switch (op) {
+        case GradientOp::Set: e = doc_.gradientSet(g); break;
+        case GradientOp::Commit: e = doc_.gradientCommit(); break;
+        case GradientOp::Cancel: doc_.gradientCancel(); break;
+    }
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return e;
+}
+
 bool Engine::viewMatrix(double out[6]) const {
     std::lock_guard<std::mutex> lock(viewMutex_);
     if (!view_.valid()) return false;

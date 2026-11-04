@@ -310,6 +310,22 @@ class NativeEngine(config: Config) : AutoCloseable {
     @Synchronized
     fun selectionTransform(m: DoubleArray): Int = handle.let { if (it != 0L) nativeSelectionTransform(it, m) else 1 }
 
+    // --- Fill and gradient (Block 13) ------------------------------------------
+    /** Bucket fill at canvas pixel ([x], [y]) with straight [argb]. Returns the engine error (0 = done). */
+    @Synchronized
+    fun bucketFill(x: Int, y: Int, argb: Int, contiguous: Boolean, antialias: Boolean, merged: Boolean, tolerance: Int, expand: Int): Int =
+        handle.let {
+            if (it == 0L) 1 else nativeBucketFill(it, x, y, argb,
+                (if (contiguous) 1 else 0) or (if (antialias) 2 else 0) or (if (merged) 4 else 0), tolerance, expand)
+        }
+
+    enum class GradientOp(val code: Int) { SET(0), COMMIT(1), CANCEL(2) }
+
+    /** [g] = radial (0 / 1), x0, y0, x1, y1 in canvas pixels (SET only); colours straight ARGB. */
+    @Synchronized
+    fun gradient(op: GradientOp, g: DoubleArray?, argb0: Int, argb1: Int): Int =
+        handle.let { if (it != 0L) nativeGradient(it, op.code, g, argb0, argb1) else 1 }
+
     @Synchronized
     fun selectionInfo(): SelectionInfo = handle.let { if (it != 0L) SelectionInfo.of(nativeSelectionInfo(it)) else SelectionInfo.NONE }
 
@@ -431,6 +447,8 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeSelectionOp(handle: Long, op: Int, mode: Int): Long
         @JvmStatic private external fun nativeSelectionMove(handle: Long, dx: Int, dy: Int): Int
         @JvmStatic private external fun nativeSelectionInfo(handle: Long): DoubleArray?
+        @JvmStatic private external fun nativeBucketFill(handle: Long, x: Int, y: Int, argb: Int, flags: Int, tolerance: Int, expand: Int): Int
+        @JvmStatic private external fun nativeGradient(handle: Long, op: Int, g: DoubleArray?, argb0: Int, argb1: Int): Int
         @JvmStatic private external fun nativeSelectionTransform(handle: Long, m: DoubleArray): Int
         @JvmStatic private external fun nativeSelectionVersion(handle: Long): Long
         @JvmStatic private external fun nativeSelectionContours(handle: Long): FloatArray?

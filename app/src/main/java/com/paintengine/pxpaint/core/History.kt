@@ -23,6 +23,7 @@ enum class HistoryKind(val code: Int, val label: S) {
     PASTE(18, S.HIST_PASTE),
     DUPLICATE_SELECTION(19, S.HIST_DUPLICATE_SELECTION),
     MOVE_SELECTION(20, S.HIST_MOVE_SELECTION),
+    GRADIENT(21, S.HIST_GRADIENT),
     OTHER(-1, S.HIST_OTHER);
 
     companion object {

@@ -64,6 +64,8 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
     var transform: TransformState? = null
         set(v) { field = v; outlineDirty = true; invalidate() }
     private val tfm = DoubleArray(6)
+    /** Gradient being placed (Block 13): start x, y, end x, y in canvas pixels; null when none. */
+    var gradient: DoubleArray? = null
     private val combined = FloatArray(6)
     private var preview: Bitmap? = null
     private var canvasW = 0
@@ -182,6 +184,15 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
         }
         drawGesture(c)
         if (tf != null) drawTransformBox(c, tf)
+        gradient?.let { g ->
+            val x0 = toScreen.x(g[0], g[1]).toFloat(); val y0 = toScreen.y(g[0], g[1]).toFloat()
+            val x1 = toScreen.x(g[2], g[3]).toFloat(); val y1 = toScreen.y(g[2], g[3]).toFloat()
+            c.drawLine(x0, y0, x1, y1, white)
+            c.drawLine(x0, y0, x1, y1, boxPaint)
+            drawHandle(c, x0, y0)
+            c.drawCircle(x1, y1, handleR * 1.4f, handleFill)
+            c.drawCircle(x1, y1, handleR * 1.4f, closeRing)
+        }
         // Ants: about 10 steps per second, only while there is an outline and nothing is painted.
         removeCallbacks(tick)
         if (hasOutline && !paused && isShown) postDelayed(tick, ANTS_STEP_MS)

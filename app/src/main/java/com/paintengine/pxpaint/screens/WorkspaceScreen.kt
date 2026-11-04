@@ -146,6 +146,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         MARKER(Icon.BRUSH, S.TOOL_MARKER, S.TOOL_MARKER_DESC),
         ERASER(Icon.ERASER, S.TOOL_ERASER, S.TOOL_ERASER_DESC),
         SELECT(Icon.SELECT, S.TOOL_SELECT, S.TOOL_SELECT_DESC),
+        FILL(Icon.FILL, S.TOOL_FILL, S.TOOL_FILL_DESC),
+        GRADIENT(Icon.GRADIENT, S.TOOL_GRADIENT, S.TOOL_GRADIENT_DESC),
         MOVE(Icon.MOVE, S.TOOL_MOVE, S.TOOL_MOVE_DESC);
 
         /** Brush tools (size / opacity sliders and the brush library apply). */
@@ -705,13 +707,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 router.fingerMode = st.fingerMode
                 router.moveTool = tool == Tool.MOVE
                 router.eraserTool = tool == Tool.ERASER
-                router.selectTool = tool == Tool.SELECT
+                router.selectTool = tool == Tool.SELECT || tool == Tool.FILL || tool == Tool.GRADIENT
                 // Deliver MOVE events as they arrive, not batched per frame.
                 surfaceView?.requestUnbufferedDispatch(e)
                 router.down(id, kind, e.eventTime, e.getX(i), e.getY(i))
                 // A finger held still becomes the eyedropper (Block 12.5).
                 handler.removeCallbacks(holdPickRunnable)
-                if (st.longPressPick && kind == ToolKind.FINGER && tool != Tool.SELECT) {
+                if (st.longPressPick && kind == ToolKind.FINGER && tool != Tool.SELECT && tool != Tool.GRADIENT) {
                     holdPick.down(e.eventTime, e.getX(i), e.getY(i))
                     holdPointer = id
                     holdX = e.getX(i); holdY = e.getY(i)
@@ -790,6 +792,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private inner class RouterActions : TouchRouter.Actions {
         override fun beginStroke(pointerId: Int, kind: ToolKind, eraser: Boolean) {
             if (tool == Tool.SELECT) { selectionDown(pointerId); return }
+            if (tool == Tool.FILL) { fillDown(pointerId); return }
+            if (tool == Tool.GRADIENT) { gradientDown(pointerId); return }
             val e = event ?: return
             val engine = engine ?: return
             selOverlay?.paused = true   // the ants stand still while painting
@@ -814,6 +818,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
         override fun strokeSamples(pointerId: Int) {
             if (tool == Tool.SELECT) { selectionDrag(pointerId); return }
+            if (tool == Tool.FILL) { pos(pointerId)?.let { fillTravel = maxOf(fillTravel, kotlin.math.hypot(it.x - fillX, it.y - fillY)) }; return }
+            if (tool == Tool.GRADIENT) { gradientDrag(pointerId); return }
             val e = event ?: return
             samples.clear()
             if (!StylusInput.append(e, pointerId, strokeKind, strokeT0, samples)) return
@@ -824,6 +830,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
         override fun endStroke(pointerId: Int) {
             if (tool == Tool.SELECT) { selectionUp(pointerId); return }
+            if (tool == Tool.FILL) { fillUp(pointerId); return }
+            if (tool == Tool.GRADIENT) { gradHandle = 0; return }
             selOverlay?.paused = false
             val e = event
             if (e != null) {
@@ -839,6 +847,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
         override fun cancelStroke() {
             if (tool == Tool.SELECT) { selectionCancel(); return }
+            if (tool == Tool.FILL) { fillTravel = Double.MAX_VALUE; return }
+            if (tool == Tool.GRADIENT) { gradHandle = 0; return }
             selOverlay?.paused = false
             engine?.strokeCancel()
         }
@@ -1243,6 +1253,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             OverlayHost.MenuItem(tr(S.TOOL_SELECT), Icon.SELECT, selected = tool == Tool.SELECT) {
                 if (tool == Tool.SELECT) setPanel(Panel.TOOL) else selectTool(Tool.SELECT)
             },
+            OverlayHost.MenuItem(tr(S.TOOL_FILL), Icon.FILL, selected = tool == Tool.FILL) {
+                if (tool == Tool.FILL) setPanel(Panel.TOOL) else selectTool(Tool.FILL)
+            },
+            OverlayHost.MenuItem(tr(S.TOOL_GRADIENT), Icon.GRADIENT, selected = tool == Tool.GRADIENT) {
+                if (tool == Tool.GRADIENT) setPanel(Panel.TOOL) else selectTool(Tool.GRADIENT)
+            },
             OverlayHost.MenuItem(tr(S.TOOL_MOVE), Icon.MOVE, selected = tool == Tool.MOVE) { selectTool(Tool.MOVE) },
             OverlayHost.MenuItem(tr(S.EYEDROPPER), Icon.EYEDROPPER) { armEyedropper() },
             OverlayHost.MenuItem(tr(S.BRUSH_SETTINGS), Icon.SLIDERS) {
@@ -1296,7 +1312,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         (colorButton as? FrameLayout)?.getChildAt(0)?.background = theme.oval(color, theme.edge)
         // "More": shows the extra tool in use (select / move), highlighted.
         moreButton?.let { mb ->
-            mb.setIcon(when (tool) { Tool.SELECT -> Icon.SELECT; Tool.MOVE -> Icon.MOVE; else -> Icon.MORE })
+            mb.setIcon(when (tool) {
+                Tool.SELECT -> Icon.SELECT; Tool.MOVE -> Icon.MOVE; Tool.FILL -> Icon.FILL; Tool.GRADIENT -> Icon.GRADIENT; else -> Icon.MORE
+            })
             mb.isSelected = !tool.paints
         }
         val bt = currentBrushTool()
@@ -1311,6 +1329,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             togglePanel(Panel.TOOL)
         } else {
             leavingSelectTool(t)
+            if (tool == Tool.GRADIENT && t != Tool.GRADIENT) gradientFinish(commit = false)
             tool = t
             selOverlay?.showDim = t == Tool.SELECT
             refreshSelectionBar()
@@ -1329,6 +1348,190 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (on) panel = Panel.NONE
         buildChrome()
         if (on) host.overlays.message(tr(S.FULLSCREEN_HINT))
+    }
+
+    // ------------------------------------------------------------ fill and gradient (Block 13)
+    // Fill options (this session): tolerance 0..255, expansion 0..8 px.
+    private var fillTolerance = 32
+    private var fillExpand = 1
+    private var fillContiguous = true
+    private var fillAntialias = true
+    private var fillMerged = false
+    private var fillX = 0.0
+    private var fillY = 0.0
+    private var fillTravel = 0.0
+
+    private fun fillDown(pointerId: Int) {
+        val p = pos(pointerId) ?: return
+        fillX = p.x; fillY = p.y; fillTravel = 0.0
+    }
+
+    /** A tap (no real drag) fills where it lifted, with the current colour. */
+    private fun fillUp(pointerId: Int) {
+        if (fillTravel > theme.dpF(12f)) return
+        val e = engine ?: return
+        if (!toCanvas(fillX, fillY)) return
+        val cx = kotlin.math.floor(selPt[0]).toInt()
+        val cy = kotlin.math.floor(selPt[1]).toInt()
+        val argb = color
+        val tol = fillTolerance; val ex = fillExpand; val cont = fillContiguous; val aa = fillAntialias; val mg = fillMerged
+        layerExec.execute {
+            val t0 = System.nanoTime()
+            val err = e.bucketFill(cx, cy, argb, cont, aa, mg, tol, ex)
+            val ms = (System.nanoTime() - t0) / 1e6
+            host.runOnMain {
+                if (closed) return@runOnMain
+                logSelection("fill", ms, err)
+                when (err) {
+                    0 -> Unit
+                    5, 6 -> paintBlocked()
+                    else -> host.overlays.message(tr(S.FILL_NOTHING))
+                }
+                handler.postDelayed(historyRefresh, 50)
+            }
+        }
+    }
+
+    private fun fillSettings(): View = column(context, theme, horizontalPadding = false) {
+        addView(theme.text(context, tr(S.TOOL_FILL), PxTheme.Type.HEADLINE).apply { minHeight = theme.dp(36); gravity = Gravity.CENTER_VERTICAL })
+        addView(sliderRow(tr(S.FILL_TOLERANCE), fillTolerance / 255f, { "${(it * 100).roundToInt()}%" }) { fillTolerance = (it * 255).roundToInt() })
+        addView(sliderRow(tr(S.FILL_EXPAND), fillExpand / 8f, { "${(it * 8).roundToInt()} px" }) { fillExpand = (it * 8).roundToInt() })
+        addView(compactSwitch(tr(S.FILL_CONTIGUOUS), tr(S.FILL_CONTIGUOUS_DESC), fillContiguous, true) { fillContiguous = it })
+        addView(compactSwitch(tr(S.FILL_ANTIALIAS), null, fillAntialias, true) { fillAntialias = it })
+        addView(theme.text(context, tr(S.FILL_REFERENCE), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(10), 0, theme.dp(6)) })
+        addView(Widgets.segmented(context, theme, listOf(false to tr(S.FILL_REF_LAYER), true to tr(S.FILL_REF_MERGED)), fillMerged) {
+            fillMerged = it
+            showPanel(panel)
+        })
+    }
+
+    // Gradient: the two ends (canvas px), type and end colour; previewed by the engine until Done.
+    private var gradActive = false
+    private var gradRadial = false
+    private var gradEnd: Int? = null          // null: transparent version of the start colour
+    private val gradPts = DoubleArray(4)
+    private var gradHandle = 0                 // 0 none, 1 start, 2 end being dragged
+    private val gradSpec = DoubleArray(5)
+    private val gradSend = DoubleArray(5)
+    private var gradColors = 0L
+    private val gradQueued = java.util.concurrent.atomic.AtomicBoolean()
+    private val gradRunnable = Runnable {
+        gradQueued.set(false)
+        val c: Long
+        synchronized(gradSpec) { System.arraycopy(gradSpec, 0, gradSend, 0, 5); c = gradColors }
+        engine?.gradient(NativeEngine.GradientOp.SET, gradSend, (c ushr 32).toInt(), c.toInt())
+    }
+
+    private fun gradientColors(): Pair<Int, Int> {
+        val start = color
+        val end = gradEnd ?: (start and 0x00FFFFFF)
+        return start to end
+    }
+
+    private fun gradientDown(pointerId: Int) {
+        val p = pos(pointerId) ?: return
+        if (!toCanvas(p.x, p.y)) return
+        val r = theme.dpF(28f) / selToScreen.scale
+        gradHandle = when {
+            gradActive && kotlin.math.hypot(selPt[0] - gradPts[0], selPt[1] - gradPts[1]) <= r -> 1
+            gradActive && kotlin.math.hypot(selPt[0] - gradPts[2], selPt[1] - gradPts[3]) <= r -> 2
+            else -> { gradPts[0] = selPt[0]; gradPts[1] = selPt[1]; gradPts[2] = selPt[0]; gradPts[3] = selPt[1]; 2 }
+        }
+    }
+
+    private fun gradientDrag(pointerId: Int) {
+        if (gradHandle == 0) return
+        val p = pos(pointerId) ?: return
+        router.strokeMovedTo(p.x.toFloat(), p.y.toFloat())
+        if (!toCanvas(p.x, p.y)) return
+        val k = if (gradHandle == 1) 0 else 2
+        gradPts[k] = selPt[0]; gradPts[k + 1] = selPt[1]
+        if (kotlin.math.hypot(gradPts[2] - gradPts[0], gradPts[3] - gradPts[1]) < 1.0) return
+        sendGradient()
+    }
+
+    /** The overlay follows at once; the engine renders the latest gradient on its worker. */
+    private fun sendGradient() {
+        val (c0, c1) = gradientColors()
+        synchronized(gradSpec) {
+            gradSpec[0] = if (gradRadial) 1.0 else 0.0
+            System.arraycopy(gradPts, 0, gradSpec, 1, 4)
+            gradColors = (c0.toLong() shl 32) or (c1.toLong() and 0xFFFFFFFFL)
+        }
+        if (!gradActive) { gradActive = true; refreshSelectionBar() }
+        selOverlay?.gradient = gradPts
+        selOverlay?.invalidate()
+        if (gradQueued.compareAndSet(false, true)) layerExec.execute(gradRunnable)
+    }
+
+    /** Done (commit: one history step) or cancel (nothing changes). */
+    private fun gradientFinish(commit: Boolean) {
+        if (!gradActive) return
+        val e = engine ?: return
+        gradActive = false
+        gradHandle = 0
+        selOverlay?.gradient = null
+        selOverlay?.invalidate()
+        layerExec.execute {
+            val err = e.gradient(if (commit) NativeEngine.GradientOp.COMMIT else NativeEngine.GradientOp.CANCEL, null, 0, 0)
+            host.runOnMain {
+                if (err == 5 || err == 6) paintBlocked()
+                refreshHistoryButtons()
+                handler.postDelayed(historyRefresh, 50)
+            }
+        }
+        selBarKey = ""
+        refreshSelectionBar()
+    }
+
+    /** While a gradient is previewed: Done, Cancel, Linear / Radial, Swap. */
+    private fun gradientBar(bar: LinearLayout, row: LinearLayout) {
+        val key = "grad:$gradRadial"
+        if (key != selBarKey) {
+            selBarKey = key
+            row.removeAllViews()
+            fun chip(label: S, selected: Boolean, run: () -> Unit) = row.addView(Widgets.chip(context, theme, tr(label), selected) { run() }.apply {
+                contentDescription = tr(label)
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, theme.touchTarget).apply { marginStart = theme.dp(2); marginEnd = theme.dp(2) })
+            chip(S.GRAD_DONE, true) { gradientFinish(commit = true) }
+            chip(S.GRAD_CANCEL, false) { gradientFinish(commit = false) }
+            chip(S.GRAD_LINEAR, !gradRadial) { gradRadial = false; selBarKey = ""; refreshSelectionBar(); sendGradient() }
+            chip(S.GRAD_RADIAL, gradRadial) { gradRadial = true; selBarKey = ""; refreshSelectionBar(); sendGradient() }
+            chip(S.GRAD_SWAP, false) {
+                val x = gradPts[0]; val y = gradPts[1]
+                gradPts[0] = gradPts[2]; gradPts[1] = gradPts[3]; gradPts[2] = x; gradPts[3] = y
+                sendGradient()
+            }
+        }
+        if (!selBarShown) {
+            selBarShown = true
+            bar.visibility = View.VISIBLE
+            motion.enter(bar, dyDp = -MotionTokens.SHIFT)
+        }
+    }
+
+    private fun gradientSettings(): View = column(context, theme, horizontalPadding = false) {
+        addView(theme.text(context, tr(S.TOOL_GRADIENT), PxTheme.Type.HEADLINE).apply { minHeight = theme.dp(36); gravity = Gravity.CENTER_VERTICAL })
+        addView(theme.text(context, tr(S.GRAD_TYPE), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(8), 0, theme.dp(6)) })
+        addView(Widgets.segmented(context, theme, listOf(false to tr(S.GRAD_LINEAR), true to tr(S.GRAD_RADIAL)), gradRadial) {
+            gradRadial = it
+            showPanel(panel)
+            if (gradActive) sendGradient()
+        })
+        addView(theme.text(context, tr(S.GRAD_END), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(12), 0, theme.dp(6)) })
+        // The start is the current colour; the end: transparent, white, black or a recent colour.
+        val ends = listOf<Pair<Int?, String>>(null to tr(S.GRAD_TRANSPARENT), 0xFFFFFFFF.toInt() to "⬜", 0xFF000000.toInt() to "⬛") +
+            host.brush.recentColors.filter { it != color }.take(5).map { it to "●" }
+        addView(com.paintengine.pxpaint.ui.FlowRow(context, theme.dp(8)).apply {
+            for ((c, label) in ends) addView(Widgets.chip(context, theme, label, c == gradEnd) {
+                gradEnd = c
+                showPanel(panel)
+                if (gradActive) sendGradient()
+            }.apply {
+                if (c != null && label == "●") setTextColor(c or 0xFF000000.toInt())
+                contentDescription = if (c == null) tr(S.GRAD_TRANSPARENT) else String.format("#%06X", c and 0xFFFFFF)
+            })
+        })
     }
 
     // ------------------------------------------------------------ selection
@@ -1575,6 +1778,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val bar = selBar ?: return
         val row = selBarRow ?: return
         val polygon = if (selGesture.phase == SelectionGesture.Phase.POLYGON) selGesture.points.count else 0
+        if (tool == Tool.GRADIENT && gradActive) { gradientBar(bar, row); return }
         val actions = if (tool == Tool.SELECT || selInfo.active || selInfo.moving)
             SelectionAction.available(selInfo.active, selInfo.clipboard, selInfo.moving, selectionEditable(), polygon) else emptyList()
         val key = actions.joinToString(",") { it.name }
@@ -1699,7 +1903,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private fun panelContent(p: Panel): View? = when (p) {
-        Panel.TOOL -> if (tool == Tool.SELECT) selectionSettings() else toolSettings()
+        Panel.TOOL -> when (tool) {
+            Tool.SELECT -> selectionSettings()
+            Tool.FILL -> fillSettings()
+            Tool.GRADIENT -> gradientSettings()
+            else -> toolSettings()
+        }
         Panel.COLOR -> colorPicker()
         Panel.LAYERS -> layersPanel()
         Panel.LIBRARY -> libraryPanel()

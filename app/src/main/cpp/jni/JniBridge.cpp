@@ -674,6 +674,39 @@ JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionT
     });
 }
 
+// Block 13. Bucket fill at canvas pixel (x, y): flags 1 contiguous, 2 antialias, 4 merged.
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeBucketFill(JNIEnv*, jclass, jlong handle, jint x, jint y,
+                                                                               jint argb, jint flags, jint tolerance, jint expand) {
+    return guard("nativeBucketFill", static_cast<jint>(pe::LayerError::BadValue), [&]() -> jint {
+        pe::CanvasDocument::FillOptions o;
+        o.contiguous = (flags & 1) != 0;
+        o.antialias = (flags & 2) != 0;
+        o.merged = (flags & 4) != 0;
+        o.tolerance = tolerance;
+        o.expand = expand;
+        return static_cast<jint>(fromHandle(handle)->bucketFill(x, y, static_cast<uint32_t>(argb), o));
+    });
+}
+
+// Gradient: op 0 set (preview), 1 commit, 2 cancel; g = radial (0/1), x0, y0, x1, y1 (canvas); colours straight ARGB.
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeGradient(JNIEnv* env, jclass, jlong handle, jint op,
+                                                                             jdoubleArray g, jint argb0, jint argb1) {
+    return guard("nativeGradient", static_cast<jint>(pe::LayerError::BadValue), [&]() -> jint {
+        if (op < 0 || op > 2) return static_cast<jint>(pe::LayerError::BadValue);
+        pe::CanvasDocument::GradientSpec s;
+        if (op == 0) {
+            if (!g || env->GetArrayLength(g) < 5) return static_cast<jint>(pe::LayerError::BadValue);
+            double v[5];
+            env->GetDoubleArrayRegion(g, 0, 5, v);
+            s.radial = v[0] != 0.0;
+            s.x0 = v[1]; s.y0 = v[2]; s.x1 = v[3]; s.y1 = v[4];
+            s.argb0 = static_cast<uint32_t>(argb0);
+            s.argb1 = static_cast<uint32_t>(argb1);
+        }
+        return static_cast<jint>(fromHandle(handle)->gradientOp(static_cast<pe::Engine::GradientOp>(op), s));
+    });
+}
+
 // (version << 1) | active: polled by the UI (cheap; changes with undo / redo too).
 JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionVersion(JNIEnv*, jclass, jlong handle) {
     return guard("nativeSelectionVersion", jlong{0},

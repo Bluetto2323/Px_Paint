@@ -16,7 +16,7 @@ enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
     EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE, HISTORY,
-    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT,
+    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT, FILL, GRADIENT,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -102,6 +102,22 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 line(c, 12f, 3.5f, 12f, 20.5f); line(c, 3.5f, 12f, 20.5f, 12f)
                 poly(c, 9.5f, 6f, 12f, 3.5f, 14.5f, 6f); poly(c, 9.5f, 18f, 12f, 20.5f, 14.5f, 18f)
                 poly(c, 6f, 9.5f, 3.5f, 12f, 6f, 14.5f); poly(c, 18f, 9.5f, 20.5f, 12f, 18f, 14.5f)
+            }
+            Icon.FILL -> {
+                // Paint bucket tipped over, with a drop.
+                poly(c, 4.5f, 11f, 11f, 4.5f, 18f, 11.5f, 11.5f, 18f, close = true)
+                line(c, 4.5f, 11f, 18f, 11.5f)
+                path.reset(); path.moveTo(20f, 14f); path.cubicTo(21.5f, 16.5f, 21.5f, 18.5f, 20f, 18.5f)
+                path.cubicTo(18.5f, 18.5f, 18.5f, 16.5f, 20f, 14f); c.drawPath(path, fill)
+            }
+            Icon.GRADIENT -> {
+                // A square whose stripes fade from solid to light.
+                poly(c, 4f, 4f, 20f, 4f, 20f, 20f, 4f, 20f, close = true)
+                for ((k, x) in listOf(7f, 10f, 13f).withIndex()) {
+                    stroke.alpha = 255 - k * 70
+                    line(c, x, 5.5f, x, 18.5f)
+                }
+                stroke.alpha = 255
             }
             Icon.SELECT -> {
                 // Dashed selection rectangle with a pointer at its corner.
