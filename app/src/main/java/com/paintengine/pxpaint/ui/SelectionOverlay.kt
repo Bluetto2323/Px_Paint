@@ -174,7 +174,8 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
         }
         if (hasOutline) {
             val p = preview
-            if (showDim && p != null && canvasW > 0) {
+            // (Not while transforming: the moved dim would leave the rest of the canvas undimmed.)
+            if (showDim && p != null && canvasW > 0 && tf == null) {
                 bitmapMatrix.set(matrix)
                 bitmapMatrix.preScale(canvasW / p.width.toFloat(), canvasH / p.height.toFloat())
                 c.drawBitmap(p, bitmapMatrix, dim)

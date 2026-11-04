@@ -108,45 +108,88 @@ LayerError CanvasDocument::bucketFill(int32_t x, int32_t y, uint32_t argb, const
     uint8_t seed[4];
     std::memcpy(seed, ref(x, y), 4);
     const int32_t tol = std::clamp(o.tolerance, 0, 255);
+    // Match masks, computed a whole tile at a time on first use (tight loop, no per-pixel lookups).
+    std::vector<std::unique_ptr<uint8_t[]>> matchTiles(static_cast<size_t>(cols) * rows);
+    auto matchTile = [&](int32_t tx, int32_t ty) -> const uint8_t* {
+        auto& mt = matchTiles[static_cast<size_t>(ty) * cols + tx];
+        if (mt) return mt.get();
+        mt.reset(new uint8_t[kPx]);
+        const uint8_t* src = nullptr;
+        if (o.merged) { ref(tx * kT, ty * kT); src = merged.tile(tx, ty); }
+        else src = a->store.tile(tx, ty);
+        const auto st = selection_.active() ? selection_.state(tx, ty) : SelectionMask::TileState::Full;
+        const uint8_t* sm = selection_.active() ? selection_.tile(tx, ty) : nullptr;
+        for (size_t i = 0; i < kPx; ++i) {
+            const uint8_t* p = src ? src + i * 4 : kZero;
+            bool m = st != SelectionMask::TileState::Empty && (!sm || sm[i] != 0);
+            for (int c = 0; c < 4 && m; ++c) m = std::abs(int(p[c]) - int(seed[c])) <= tol;
+            mt[i] = m ? 1 : 0;
+        }
+        return mt.get();
+    };
     auto matches = [&](int32_t px, int32_t py) {
-        if (selection_.active() && selection_.at(px, py) == 0) return false;
-        const uint8_t* p = ref(px, py);
-        for (int c = 0; c < 4; ++c)
-            if (std::abs(int(p[c]) - int(seed[c])) > tol) return false;
-        return true;
+        return matchTile(px / kT, py / kT)[static_cast<size_t>(py % kT) * kT + px % kT] != 0;
     };
 
     // Region (255 = filled), lazily allocated per tile; bounds tracked.
     TileMask region;
     region.reset(cols, rows);
     int32_t bx0 = W, by0 = H, bx1 = -1, by1 = -1;
-    auto mark = [&](int32_t px0, int32_t px1, int32_t py) {   // [px0, px1] inclusive
-        uint8_t* r = nullptr;
-        for (int32_t px = px0; px <= px1; ++px) {
-            if (!r || px % kT == 0) r = region.row(px, py);   // the tile's row (index by px % kT)
-            r[px % kT] = 255;
+    auto mark = [&](int32_t px0, int32_t px1, int32_t py) {   // [px0, px1] inclusive, one memset per tile
+        for (int32_t px = px0; px <= px1;) {
+            const int32_t end = std::min(px1, (px / kT) * kT + kT - 1);
+            std::memset(region.row(px, py) + px % kT, 255, static_cast<size_t>(end - px + 1));
+            px = end + 1;
         }
         bx0 = std::min(bx0, px0); bx1 = std::max(bx1, px1); by0 = std::min(by0, py); by1 = std::max(by1, py);
     };
     if (o.contiguous) {
-        // Scanline flood fill with a span stack (4-connected).
+        // Scanline flood fill with a span stack (4-connected), walking tile row segments
+        // through row pointers (match mask and region of the same tile row).
+        auto mrow = [&](int32_t px, int32_t py) { return matchTile(px / kT, py / kT) + static_cast<size_t>(py % kT) * kT; };
+        auto open = [&](int32_t px, int32_t py) {   // matches and not yet filled
+            return mrow(px, py)[px % kT] && !region.row(px, py)[px % kT];
+        };
         std::vector<std::pair<int32_t, int32_t>> stack;
         stack.push_back({x, y});
         while (!stack.empty()) {
             auto [sx, sy] = stack.back();
             stack.pop_back();
-            if (region.get(sx, sy) || !matches(sx, sy)) continue;
+            if (!open(sx, sy)) continue;
             int32_t l = sx, r = sx;
-            while (l > 0 && !region.get(l - 1, sy) && matches(l - 1, sy)) --l;
-            while (r < W - 1 && !region.get(r + 1, sy) && matches(r + 1, sy)) ++r;
+            // Left, a tile segment at a time.
+            while (l > 0) {
+                const int32_t t0 = ((l - 1) / kT) * kT;
+                const uint8_t* m = mrow(l - 1, sy);
+                const uint8_t* g = region.row(l - 1, sy);
+                int32_t px = l - 1;
+                while (px >= t0 && m[px - t0] && !g[px - t0]) --px;
+                l = px + 1;
+                if (px >= t0) break;
+            }
+            // Right.
+            while (r < W - 1) {
+                const int32_t t0 = ((r + 1) / kT) * kT, t1 = std::min(W, t0 + kT);
+                const uint8_t* m = mrow(r + 1, sy);
+                const uint8_t* g = region.row(r + 1, sy);
+                int32_t px = r + 1;
+                while (px < t1 && m[px - t0] && !g[px - t0]) ++px;
+                r = px - 1;
+                if (px < t1) break;
+            }
             mark(l, r, sy);
             for (int32_t ny : {sy - 1, sy + 1}) {
                 if (ny < 0 || ny >= H) continue;
                 bool inSpan = false;
-                for (int32_t px = l; px <= r; ++px) {
-                    const bool m = !region.get(px, ny) && matches(px, ny);
-                    if (m && !inSpan) stack.push_back({px, ny});
-                    inSpan = m;
+                for (int32_t px = l; px <= r;) {
+                    const int32_t t0 = (px / kT) * kT, end = std::min(r, t0 + kT - 1);
+                    const uint8_t* m = mrow(px, ny);
+                    const uint8_t* g = region.row(px, ny);
+                    for (; px <= end; ++px) {
+                        const bool o2 = m[px - t0] && !g[px - t0];
+                        if (o2 && !inSpan) stack.push_back({px, ny});
+                        inSpan = o2;
+                    }
                 }
             }
         }
@@ -174,7 +217,13 @@ LayerError CanvasDocument::bucketFill(int32_t x, int32_t y, uint32_t argb, const
     // Work in a bounding-box buffer (only the region's bounds, never the whole canvas unless it is filled).
     std::vector<uint8_t> cov(static_cast<size_t>(bw) * bh, 0), tmp;
     for (int32_t py = by0; py <= by1; ++py)
-        for (int32_t px = bx0; px <= bx1; ++px) cov[static_cast<size_t>(py - ey0) * bw + (px - ex0)] = region.get(px, py);
+        for (int32_t px = bx0; px <= bx1;) {
+            const int32_t end = std::min(bx1, (px / kT) * kT + kT - 1);
+            const auto& t = region.t[static_cast<size_t>(py / kT) * region.cols + px / kT];
+            if (t) std::memcpy(&cov[static_cast<size_t>(py - ey0) * bw + (px - ex0)], t.get() + static_cast<size_t>(py % kT) * kT + px % kT,
+                               static_cast<size_t>(end - px + 1));
+            px = end + 1;
+        }
     region = {};
     if (grow > 0) {
         // Separable max filter: rows, then columns.
@@ -211,6 +260,10 @@ LayerError CanvasDocument::bucketFill(int32_t x, int32_t y, uint32_t argb, const
     // Paint, tile by tile, with the selection's coverage; one patch.
     float col[4];
     premul(argb, col);
+    const bool selActive = selection_.active();
+    const bool opaque = (argb >> 24) == 0xFF;
+    const uint8_t solid[4] = {static_cast<uint8_t>((argb >> 16) & 0xFF), static_cast<uint8_t>((argb >> 8) & 0xFF),
+                              static_cast<uint8_t>(argb & 0xFF), 255};
     PixelPatch patch;
     std::vector<uint8_t> before(kPx * 4);
     for (int32_t ty = ey0 / kT; ty <= ey1 / kT; ++ty)
@@ -230,8 +283,10 @@ LayerError CanvasDocument::bucketFill(int32_t x, int32_t y, uint32_t argb, const
                 for (int32_t px = x0; px <= x1; ++px) {
                     uint32_t k = cov[static_cast<size_t>(py - ey0) * bw + (px - ex0)];
                     if (!k) continue;
-                    if (selection_.active()) k = k * selection_.at(px, py) / 255;
-                    overCov(d + (static_cast<size_t>(py - ty * kT) * kT + (px - tx * kT)) * 4, col, k / 255.0f);
+                    if (selActive) k = k * selection_.at(px, py) / 255;
+                    uint8_t* dp = d + (static_cast<size_t>(py - ty * kT) * kT + (px - tx * kT)) * 4;
+                    if (k == 255 && opaque) { std::memcpy(dp, solid, 4); continue; }
+                    overCov(dp, col, k / 255.0f);
                 }
             const uint8_t* after = d;
             if (tileEmpty(d)) { a->store.releaseTile(tx, ty); after = nullptr; }

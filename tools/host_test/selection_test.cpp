@@ -843,6 +843,13 @@ void testFillGradient() {
     CanvasDocument::FillOptions bf;
     big.bucketFill(10, 10, 0xFF102030u, bf);   // floods the whole gradient-free? no: tolerance 32 of a smooth gradient
     std::printf("     4096 px: gradient preview %.1f ms, commit %.1f ms; bucket fill %.1f ms\n", setMs, commitMs, ms(f0));
+    CanvasDocument empty;
+    base(empty, 4096, 4096);
+    CanvasDocument::FillOptions ef;
+    ef.expand = 2;
+    const int64_t e0 = pe::nowNs();
+    check(empty.bucketFill(2000, 2000, 0xFF336699u, ef) == LayerError::None && empty.layerPixel(1, 4095, 4095).a == 255,
+          fmt("S12: whole empty 4096 x 4096 layer filled (%.0f ms)", ms(e0)));
 }
 
 void testFromContent() {
