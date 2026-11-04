@@ -709,12 +709,25 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 // Deliver MOVE events as they arrive, not batched per frame.
                 surfaceView?.requestUnbufferedDispatch(e)
                 router.down(id, kind, e.eventTime, e.getX(i), e.getY(i))
+                // A finger held still becomes the eyedropper (Block 12.5).
+                handler.removeCallbacks(holdPickRunnable)
+                if (st.longPressPick && kind == ToolKind.FINGER && tool != Tool.SELECT) {
+                    holdPick.down(e.eventTime, e.getX(i), e.getY(i))
+                    holdPointer = id
+                    holdX = e.getX(i); holdY = e.getY(i)
+                    handler.postDelayed(holdPickRunnable, com.paintengine.pxpaint.core.LongPressPick.HOLD_MS)
+                } else holdPick.cancel()
             }
             MotionEvent.ACTION_POINTER_DOWN -> if (!ignoreUntilUp) {
+                holdPick.cancel()
                 taps.pointerDown(id, e.eventTime, e.getX(i), e.getY(i), kind == ToolKind.FINGER)
                 router.pointerDown(id, kind, e.eventTime, e.getX(i), e.getY(i))
             }
             MotionEvent.ACTION_MOVE -> if (!ignoreUntilUp) {
+                if (holdPick.armed) e.findPointerIndex(holdPointer).takeIf { it >= 0 }?.let { k ->
+                    holdX = e.getX(k); holdY = e.getY(k)
+                    holdPick.move(holdX, holdY)
+                }
                 for (k in 0 until e.pointerCount) taps.pointerMove(e.getPointerId(k), e.getX(k), e.getY(k))
                 router.move()
             }
@@ -723,6 +736,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 taps.pointerUp(id, e.eventTime, canceled)
             }
             MotionEvent.ACTION_UP -> {
+                holdPick.cancel()
                 if (!ignoreUntilUp) {
                     router.up(id, canceled)                   // commits a stroke first (it then is no tap)
                     taps.pointerUp(id, e.eventTime, canceled)?.let { shortcut(it) }
@@ -730,11 +744,27 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 ignoreUntilUp = false
             }
             MotionEvent.ACTION_CANCEL -> {
+                holdPick.cancel()
                 router.cancel()
                 taps.cancel()
                 ignoreUntilUp = false
             }
         }
+    }
+
+    // Eyedropper by holding a finger still: the stroke it began is cancelled (canvas restored exactly).
+    private val holdPick by lazy { com.paintengine.pxpaint.core.LongPressPick(theme.dpF(10f)) }
+    private var holdPointer = -1
+    private var holdX = 0f
+    private var holdY = 0f
+    private val holdPickRunnable = Runnable {
+        if (!holdPick.fire(SystemClock.uptimeMillis()) || closed || picking) return@Runnable
+        router.cancel()
+        taps.cancel()
+        picking = true
+        surfaceView?.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        if (panel != Panel.NONE && spec?.pinned != PinnedPanel.COLOR) setPanel(Panel.NONE)
+        pickAt(holdX, holdY, false)
     }
 
     private fun shortcut(sc: GestureShortcut) {

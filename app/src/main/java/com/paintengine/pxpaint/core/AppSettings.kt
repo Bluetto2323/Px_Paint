@@ -54,6 +54,9 @@ data class AppSettings(
     val quickPinchFit: Boolean = true,      // fast pinch-in: fit the canvas
     val tapFullscreen: Boolean = true,      // four-finger tap: interface on / off
     val stylusButtonPick: Boolean = true,   // stylus side button held: eyedropper
+    val longPressPick: Boolean = true,      // Block 12.5: a finger held still on the canvas: eyedropper
+    /** Block 12.5: the controls setup offered at the first start has been seen. */
+    val controlsSetupDone: Boolean = false,
     // Workspace (Block 8)
     val sliderSide: Side = Side.LEFT,       // quick size / opacity sliders
     val pinnedPanel: PinnedPanel = PinnedPanel.NONE,   // tablets
@@ -89,6 +92,8 @@ data class AppSettings(
         K_PINCH_FIT to quickPinchFit.toString(),
         K_TAP_FULLSCREEN to tapFullscreen.toString(),
         K_STYLUS_PICK to stylusButtonPick.toString(),
+        K_LONG_PRESS_PICK to longPressPick.toString(),
+        K_CONTROLS_SETUP to controlsSetupDone.toString(),
         K_SLIDER_SIDE to sliderSide.name,
         K_PINNED to pinnedPanel.name,
         K_PANEL_WIDTH to panelWidthDp.toString(),
@@ -121,6 +126,8 @@ data class AppSettings(
         const val K_PINCH_FIT = "quick_pinch_fit"
         const val K_TAP_FULLSCREEN = "tap_fullscreen"
         const val K_STYLUS_PICK = "stylus_button_pick"
+        const val K_LONG_PRESS_PICK = "long_press_pick"
+        const val K_CONTROLS_SETUP = "controls_setup_done"
         const val K_SLIDER_SIDE = "slider_side"
         const val K_PINNED = "pinned_panel"
         const val K_PANEL_WIDTH = "panel_width_dp"
@@ -155,6 +162,8 @@ data class AppSettings(
                 quickPinchFit = boolOr(map[K_PINCH_FIT], d.quickPinchFit),
                 tapFullscreen = boolOr(map[K_TAP_FULLSCREEN], d.tapFullscreen),
                 stylusButtonPick = boolOr(map[K_STYLUS_PICK], d.stylusButtonPick),
+                longPressPick = boolOr(map[K_LONG_PRESS_PICK], d.longPressPick),
+                controlsSetupDone = boolOr(map[K_CONTROLS_SETUP], d.controlsSetupDone),
                 sliderSide = enumOr(map[K_SLIDER_SIDE], d.sliderSide),
                 pinnedPanel = enumOr(map[K_PINNED], d.pinnedPanel),
                 panelWidthDp = map[K_PANEL_WIDTH]?.toIntOrNull()?.coerceIn(LayoutPolicy.PANEL_MIN_DP, LayoutPolicy.PANEL_MAX_DP) ?: d.panelWidthDp,

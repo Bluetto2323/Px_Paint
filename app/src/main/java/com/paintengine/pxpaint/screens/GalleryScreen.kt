@@ -69,7 +69,21 @@ class GalleryScreen(host: PxHost) : Screen(host) {
         return root
     }
 
-    override fun onShown() = reload()
+    override fun onShown() {
+        reload()
+        // First start: offer the controls setup once the gallery is on screen (Block 12.5).
+        if (!host.settings.controlsSetupDone) setupHandler.postDelayed(offerSetup, 900)
+    }
+
+    private val setupHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val offerSetup = Runnable { if (!host.settings.controlsSetupDone && !gone) ControlsSetup.show(host) }
+    private var gone = false
+
+    override fun onRemoved() {
+        gone = true
+        setupHandler.removeCallbacks(offerSetup)
+        super.onRemoved()
+    }
 
     fun reload() {
         val firstLoad = !loaded

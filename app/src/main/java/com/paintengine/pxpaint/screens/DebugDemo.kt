@@ -47,6 +47,7 @@ object DebugDemo {
 
     fun start(host: PxHost, s: Script) {
         host.markTipShown(WorkspaceScreen.TIP_GESTURES)   // the first-run tip would cover the panels
+        host.updateSettings(host.settings.copy(controlsSetupDone = true), rebuild = false)   // and the controls setup
         val pin = com.paintengine.pxpaint.core.PinnedPanel.entries.firstOrNull { it.name.equals(s.pin ?: "none", true) }
             ?: com.paintengine.pxpaint.core.PinnedPanel.NONE
         host.updateSettings(host.settings.copy(pinnedPanel = pin), rebuild = false)

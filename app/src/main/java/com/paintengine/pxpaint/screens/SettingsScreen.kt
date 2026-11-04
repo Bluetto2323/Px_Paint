@@ -90,6 +90,11 @@ class SettingsScreen(host: PxHost) : Screen(host) {
 
         // --- Gestures
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_GESTURES)))
+        page.addView(Widgets.row(context, theme, tr(S.CONTROLS_SETUP_OPEN), null, null).apply {
+            isClickable = true
+            background = theme.pressable(null, 0f)
+            setOnClickListener { ControlsSetup.show(host) }
+        })
         page.addView(choice(tr(S.FINGER_MODE), tr(S.FINGER_MODE_DESC), listOf(
             FingerMode.DRAW to tr(S.FINGER_DRAW), FingerMode.PAN to tr(S.FINGER_PAN), FingerMode.GESTURES_ONLY to tr(S.FINGER_GESTURES),
         ), s.fingerMode) { set(s.copy(fingerMode = it)) })
@@ -102,6 +107,7 @@ class SettingsScreen(host: PxHost) : Screen(host) {
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_TAP_REDO), null, s.tapRedo) { set(s.copy(tapRedo = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_PINCH_FIT), tr(S.GESTURE_PINCH_FIT_DESC), s.quickPinchFit) { set(s.copy(quickPinchFit = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_TAP_FULLSCREEN), null, s.tapFullscreen) { set(s.copy(tapFullscreen = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_HOLD_PICK), tr(S.GESTURE_HOLD_PICK_DESC), s.longPressPick) { set(s.copy(longPressPick = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_STYLUS_PICK), tr(S.GESTURE_STYLUS_PICK_DESC), s.stylusButtonPick) { set(s.copy(stylusButtonPick = it)) })
 
         // --- Stylus & pressure

@@ -57,7 +57,7 @@ class AppSettingsTest {
         // Changing a key would silently reset users' settings.
         assertEquals(
             setOf("theme", "ui_size", "language", "dock_side", "tool_labels", "two_finger_rotate", "rotation_snap",
-                "finger_mode", "tap_undo", "tap_redo", "quick_pinch_fit", "tap_fullscreen", "stylus_button_pick", "slider_side", "pinned_panel", "panel_width_dp", "pressure_curve", "pressure_sensitivity", "pressure_smoothing", "render", "backend", "performance_overlay", "large_touch_targets", "motion_level",
+                "finger_mode", "tap_undo", "tap_redo", "quick_pinch_fit", "tap_fullscreen", "stylus_button_pick", "long_press_pick", "controls_setup_done", "slider_side", "pinned_panel", "panel_width_dp", "pressure_curve", "pressure_sensitivity", "pressure_smoothing", "render", "backend", "performance_overlay", "large_touch_targets", "motion_level",
                 "high_contrast"),
             AppSettings().encode().keys,
         )
