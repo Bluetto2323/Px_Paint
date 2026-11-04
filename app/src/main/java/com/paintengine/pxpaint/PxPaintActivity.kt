@@ -155,6 +155,9 @@ class PxPaintActivity : Activity(), PxHost {
             }
         }
         rememberSplashTheme()
+        // Android 12+: our first frame shows the same mark in the same place, so the system splash
+        // is removed at once instead of fading over it (its default fade dimmed the mark).
+        if (Build.VERSION.SDK_INT >= 31 && intro != null) runCatching { splashScreen.setOnExitAnimationListener { it.remove() } }
         pushWith(GalleryScreen(this), Enter.NONE)
         demo?.let { DebugDemo.start(this, it) }
     }
