@@ -335,8 +335,22 @@ void CanvasDocument::updateLocked(bool complete) {
     const int64_t t0 = nowNs();
     viewScratch_.clear();
     for (const auto& l : layers_)
-        if (l->info.visible && l->info.opacity > 0.0f) viewScratch_.push_back({&l->store, l->info.opacity, l->info.blend});
+        if (l->info.visible && l->info.opacity > 0.0f) {
+            canvas::LayerView v{&l->store, l->info.opacity, l->info.blend};
+            // A transform in progress shows through its preview tiles (the layer is untouched).
+            if (move_.active && l->info.id == move_.layerId) {
+                v.preview = &move_.preview;
+                v.previewTiles = move_.previewTiles.data();
+            }
+            viewScratch_.push_back(v);
+        }
     uint64_t px = 0;
+    // Transform preview: the changed tiles, now (it follows the finger).
+    for (const auto& r : move_.dirty) {
+        canvas::Compositor::composite(viewScratch_.data(), viewScratch_.size(), r, backdrop_, composite_);
+        px += static_cast<uint64_t>(r.area());
+    }
+    move_.dirty.clear();
     for (const auto& l : layers_) {
         dirtyScratch_.clear();
         l->store.takeGpuDirty(dirtyScratch_);

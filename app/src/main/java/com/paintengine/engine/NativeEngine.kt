@@ -306,6 +306,10 @@ class NativeEngine(config: Config) : AutoCloseable {
     @Synchronized
     fun selectionMove(dx: Int, dy: Int): Int = handle.let { if (it != 0L) nativeSelectionMove(it, dx, dy) else 1 }
 
+    /** Transform of the lifted content (after MOVE_BEGIN): canvas affine a, b, c, d, tx, ty (Block 12). */
+    @Synchronized
+    fun selectionTransform(m: DoubleArray): Int = handle.let { if (it != 0L) nativeSelectionTransform(it, m) else 1 }
+
     @Synchronized
     fun selectionInfo(): SelectionInfo = handle.let { if (it != 0L) SelectionInfo.of(nativeSelectionInfo(it)) else SelectionInfo.NONE }
 
@@ -427,6 +431,7 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeSelectionOp(handle: Long, op: Int, mode: Int): Long
         @JvmStatic private external fun nativeSelectionMove(handle: Long, dx: Int, dy: Int): Int
         @JvmStatic private external fun nativeSelectionInfo(handle: Long): DoubleArray?
+        @JvmStatic private external fun nativeSelectionTransform(handle: Long, m: DoubleArray): Int
         @JvmStatic private external fun nativeSelectionVersion(handle: Long): Long
         @JvmStatic private external fun nativeSelectionContours(handle: Long): FloatArray?
         @JvmStatic private external fun nativeSelectionPreview(handle: Long, maxSide: Int, size: IntArray): ByteArray?

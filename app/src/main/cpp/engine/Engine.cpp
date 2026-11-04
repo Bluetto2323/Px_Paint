@@ -638,6 +638,12 @@ LayerError Engine::selectionMoveCanvas(int32_t dx, int32_t dy) {
     return e;
 }
 
+LayerError Engine::selectionTransform(const double m[6]) {
+    const LayerError e = doc_.transformTo(canvas::Affine2{m[0], m[1], m[2], m[3], m[4], m[5]});
+    if (e == LayerError::None) queue_.post([this] { scheduler_.requestFrame(); });
+    return e;
+}
+
 bool Engine::viewMatrix(double out[6]) const {
     std::lock_guard<std::mutex> lock(viewMutex_);
     if (!view_.valid()) return false;

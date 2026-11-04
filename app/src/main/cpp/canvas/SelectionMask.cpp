@@ -209,6 +209,53 @@ void SelectionMask::translate(int32_t dx, int32_t dy) {
     version_++;
 }
 
+void SelectionMask::transform(const Affine2& m) {
+    if (!active_) return;
+    RectI b;
+    if (!bounds(b)) return;
+    // Destination bounds: the transformed corners, clipped to the canvas.
+    double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+    const double cx[4] = {double(b.x), double(b.right()), double(b.right()), double(b.x)};
+    const double cy[4] = {double(b.y), double(b.y), double(b.bottom()), double(b.bottom())};
+    for (int i = 0; i < 4; ++i) {
+        const Vec2 p = m.apply({cx[i], cy[i]});
+        x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y);
+    }
+    const int32_t W = static_cast<int32_t>(width_), H = static_cast<int32_t>(height_);
+    const int32_t dx0 = std::clamp(static_cast<int32_t>(std::floor(x0)) - 1, 0, W), dy0 = std::clamp(static_cast<int32_t>(std::floor(y0)) - 1, 0, H);
+    const int32_t dx1 = std::clamp(static_cast<int32_t>(std::ceil(x1)) + 1, 0, W), dy1 = std::clamp(static_cast<int32_t>(std::ceil(y1)) + 1, 0, H);
+    const Affine2 inv = m.inverse();
+    std::vector<Tile> out(tiles_.size());
+    std::vector<uint8_t> buf(kTB);
+    auto cov = [&](int32_t x, int32_t y) -> float { return at(x, y) / 255.0f; };
+    if (dx1 > dx0 && dy1 > dy0)
+        for (int32_t ty = dy0 / kT; ty <= (dy1 - 1) / kT; ++ty)
+            for (int32_t tx = dx0 / kT; tx <= (dx1 - 1) / kT; ++tx) {
+                std::fill(buf.begin(), buf.end(), 0);
+                bool any = false;
+                for (int32_t y = std::max(dy0, ty * kT); y < std::min(dy1, ty * kT + kT); ++y)
+                    for (int32_t x = std::max(dx0, tx * kT); x < std::min(dx1, tx * kT + kT); ++x) {
+                        const Vec2 s = inv.apply({x + 0.5, y + 0.5});
+                        const double fx = s.x - 0.5, fy = s.y - 0.5;
+                        const int32_t ix = static_cast<int32_t>(std::floor(fx)), iy = static_cast<int32_t>(std::floor(fy));
+                        const float ax = static_cast<float>(fx - ix), ay = static_cast<float>(fy - iy);
+                        const float v = (cov(ix, iy) * (1 - ax) + cov(ix + 1, iy) * ax) * (1 - ay) +
+                                        (cov(ix, iy + 1) * (1 - ax) + cov(ix + 1, iy + 1) * ax) * ay;
+                        const uint8_t q = clamp255(v);
+                        if (q) { buf[static_cast<size_t>(y - ty * kT) * kT + static_cast<size_t>(x - tx * kT)] = q; any = true; }
+                    }
+                if (!any) continue;
+                Tile& t = out[index(tx, ty)];
+                t.px.reset(new uint8_t[kTB]);
+                std::memcpy(t.px.get(), buf.data(), kTB);
+                t.state = TileState::Partial;
+                normalize(t);
+            }
+    tiles_ = std::move(out);
+    active_ = anySelected();
+    version_++;
+}
+
 void SelectionMask::setTile(int32_t tx, int32_t ty, const uint8_t* px) {
     if (tx < 0 || ty < 0 || tx >= cols_ || ty >= rows_) return;
     Tile& t = tiles_[index(tx, ty)];

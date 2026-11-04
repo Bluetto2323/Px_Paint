@@ -66,7 +66,7 @@ class RedesignTest {
         // Nothing is lost: every available action is in one of the two.
         assertEquals(all.toSet(), (bar + overflow).toSet())
         val moving = SelectionAction.split(SelectionAction.available(true, true, true, true, 0))
-        assertTrue(moving.second.isEmpty())
+        assertEquals(listOf(SelectionAction.MOVE_DONE, SelectionAction.MOVE_CANCEL, SelectionAction.FLIP_H, SelectionAction.FLIP_V), moving.first)
     }
 
     @Test

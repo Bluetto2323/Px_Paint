@@ -663,6 +663,17 @@ JNIEXPORT jdoubleArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeSe
     });
 }
 
+// Transform of the lifted content (Block 12): canvas affine a, b, c, d, tx, ty (floating -> canvas).
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionTransform(JNIEnv* env, jclass, jlong handle,
+                                                                                       jdoubleArray m) {
+    return guard("nativeSelectionTransform", static_cast<jint>(pe::LayerError::BadValue), [&]() -> jint {
+        if (!m || env->GetArrayLength(m) < 6) return static_cast<jint>(pe::LayerError::BadValue);
+        double v[6];
+        env->GetDoubleArrayRegion(m, 0, 6, v);
+        return static_cast<jint>(fromHandle(handle)->selectionTransform(v));
+    });
+}
+
 // (version << 1) | active: polled by the UI (cheap; changes with undo / redo too).
 JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionVersion(JNIEnv*, jclass, jlong handle) {
     return guard("nativeSelectionVersion", jlong{0},

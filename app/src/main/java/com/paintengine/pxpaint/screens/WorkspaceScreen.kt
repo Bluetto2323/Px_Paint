@@ -33,10 +33,10 @@ import com.paintengine.pxpaint.core.TouchRouter
 import com.paintengine.pxpaint.core.Affine
 import com.paintengine.pxpaint.core.SelectionAction
 import com.paintengine.pxpaint.core.SelectionErrors
-import com.paintengine.pxpaint.core.SelectionGeometry
 import com.paintengine.pxpaint.core.SelectionGesture
 import com.paintengine.pxpaint.core.SelectionMode
 import com.paintengine.pxpaint.core.SelectionShape
+import com.paintengine.pxpaint.core.TransformState
 import com.paintengine.pxpaint.input.StylusInput
 import com.paintengine.pxpaint.core.TileContent
 import com.paintengine.pxpaint.core.BrushEncoding
@@ -128,21 +128,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var selBarShown = false
     private var selRefreshing = false
     private var selRefreshAgain = false
-    // Moving selected content: drag start (screen), offset at the drag start and now (canvas px).
-    private var moveStartX = 0.0
-    private var moveStartY = 0.0
-    private var moveBaseX = 0
-    private var moveBaseY = 0
-    private var moveX = 0
-    private var moveY = 0
-    private val moveTarget = java.util.concurrent.atomic.AtomicLong()
-    private val moveQueued = java.util.concurrent.atomic.AtomicBoolean()
-    private val moveDelta = IntArray(2)
-    // Applies the latest drag offset (made once: no allocation per pointer move).
-    private val moveRunnable = Runnable {
-        moveQueued.set(false)
-        val t = moveTarget.get()
-        engine?.selectionMove((t shr 32).toInt(), t.toInt())
+    // Transforming selected content (Blocks 10, 12): the box and its transform (core/Transform),
+    // applied by the engine off the UI thread, coalesced (only the latest matrix when it is busy).
+    private var transform: TransformState? = null
+    private val xfPending = DoubleArray(6)
+    private val xfSend = DoubleArray(6)
+    private val xfQueued = java.util.concurrent.atomic.AtomicBoolean()
+    private val xfRunnable = Runnable {
+        xfQueued.set(false)
+        synchronized(xfPending) { System.arraycopy(xfPending, 0, xfSend, 0, 6) }
+        engine?.selectionTransform(xfSend)
     }
     private val selMatrix = FloatArray(6)
     private val selToScreen = Affine()
@@ -1311,10 +1306,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private fun selectionDown(pointerId: Int) {
         val p = pos(pointerId) ?: return
         if (selInfo.moving) {
-            moveStartX = p.x
-            moveStartY = p.y
-            moveBaseX = moveX
-            moveBaseY = moveY
+            val tf = transform ?: return
+            if (!toCanvas(p.x, p.y)) return
+            val r = theme.dpF(26f) / selToScreen.scale
+            tf.begin(tf.hit(selPt[0], selPt[1], r, theme.dpF(TRANSFORM_ROTATE_DP) / selToScreen.scale), selPt[0], selPt[1])
             return
         }
         selGesture.shape = selShape
@@ -1330,21 +1325,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (i < 0) return
         router.strokeMovedTo(e.getX(i), e.getY(i))
         if (selInfo.moving) {
-            val engine = engine ?: return
-            if (!engine.viewMatrix(selMatrix)) return
-            selToScreen.set(selMatrix)
-            if (!selToScreen.invertInto(selToCanvas)) return
-            SelectionGeometry.canvasOffset(selToCanvas, e.getX(i) - moveStartX, e.getY(i) - moveStartY, moveDelta)
-            val nx = moveBaseX + moveDelta[0]
-            val ny = moveBaseY + moveDelta[1]
-            if (nx != moveX || ny != moveY) {
-                moveX = nx
-                moveY = ny
-                // Off the UI thread, coalesced: only the latest offset is applied when the worker is busy.
-                moveTarget.set((nx.toLong() shl 32) or (ny.toLong() and 0xFFFFFFFFL))
-                if (moveQueued.compareAndSet(false, true)) layerExec.execute(moveRunnable)
-                selOverlay?.setMoveOffset(nx, ny)
-            }
+            val tf = transform ?: return
+            if (!toCanvas(e.getX(i).toDouble(), e.getY(i).toDouble())) return
+            tf.drag(selPt[0], selPt[1])
+            sendTransform()
             return
         }
         // Every sample (historical first): the lasso follows the finger exactly.
@@ -1354,7 +1338,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private fun selectionUp(pointerId: Int) {
-        if (selInfo.moving) return
+        if (selInfo.moving) { transform?.end(); return }
         val p = pos(pointerId)
         val n = selGesture.points.count
         val x = p?.x?.toFloat() ?: if (n > 0) selGesture.points.x(n - 1) else 0f
@@ -1373,6 +1357,27 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (selGesture.phase != SelectionGesture.Phase.POLYGON) selGesture.cancel()
         selOverlay?.invalidate()
         refreshSelectionBar()
+    }
+
+    private val selPt = DoubleArray(2)
+
+    /** Screen point -> canvas point in [selPt] (through the current view). */
+    private fun toCanvas(x: Double, y: Double): Boolean {
+        val e = engine ?: return false
+        if (!e.viewMatrix(selMatrix)) return false
+        selToScreen.set(selMatrix)
+        if (!selToScreen.invertInto(selToCanvas)) return false
+        selPt[0] = selToCanvas.x(x, y)
+        selPt[1] = selToCanvas.y(x, y)
+        return true
+    }
+
+    /** The overlay follows at once; the engine gets the latest matrix on its worker. */
+    private fun sendTransform() {
+        val tf = transform ?: return
+        synchronized(xfPending) { tf.matrix(xfPending) }
+        selOverlay?.invalidate()
+        if (xfQueued.compareAndSet(false, true)) layerExec.execute(xfRunnable)
     }
 
     /** The finished shape goes to the engine (off the UI thread); the preview stays until the outline arrives. */
@@ -1412,6 +1417,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             SelectionAction.POLYGON_CLOSE -> { if (selGesture.closePolygon()) commitSelection(); refreshSelectionBar(); selOverlay?.invalidate(); return }
             SelectionAction.POLYGON_UNDO -> { selGesture.undoVertex(); refreshSelectionBar(); selOverlay?.invalidate(); return }
             SelectionAction.POLYGON_CANCEL -> { selGesture.cancel(); refreshSelectionBar(); selOverlay?.invalidate(); return }
+            SelectionAction.FLIP_H -> { transform?.let { it.flipHorizontal(); sendTransform() }; return }
+            SelectionAction.FLIP_V -> { transform?.let { it.flipVertical(); sendTransform() }; return }
+            SelectionAction.SNAP -> { transform?.let { it.snap = !it.snap }; selBarKey = ""; refreshSelectionBar(); return }
+            SelectionAction.KEEP_RATIO -> { transform?.let { it.proportional = !it.proportional }; selBarKey = ""; refreshSelectionBar(); return }
+            SelectionAction.SKEW -> { transform?.let { it.skewMode = !it.skewMode }; selBarKey = ""; refreshSelectionBar(); return }
             else -> Unit
         }
         val op = when (a) {
@@ -1439,6 +1449,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             val ms = (System.nanoTime() - t0) / 1e6
             val changesLayers = a == SelectionAction.PASTE || a == SelectionAction.DUPLICATE
             val table = if (changesLayers) e.layers() else null
+            // The box of a new transform: the selection's bounds as lifted.
+            val lifted = if (a == SelectionAction.MOVE && r.error == 0) e.selectionInfo() else null
             host.runOnMain {
                 if (closed) return@runOnMain
                 logSelection(a.name, ms, r.error)
@@ -1454,7 +1466,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     a == SelectionAction.FROM_CONTENT -> host.overlays.message(tr(S.SEL_DONE_FROM_CONTENT))
                     a == SelectionAction.MOVE -> host.overlays.message(tr(S.SEL_HINT_MOVE))
                 }
-                if (a == SelectionAction.MOVE && r.error == 0) { moveX = 0; moveY = 0; moveBaseX = 0; moveBaseY = 0 }
+                if (lifted != null && lifted.width > 0) transform = TransformState(lifted.x.toDouble(), lifted.y.toDouble(),
+                    (lifted.x + lifted.width).toDouble(), (lifted.y + lifted.height).toDouble())
+                if (a == SelectionAction.MOVE_DONE || a == SelectionAction.MOVE_CANCEL) transform = null
                 table?.let { t -> LayerStack.parse(t)?.let { layerStack = it } }
                 if (changesLayers && spec?.pinned == PinnedPanel.LAYERS) refreshPinned()
                 if (changesLayers && panel == Panel.LAYERS) showPanel(Panel.LAYERS)
@@ -1482,9 +1496,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (closed) return@runOnMain
                 selVersion = version
                 selInfo = info
-                if (!info.moving) { moveX = 0; moveY = 0 }
+                if (!info.moving) transform = null
+                selOverlay?.transform = transform
                 selOverlay?.setSelection(contours, preview, size[0], size[1], meta.width, meta.height)
-                selOverlay?.setMoveOffset(if (info.moving) moveX else 0, if (info.moving) moveY else 0)
                 refreshSelectionBar()
                 if (selRefreshAgain) { selRefreshAgain = false; refreshSelection() }
             }
@@ -1549,7 +1563,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             if (overflow.isNotEmpty()) {
                 val more = IconButton(context, theme, Icon.MORE, tr(S.SEL_MORE_ACTIONS)).apply { round = true }
                 more.setOnClickListener {
-                    host.overlays.menu(more, overflow.map { a -> OverlayHost.MenuItem(tr(a.label)) { runSelection(a) } })
+                    val tf = transform
+                    host.overlays.menu(more, overflow.map { a ->
+                        val on = when (a) {
+                            SelectionAction.SNAP -> tf?.snap == true
+                            SelectionAction.KEEP_RATIO -> tf?.proportional == true
+                            SelectionAction.SKEW -> tf?.skewMode == true
+                            else -> false
+                        }
+                        OverlayHost.MenuItem(tr(a.label), if (on) Icon.CHECK else null, selected = on) { runSelection(a) }
+                    })
                 }
                 row.addView(more)
             }
@@ -2433,6 +2456,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     companion object {
         /** Longer side of the coverage image used to dim the unselected area. */
         const val SELECTION_PREVIEW_PX = 512
+        /** Rotation handle distance beyond the top edge of the transform box. */
+        const val TRANSFORM_ROTATE_DP = 36f
         /** How long the zoom chip stays after the view stops changing. */
         const val ZOOM_CHIP_HOLD_MS = 1500L
         const val TIP_GESTURES = "workspace.gestures"

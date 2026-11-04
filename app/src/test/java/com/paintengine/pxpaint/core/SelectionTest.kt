@@ -167,7 +167,8 @@ class SelectionTest {
         val locked = SelectionAction.available(true, true, false, editable = false, polygonPoints = 0)
         for (a in listOf(SelectionAction.MOVE, SelectionAction.CUT, SelectionAction.CLEAR)) assertFalse(a in locked)
         assertTrue(SelectionAction.COPY in locked && SelectionAction.PASTE in locked)
-        assertEquals(listOf(SelectionAction.MOVE_DONE, SelectionAction.MOVE_CANCEL), SelectionAction.available(true, true, true, true, 0))
+        assertEquals(listOf(SelectionAction.MOVE_DONE, SelectionAction.MOVE_CANCEL, SelectionAction.FLIP_H, SelectionAction.FLIP_V,
+            SelectionAction.SNAP, SelectionAction.KEEP_RATIO, SelectionAction.SKEW), SelectionAction.available(true, true, true, true, 0))
         assertEquals(listOf(SelectionAction.POLYGON_UNDO, SelectionAction.POLYGON_CANCEL), SelectionAction.available(true, true, false, true, 2))
         assertEquals(SelectionAction.POLYGON_CLOSE, SelectionAction.available(false, false, false, true, 3).first())
     }

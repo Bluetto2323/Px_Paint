@@ -224,6 +224,8 @@ public:
     // The same in whole canvas pixels (the UI converts its drags itself, so a
     // move can continue over several drags and view changes).
     LayerError selectionMoveCanvas(int32_t dx, int32_t dy);
+    // Any affine transform of the lifted content, canvas pixels (a, b, c, d, tx, ty; Block 12).
+    LayerError selectionTransform(const double m[6]);
     CanvasDocument::SelectionInfo selectionInfo() { return doc_.selectionInfo(); }
     uint64_t selectionVersion() const { return doc_.selectionVersion(); }
     void selectionContours(std::vector<float>& out) { doc_.selectionContours(out); }

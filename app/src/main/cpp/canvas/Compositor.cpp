@@ -97,7 +97,10 @@ void Compositor::compositeTile(const LayerView* layers, size_t count, const Rect
     size_t n = 0;
     for (size_t i = 0; i < count && n < 256; ++i) {
         if (!layers[i].store || !(layers[i].opacity > 0.0f)) continue;
-        const uint8_t* t = layers[i].store->tile(tx, ty);
+        const LayerView& lv = layers[i];
+        const uint8_t* t = lv.preview && lv.previewTiles && lv.previewTiles[static_cast<size_t>(ty) * lv.preview->columns() + tx]
+                               ? lv.preview->tile(tx, ty)
+                               : lv.store->tile(tx, ty);
         if (!t) continue;
         src[n] = t;
         opacity[n] = std::min(1.0f, layers[i].opacity);

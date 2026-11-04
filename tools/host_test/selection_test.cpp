@@ -545,6 +545,103 @@ void testMove() {
     d.moveCancel();
 }
 
+void testTransform() {
+    section("S11 transform (Block 12): scale, rotate, flip, skew; non-destructive preview; one undo step");
+    const uint32_t W = 800, H = 600;
+    CanvasDocument d;
+    base(d, W, H);
+    d.fill({0, 0, 800, 600}, 0xFF203040u);
+    d.fill({100, 100, 100, 100}, 0xFFFFC000u);   // yellow square 100..200
+    uint32_t other = 0;
+    d.addLayer(0, "Other", other);
+    d.fill({600, 400, 100, 100}, 0xFF00FF00u);
+    d.setActive(1);
+    sel(d, rect(100, 100, 200, 200));
+    d.clearHistory();
+    const Snapshot s0 = snap(d);
+    const uint64_t layer0 = d.layerChecksum(1), otherPx = d.layerChecksum(other);
+    using pe::canvas::Affine2;
+    // Scale 2x about the square's centre (150, 150): 50..250.
+    const Affine2 sc = Affine2::compose(Affine2::translate(150, 150), Affine2::compose(Affine2::scale(2.0), Affine2::translate(-150, -150)));
+    check(d.moveBegin() == LayerError::None && d.transformTo(sc) == LayerError::None, "S11: scale 2x");
+    const Rgba8 yellow = Rgba8::fromArgb(0xFFFFC000u);
+    check(d.pixel(60, 60) == yellow && d.pixel(240, 240) == yellow && d.pixel(45, 150) != yellow,
+          "S11: the preview shows the square scaled to 50..250");
+    check(d.layerChecksum(1) == layer0 && d.historyStats().undoSteps == 0,
+          "S11: non-destructive preview: the layer's pixels are untouched, nothing recorded");
+    // Rotate 90 degrees, flip, skew: each replaces the previous transform.
+    const Affine2 rot = Affine2::compose(Affine2::translate(400, 300), Affine2::compose(Affine2::rotate(1.5707963267948966), Affine2::translate(-150, -150)));
+    check(d.transformTo(rot) == LayerError::None && d.pixel(400, 300) == yellow && d.pixel(100 + 5, 100 + 5) != yellow,
+          "S11: rotate 90 degrees about the square's centre to (400, 300)");
+    const Affine2 flip{-1, 0, 0, 1, 300, 0};   // horizontal flip about x = 150
+    check(d.transformTo(flip) == LayerError::None && d.pixel(150, 150) == yellow && d.layerChecksum(1) == layer0, "S11: flip horizontally");
+    const Affine2 skew{1, 0, 0.5, 1, -75, 0};  // horizontal skew: x' = x + 0.5 (y - 150)
+    check(d.transformTo(skew) == LayerError::None && d.pixel(215, 195) == yellow && d.pixel(190, 105) != yellow && d.pixel(85, 105) == yellow,
+          "S11: skew horizontally (bottom edge shifted right, top edge left)");
+    check(d.transformTo(Affine2{0, 0, 0, 0, 0, 0}) == LayerError::BadValue, "S11: a degenerate (zero-area) transform is refused");
+    // Cancel: exactly the original picture, nothing recorded.
+    d.moveCancel();
+    check(snap(d) == s0 && d.historyStats().undoSteps == 0, "S11: cancel: identical picture and selection, no step");
+    // Confirm a scale + rotation: one step; outside unchanged; selection transformed.
+    const auto before = grab(d, 1, W, H);
+    const Affine2 sr = Affine2::compose(Affine2::translate(450, 300), Affine2::compose(Affine2::rotate(0.5),
+                       Affine2::compose(Affine2::scale(1.5), Affine2::translate(-150, -150))));
+    d.moveBegin();
+    d.transformTo(sr);
+    const uint64_t shown = d.compositeChecksum();
+    check(d.moveCommit() == LayerError::None, "S11: confirm a scale 1.5 + rotation 0.5 rad");
+    check(d.compositeChecksum() == shown, "S11: the confirmed picture is exactly the preview");
+    const auto after = grab(d, 1, W, H);
+    // Unrelated pixels: outside both the old square and the new footprint (radius ~ 106 px around (450, 300)).
+    size_t unrelated = 0;
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W; ++x) {
+            const bool oldPlace = x >= 99 && x < 201 && y >= 99 && y < 201;
+            const double ddx = x + 0.5 - 450, ddy = y + 0.5 - 300;
+            const bool newPlace = ddx * ddx + ddy * ddy < 110.0 * 110.0;
+            if (!oldPlace && !newPlace) unrelated += !(before[y * W + x] == after[y * W + x]);
+        }
+    check(unrelated == 0 && d.layerChecksum(other) == otherPx, "S11: every unrelated pixel unchanged (this layer and the others)");
+    check(d.selectionAt(450, 300) == 255 && d.selectionAt(150, 150) == 0 && d.selectionAt(450 + 100, 300) == 0,
+          "S11: the selection follows the transform");
+    bool transparentEdge = false;
+    for (int x = 450; x < 600 && !transparentEdge; ++x) {
+        const Rgba8 p = d.layerPixel(1, x, 300);
+        transparentEdge = p.a > 0 && p.a < 255;
+    }
+    (void)transparentEdge;
+    const auto e = d.historyEntries();
+    check(e.size() == 1 && e[0].kind == HistoryKind::MoveSelection, "S11: the whole transform is ONE history step");
+    const Snapshot s1 = snap(d);
+    check(d.undo() == 1 && snap(d) == s0, "S11: undo: pixels and selection back exactly");
+    check(d.redo() == 1 && snap(d) == s1, "S11: redo: transformed again");
+    // Transparency is kept: a half-transparent square scaled keeps alpha 128 inside.
+    CanvasDocument t;
+    base(t, 400, 400);
+    t.fill({50, 50, 100, 100}, 0x80FF0000u);
+    sel(t, rect(50, 50, 150, 150));
+    t.moveBegin();
+    t.transformTo(Affine2::compose(Affine2::translate(250, 250), Affine2::compose(Affine2::scale(1.3), Affine2::translate(-100, -100))));
+    t.moveCommit();
+    check(t.layerPixel(1, 250, 250).a == 128 && t.layerPixel(1, 100, 100).a == 0, "S11: transparency preserved (alpha 128 stays 128)");
+    // Timing: a 1024 px selection rotated on a 4096 canvas.
+    CanvasDocument big;
+    base(big, 4096, 4096);
+    big.fill({1000, 1000, 1024, 1024}, 0xFF3366CCu);
+    sel(big, rect(1000, 1000, 2024, 2024));
+    big.moveBegin();
+    double worst = 0;
+    for (int i = 1; i <= 10; ++i) {
+        const int64_t t0 = pe::nowNs();
+        big.transformTo(Affine2::compose(Affine2::translate(2048, 2048), Affine2::compose(Affine2::rotate(i * 0.1), Affine2::translate(-1512, -1512))));
+        worst = std::max(worst, ms(t0));
+    }
+    const int64_t c0 = pe::nowNs();
+    big.moveCommit();
+    std::printf("     1024 px rotated on 4096: transform step max %.1f ms, confirm %.1f ms\n", worst, ms(c0));
+    check(worst < 2000, "S11: rotation steps of a 1024 px selection complete");
+}
+
 void testHistory() {
     section("S7 undo / redo: every selection step, mixed with pixel steps, long sequences");
     const uint32_t W = 700, H = 500;
@@ -735,6 +832,7 @@ int main() {
     testClearCopyPaste();
     testMove();
     testHistory();
+    testTransform();
     testFromContent();
     testLarge();
     testBrushLatency();

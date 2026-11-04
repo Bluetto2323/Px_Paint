@@ -53,6 +53,11 @@ struct LayerView {
     const RasterStore* store = nullptr;
     float opacity = 1.0f;
     BlendMode mode = BlendMode::Normal;
+    // Non-destructive transform preview (Block 12): where previewTiles[tile] is
+    // set, the tile is read from `preview` (absent there = transparent) instead
+    // of `store`, which stays untouched until the transform is confirmed.
+    const RasterStore* preview = nullptr;
+    const uint8_t* previewTiles = nullptr;
 };
 
 struct Backdrop {

@@ -15,6 +15,8 @@ import com.paintengine.pxpaint.core.SelectionGesture
 import com.paintengine.pxpaint.core.SelectionGeometry
 import com.paintengine.pxpaint.core.SelectionOutline
 import com.paintengine.pxpaint.core.SelectionShape
+import com.paintengine.pxpaint.core.TransformHandle
+import com.paintengine.pxpaint.core.TransformState
 import java.nio.ByteBuffer
 
 /**
@@ -58,8 +60,11 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
     private val outlineScreen = Path()
     private var hasOutline = false
     private var outlineDirty = true
-    private var offsetX = 0
-    private var offsetY = 0
+    /** Selected content being transformed (Block 12): outline, dim and the box with its handles follow it. */
+    var transform: TransformState? = null
+        set(v) { field = v; outlineDirty = true; invalidate() }
+    private val tfm = DoubleArray(6)
+    private val combined = FloatArray(6)
     private var preview: Bitmap? = null
     private var canvasW = 0
     private var canvasH = 0
@@ -85,6 +90,9 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
         style = Paint.Style.STROKE; strokeWidth = theme.dpF(2f); color = theme.accent
     }
     private val shapePath = Path()
+    private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = theme.dpF(1.5f); color = theme.accent
+    }
     private val box = DoubleArray(4)
     private val ring = FloatArray(128 * 2)
     private val handleR = theme.dpF(5f)
@@ -126,14 +134,6 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
         invalidate()
     }
 
-    /** Offset (canvas px) of content being moved: the outline and the dim follow it. */
-    fun setMoveOffset(dx: Int, dy: Int) {
-        if (dx == offsetX && dy == offsetY) return
-        offsetX = dx
-        offsetY = dy
-        outlineDirty = true
-        invalidate()
-    }
 
     override fun onDetachedFromWindow() {
         removeCallbacks(tick)
@@ -152,11 +152,19 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
         toScreen.set(m)
         if (!toScreen.invertInto(toCanvas)) return
         // The view moved (pan / zoom / rotation) or the selection changed: map the outline again.
+        // Outline matrix: view · transform of the content being transformed (if any).
+        val tf = transform
+        if (tf != null) {
+            tf.matrix(tfm)
+            combined[0] = (m[0] * tfm[0] + m[2] * tfm[1]).toFloat(); combined[1] = (m[1] * tfm[0] + m[3] * tfm[1]).toFloat()
+            combined[2] = (m[0] * tfm[2] + m[2] * tfm[3]).toFloat(); combined[3] = (m[1] * tfm[2] + m[3] * tfm[3]).toFloat()
+            combined[4] = (m[0] * tfm[4] + m[2] * tfm[5] + m[4]).toFloat(); combined[5] = (m[1] * tfm[4] + m[3] * tfm[5] + m[5]).toFloat()
+        } else System.arraycopy(m, 0, combined, 0, 6)
         var changed = outlineDirty
-        for (i in 0 until 6) if (m[i] != lastMatrix[i]) { changed = true; lastMatrix[i] = m[i] }
+        for (i in 0 until 6) if (combined[i] != lastMatrix[i]) { changed = true; lastMatrix[i] = combined[i] }
         if (changed) {
-            matrixValues[0] = m[0]; matrixValues[1] = m[2]; matrixValues[2] = m[4] + m[0] * offsetX + m[2] * offsetY
-            matrixValues[3] = m[1]; matrixValues[4] = m[3]; matrixValues[5] = m[5] + m[1] * offsetX + m[3] * offsetY
+            matrixValues[0] = combined[0]; matrixValues[1] = combined[2]; matrixValues[2] = combined[4]
+            matrixValues[3] = combined[1]; matrixValues[4] = combined[3]; matrixValues[5] = combined[5]
             matrixValues[6] = 0f; matrixValues[7] = 0f; matrixValues[8] = 1f
             matrix.setValues(matrixValues)
             outlineCanvas.transform(matrix, outlineScreen)
@@ -173,6 +181,7 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
             c.drawPath(outlineScreen, black)
         }
         drawGesture(c)
+        if (tf != null) drawTransformBox(c, tf)
         // Ants: about 10 steps per second, only while there is an outline and nothing is painted.
         removeCallbacks(tick)
         if (hasOutline && !paused && isShown) postDelayed(tick, ANTS_STEP_MS)
@@ -222,6 +231,33 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
         }
     }
 
+    /** The transform box: outline, 4 corner and 4 edge handles, the rotation handle above the top edge. */
+    private fun drawTransformBox(c: Canvas, tf: TransformState) {
+        fun sx(x: Double, y: Double) = toScreen.x(x, y).toFloat()
+        fun sy(x: Double, y: Double) = toScreen.y(x, y).toFloat()
+        val hw = tf.w / 2; val hh = tf.h / 2
+        shapePath.reset()
+        for (k in 0 until 4) {
+            val u = CORNER_U[k] * hw; val v = CORNER_V[k] * hh
+            val x = tf.mapX(u, v); val y = tf.mapY(u, v)
+            if (k == 0) shapePath.moveTo(sx(x, y), sy(x, y)) else shapePath.lineTo(sx(x, y), sy(x, y))
+        }
+        shapePath.close()
+        c.drawPath(shapePath, boxPaint)
+        val rd = theme.dpF(36f) / toScreen.scale
+        val topX = tf.handleX(TransformHandle.N, rd); val topY = tf.handleY(TransformHandle.N, rd)
+        val rx = tf.handleX(TransformHandle.ROTATE, rd); val ry = tf.handleY(TransformHandle.ROTATE, rd)
+        c.drawLine(sx(topX, topY), sy(topX, topY), sx(rx, ry), sy(rx, ry), boxPaint)
+        for (hd in TransformHandle.entries) {
+            if (hd == TransformHandle.NONE || hd == TransformHandle.MOVE) continue
+            val x = tf.handleX(hd, rd); val y = tf.handleY(hd, rd)
+            if (hd == TransformHandle.ROTATE) {
+                c.drawCircle(sx(x, y), sy(x, y), handleR * 1.4f, handleFill)
+                c.drawCircle(sx(x, y), sy(x, y), handleR * 1.4f, closeRing)
+            } else drawHandle(c, sx(x, y), sy(x, y))
+        }
+    }
+
     private fun drawHandle(c: Canvas, x: Float, y: Float) {
         c.drawCircle(x, y, handleR, handleFill)
         c.drawCircle(x, y, handleR, handleRing)
@@ -230,5 +266,7 @@ class SelectionOverlay(context: Context, private val theme: PxTheme) : View(cont
     companion object {
         /** Marching-ants step (about 10 per second: calm, and cheap on the UI thread). */
         const val ANTS_STEP_MS = 100L
+        private val CORNER_U = doubleArrayOf(-1.0, 1.0, 1.0, -1.0)
+        private val CORNER_V = doubleArrayOf(-1.0, -1.0, 1.0, 1.0)
     }
 }

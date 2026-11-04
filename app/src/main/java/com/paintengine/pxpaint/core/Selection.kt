@@ -291,14 +291,16 @@ enum class SelectionAction(val label: S) {
     MOVE(S.SEL_ACT_MOVE), COPY(S.SEL_ACT_COPY), COPY_MERGED(S.SEL_ACT_COPY_MERGED), CUT(S.SEL_ACT_CUT), PASTE(S.SEL_ACT_PASTE),
     DUPLICATE(S.SEL_ACT_DUPLICATE), CLEAR(S.SEL_ACT_CLEAR), INVERT(S.SEL_ACT_INVERT), DESELECT(S.SEL_ACT_DESELECT),
     SELECT_ALL(S.SEL_ACT_SELECT_ALL), FROM_CONTENT(S.SEL_ACT_FROM_CONTENT),
-    MOVE_DONE(S.SEL_ACT_MOVE_DONE), MOVE_CANCEL(S.SEL_ACT_MOVE_CANCEL), POLYGON_CLOSE(S.SEL_ACT_POLYGON_CLOSE),
+    MOVE_DONE(S.SEL_ACT_MOVE_DONE), MOVE_CANCEL(S.SEL_ACT_MOVE_CANCEL),
+    FLIP_H(S.SEL_ACT_FLIP_H), FLIP_V(S.SEL_ACT_FLIP_V), SNAP(S.SEL_ACT_SNAP), KEEP_RATIO(S.SEL_ACT_KEEP_RATIO), SKEW(S.SEL_ACT_SKEW),
+    POLYGON_CLOSE(S.SEL_ACT_POLYGON_CLOSE),
     POLYGON_UNDO(S.SEL_ACT_POLYGON_UNDO), POLYGON_CANCEL(S.SEL_ACT_POLYGON_CANCEL);
 
     /** Shown in the contextual bar itself; the others go to its overflow menu (minimal bar on phones). */
     val primary: Boolean get() = this !in OVERFLOW
 
     companion object {
-        private val OVERFLOW = setOf(COPY_MERGED, CUT, DUPLICATE, INVERT)
+        private val OVERFLOW = setOf(COPY_MERGED, CUT, DUPLICATE, INVERT, SNAP, KEEP_RATIO, SKEW)
 
         /** Splits [actions] into the bar's chips and its overflow menu. */
         fun split(actions: List<SelectionAction>): Pair<List<SelectionAction>, List<SelectionAction>> =
@@ -309,7 +311,7 @@ enum class SelectionAction(val label: S) {
          * unlocked (pixel edits); [polygonPoints]: vertices of a polygon being drawn.
          */
         fun available(active: Boolean, clipboard: Boolean, moving: Boolean, editable: Boolean, polygonPoints: Int): List<SelectionAction> = when {
-            moving -> listOf(MOVE_DONE, MOVE_CANCEL)
+            moving -> listOf(MOVE_DONE, MOVE_CANCEL, FLIP_H, FLIP_V, SNAP, KEEP_RATIO, SKEW)
             polygonPoints > 0 -> buildList {
                 if (polygonPoints >= 3) add(POLYGON_CLOSE)
                 add(POLYGON_UNDO)

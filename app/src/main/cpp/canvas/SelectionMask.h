@@ -50,6 +50,8 @@ public:
     void combine(const SelectionMask& shape, Mode mode);
     /** Moves the selection by whole pixels (what falls outside is dropped). */
     void translate(int32_t dx, int32_t dy);
+    /** Maps the selection through [m] (source -> destination), bilinear coverage (Block 12). */
+    void transform(const Affine2& m);
 
     // --- shape building (on a scratch mask, then combine) ------------------
     /** Rasterises a closed polygon (x, y pairs, canvas pixels) into this mask (replaces it). */

@@ -314,8 +314,11 @@ LayerError CanvasDocument::moveBegin() {
     if (!selection_.bounds(b)) return LayerError::BadValue;
     move_ = {};
     move_.layerId = a->info.id;
+    move_.bounds = b;
     selection_.encode(move_.selectionBefore);
     move_.floating.reset(composite_.width(), composite_.height());
+    move_.preview.reset(composite_.width(), composite_.height());
+    move_.previewTiles.assign(composite_.tileCount(), 0);
     const int32_t tx0 = b.x / kT, ty0 = b.y / kT, tx1 = (b.right() - 1) / kT, ty1 = (b.bottom() - 1) / kT;
     for (int32_t ty = ty0; ty <= ty1; ++ty)
         for (int32_t tx = tx0; tx <= tx1; ++tx) {
@@ -327,114 +330,162 @@ LayerError CanvasDocument::moveBegin() {
             scaleTile(f, selection_.tile(tx, ty), 255);
             if (tileEmpty(f)) move_.floating.releaseTile(tx, ty);
         }
-    // Nothing changes on screen yet: at offset 0 the layer is its original.
+    // Nothing changes on screen yet: untransformed, the preview is the layer itself.
     move_.active = true;
     return LayerError::None;
 }
 
-// Layer tile `index` for the current offset: original at (0, 0); otherwise the
-// hole (original x (1 - selection)) with the shifted floating pixels over it.
+namespace {
+// Premultiplied src-over of `s` onto `d`.
+inline void over(uint8_t* d, const uint8_t* s) {
+    const uint32_t sa = s[3];
+    if (sa == 0) return;
+    if (sa == 255) { std::memcpy(d, s, 4); return; }
+    for (int c = 0; c < 4; ++c) d[c] = static_cast<uint8_t>(std::min<uint32_t>(255, s[c] + (d[c] * (255 - sa) + 127u) / 255u));
+}
+// Integer translation: (dx, dy) when `m` is one, exactly.
+bool integerShift(const canvas::Affine2& m, int32_t& dx, int32_t& dy) {
+    if (m.a != 1.0 || m.b != 0.0 || m.c != 0.0 || m.d != 1.0) return false;
+    if (m.tx != std::floor(m.tx) || m.ty != std::floor(m.ty)) return false;
+    dx = static_cast<int32_t>(m.tx);
+    dy = static_cast<int32_t>(m.ty);
+    return true;
+}
+}  // namespace
+
+// Preview tile `index`: the layer's tile with the hole, the transformed floating pixels over it.
 void CanvasDocument::composeMoveTileLocked(Layer& l, int32_t index, std::vector<uint8_t>& px) {
-    RasterStore& ls = l.store;
+    const RasterStore& ls = l.store;
     const int32_t tx = index % ls.columns(), ty = index / ls.columns();
-    auto it = move_.orig.find(index);
-    if (it == move_.orig.end()) {
-        // First touch: keep the original.
-        std::unique_ptr<uint8_t[]> keep;
-        if (const uint8_t* cur = ls.tile(tx, ty)) {
-            keep.reset(new uint8_t[kPx * 4]);
-            std::memcpy(keep.get(), cur, kPx * 4);
-        }
-        it = move_.orig.emplace(index, std::move(keep)).first;
-    }
-    const uint8_t* orig = it->second.get();
     px.resize(kPx * 4);
-    if (orig) std::memcpy(px.data(), orig, kPx * 4);
+    if (const uint8_t* orig = ls.tile(tx, ty)) std::memcpy(px.data(), orig, kPx * 4);
     else std::fill(px.begin(), px.end(), 0);
-    const int32_t dx = move_.dx, dy = move_.dy;
-    if (dx != 0 || dy != 0) {
-        // Hole.
-        const auto st = selection_.state(tx, ty);
-        if (st == SelectionMask::TileState::Full) std::fill(px.begin(), px.end(), 0);
-        else if (st == SelectionMask::TileState::Partial) {
-            const uint8_t* m = selection_.tile(tx, ty);
-            for (size_t i = 0; i < kPx; ++i) {
-                const uint32_t k = 255u - m[i];
-                if (k == 255) continue;
-                uint8_t* p = px.data() + i * 4;
-                for (int c = 0; c < 4; ++c) p[c] = static_cast<uint8_t>((p[c] * k + 127u) / 255u);
-            }
+    // Hole.
+    const auto st = selection_.state(tx, ty);
+    if (st == SelectionMask::TileState::Full) std::fill(px.begin(), px.end(), 0);
+    else if (st == SelectionMask::TileState::Partial) {
+        const uint8_t* m = selection_.tile(tx, ty);
+        for (size_t i = 0; i < kPx; ++i) {
+            const uint32_t k = 255u - m[i];
+            if (k == 255) continue;
+            uint8_t* p = px.data() + i * 4;
+            for (int c = 0; c < 4; ++c) p[c] = static_cast<uint8_t>((p[c] * k + 127u) / 255u);
         }
-        // Shifted floating pixels over it (premultiplied src-over), clipped to the canvas.
-        const RasterStore& f = move_.floating;
-        const RectI r = ls.tileRect(tx, ty);   // canvas part of this tile
+    }
+    const RasterStore& f = move_.floating;
+    const RectI r = ls.tileRect(tx, ty);   // canvas part of this tile
+    const int32_t FW = static_cast<int32_t>(f.width()), FH = static_cast<int32_t>(f.height());
+    int32_t dx = 0, dy = 0;
+    if (integerShift(move_.xf, dx, dy)) {
+        // Exact copy of the shifted pixels, row runs within one source tile.
         for (int32_t y = r.y; y < r.bottom(); ++y) {
             const int32_t sy = y - dy;
-            if (sy < 0 || sy >= static_cast<int32_t>(f.height())) continue;
+            if (sy < 0 || sy >= FH) continue;
             int32_t x = r.x;
             while (x < r.right()) {
                 const int32_t sx = x - dx;
                 if (sx < 0) { x += -sx; continue; }
-                if (sx >= static_cast<int32_t>(f.width())) break;
-                const int32_t stx = sx / kT, run = std::min(r.right() - x, kT - sx % kT);
-                const uint8_t* sp = f.tile(stx, sy / kT);
-                if (sp) {
+                if (sx >= FW) break;
+                const int32_t run = std::min(r.right() - x, kT - sx % kT);
+                if (const uint8_t* sp = f.tile(sx / kT, sy / kT)) {
                     const uint8_t* s = sp + (static_cast<size_t>(sy % kT) * kT + static_cast<size_t>(sx % kT)) * 4;
                     uint8_t* d = px.data() + (static_cast<size_t>(y - ty * kT) * kT + static_cast<size_t>(x - tx * kT)) * 4;
-                    for (int32_t k = 0; k < run; ++k, s += 4, d += 4) {
-                        const uint32_t sa = s[3];
-                        if (sa == 0) continue;
-                        if (sa == 255) { std::memcpy(d, s, 4); continue; }
-                        for (int c = 0; c < 4; ++c)
-                            d[c] = static_cast<uint8_t>(std::min<uint32_t>(255, s[c] + (d[c] * (255 - sa) + 127u) / 255u));
-                    }
+                    for (int32_t k = 0; k < run; ++k, s += 4, d += 4) over(d, s);
                 }
                 x += run;
             }
         }
+    } else {
+        // Bilinear resampling of the premultiplied floating pixels (transparent outside them).
+        const canvas::Affine2 inv = move_.xf.inverse();
+        const RectI& b = move_.bounds;
+        auto texel = [&](int32_t x, int32_t y) -> const uint8_t* {
+            if (x < b.x || y < b.y || x >= b.right() || y >= b.bottom()) return nullptr;
+            const uint8_t* t = f.tile(x / kT, y / kT);
+            return t ? t + (static_cast<size_t>(y % kT) * kT + static_cast<size_t>(x % kT)) * 4 : nullptr;
+        };
+        for (int32_t y = r.y; y < r.bottom(); ++y)
+            for (int32_t x = r.x; x < r.right(); ++x) {
+                const canvas::Vec2 s = inv.apply({x + 0.5, y + 0.5});
+                const double fx = s.x - 0.5, fy = s.y - 0.5;
+                if (fx < b.x - 1 || fy < b.y - 1 || fx >= b.right() || fy >= b.bottom()) continue;
+                const int32_t ix = static_cast<int32_t>(std::floor(fx)), iy = static_cast<int32_t>(std::floor(fy));
+                const float ax = static_cast<float>(fx - ix), ay = static_cast<float>(fy - iy);
+                const uint8_t* t00 = texel(ix, iy);
+                const uint8_t* t10 = texel(ix + 1, iy);
+                const uint8_t* t01 = texel(ix, iy + 1);
+                const uint8_t* t11 = texel(ix + 1, iy + 1);
+                if (!t00 && !t10 && !t01 && !t11) continue;
+                const float w00 = (1 - ax) * (1 - ay), w10 = ax * (1 - ay), w01 = (1 - ax) * ay, w11 = ax * ay;
+                uint8_t sp[4];
+                for (int c = 0; c < 4; ++c) {
+                    const float v = (t00 ? t00[c] * w00 : 0.0f) + (t10 ? t10[c] * w10 : 0.0f) + (t01 ? t01[c] * w01 : 0.0f) +
+                                    (t11 ? t11[c] * w11 : 0.0f);
+                    sp[c] = static_cast<uint8_t>(std::min(255.0f, v + 0.5f));
+                }
+                // Premultiplied: no colour channel above alpha after rounding.
+                for (int c = 0; c < 3; ++c) sp[c] = std::min(sp[c], sp[3]);
+                over(px.data() + (static_cast<size_t>(y - ty * kT) * kT + static_cast<size_t>(x - tx * kT)) * 4, sp);
+            }
     }
-    if (tileEmpty(px.data())) ls.releaseTile(tx, ty);
-    else std::memcpy(ls.tileForWrite(tx, ty), px.data(), kPx * 4);
-    ls.markChanged(ls.tileRect(tx, ty));
+    RasterStore& pv = move_.preview;
+    if (tileEmpty(px.data())) pv.releaseTile(tx, ty);
+    else std::memcpy(pv.tileForWrite(tx, ty), px.data(), kPx * 4);
+    move_.previewTiles[static_cast<size_t>(index)] = 1;
+    move_.dirty.push_back(ls.tileRect(tx, ty));
 }
 
 LayerError CanvasDocument::moveTo(int32_t dx, int32_t dy) {
+    return transformTo(canvas::Affine2::translate(dx, dy));
+}
+
+LayerError CanvasDocument::transformTo(const canvas::Affine2& m) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!move_.active) return LayerError::BadValue;
-    if (dx == move_.dx && dy == move_.dy) return LayerError::None;
+    const double det = m.determinant();
+    if (!std::isfinite(det) || std::fabs(det) < 1e-6 || !std::isfinite(m.tx) || !std::isfinite(m.ty)) return LayerError::BadValue;
+    const canvas::Affine2& o = move_.xf;
+    if (m.a == o.a && m.b == o.b && m.c == o.c && m.d == o.d && m.tx == o.tx && m.ty == o.ty) return LayerError::None;
     Layer* a = findLayer(move_.layerId);
     if (!a) return LayerError::NotFound;
-    move_.dx = dx;
-    move_.dy = dy;
-    RasterStore& ls = a->store;
+    move_.xf = m;
+    move_.identity = m.a == 1.0 && m.b == 0.0 && m.c == 0.0 && m.d == 1.0 && m.tx == 0.0 && m.ty == 0.0;
+    const RasterStore& ls = a->store;
     const int32_t cols = ls.columns(), rows = ls.rows();
-    // Tiles of the new offset: where the content was lifted from, and where it lands.
+    // Tiles of the new transform: where the content was lifted from, and where it lands.
     // (Scratch vectors of the move are reused: no allocation per drag step once warm.)
     std::vector<int32_t>& next = move_.next;
     next.clear();
-    if (dx != 0 || dy != 0) {
+    if (!move_.identity) {
         const RasterStore& f = move_.floating;
         for (int32_t ty = 0; ty < f.rows(); ++ty)
-            for (int32_t tx = 0; tx < f.columns(); ++tx) {
-                if (!f.tileAllocated(tx, ty)) continue;
-                next.push_back(ty * cols + tx);
-                const int32_t x0 = tx * kT + dx, y0 = ty * kT + dy;
-                const int32_t ax = static_cast<int32_t>(std::floor(x0 / static_cast<double>(kT)));
-                const int32_t ay = static_cast<int32_t>(std::floor(y0 / static_cast<double>(kT)));
-                for (int32_t j = ay; j <= ay + 1; ++j)
-                    for (int32_t i = ax; i <= ax + 1; ++i)
-                        if (i >= 0 && j >= 0 && i < cols && j < rows) next.push_back(j * cols + i);
-            }
+            for (int32_t tx = 0; tx < f.columns(); ++tx)
+                if (f.tileAllocated(tx, ty)) next.push_back(ty * cols + tx);
+        const RectI& b = move_.bounds;
+        double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+        const double cx[4] = {double(b.x), double(b.right()), double(b.right()), double(b.x)};
+        const double cy[4] = {double(b.y), double(b.y), double(b.bottom()), double(b.bottom())};
+        for (int k = 0; k < 4; ++k) {
+            const canvas::Vec2 p = m.apply({cx[k], cy[k]});
+            x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y);
+        }
+        const int32_t W = static_cast<int32_t>(ls.width()), H = static_cast<int32_t>(ls.height());
+        const int32_t px0 = std::clamp(static_cast<int32_t>(std::floor(x0)) - 1, 0, W), py0 = std::clamp(static_cast<int32_t>(std::floor(y0)) - 1, 0, H);
+        const int32_t px1 = std::clamp(static_cast<int32_t>(std::ceil(x1)) + 1, 0, W), py1 = std::clamp(static_cast<int32_t>(std::ceil(y1)) + 1, 0, H);
+        if (px1 > px0 && py1 > py0)
+            for (int32_t ty = py0 / kT; ty <= std::min(rows - 1, (py1 - 1) / kT); ++ty)
+                for (int32_t tx = px0 / kT; tx <= std::min(cols - 1, (px1 - 1) / kT); ++tx) next.push_back(ty * cols + tx);
     }
     std::sort(next.begin(), next.end());
     next.erase(std::unique(next.begin(), next.end()), next.end());
-    // Recomposed: the new set, plus tiles of the previous offset that it no longer covers (back to original).
-    std::vector<int32_t>& work = move_.work;
-    work.assign(next.begin(), next.end());
-    work.insert(work.end(), move_.shown.begin(), move_.shown.end());
-    std::sort(work.begin(), work.end());
-    work.erase(std::unique(work.begin(), work.end()), work.end());
-    for (int32_t i : work) composeMoveTileLocked(*a, i, move_.scratch);
+    // Recomposed: the new set; tiles of the previous transform it no longer covers show the layer again.
+    for (int32_t i : move_.shown)
+        if (!std::binary_search(next.begin(), next.end(), i)) {
+            move_.previewTiles[static_cast<size_t>(i)] = 0;
+            move_.preview.releaseTile(i % cols, i / cols);
+            move_.dirty.push_back(ls.tileRect(i % cols, i / cols));
+        }
+    for (int32_t i : next) composeMoveTileLocked(*a, i, move_.scratch);
     move_.shown.assign(next.begin(), next.end());
     bumpRevision();
     return LayerError::None;
@@ -443,21 +494,24 @@ LayerError CanvasDocument::moveTo(int32_t dx, int32_t dy) {
 void CanvasDocument::commitMoveLocked() {
     if (!move_.active) return;
     Layer* a = findLayer(move_.layerId);
-    if (!a || (move_.dx == 0 && move_.dy == 0)) { cancelMoveLocked(); return; }
+    if (!a || move_.identity) { cancelMoveLocked(); return; }
     RasterStore& ls = a->store;
-    std::vector<int32_t> idx;
-    for (const auto& kv : move_.orig) idx.push_back(kv.first);
-    std::sort(idx.begin(), idx.end());
     PixelPatch patch;
-    for (int32_t i : idx) {
+    for (int32_t i : move_.shown) {
         const int32_t tx = i % ls.columns(), ty = i / ls.columns();
-        const uint8_t* before = move_.orig[i].get();
-        const uint8_t* after = ls.tile(tx, ty);
+        const uint8_t* before = ls.tile(tx, ty);
+        const uint8_t* after = move_.preview.tile(tx, ty);
         if (!before && !after) continue;
         if (before && after && std::memcmp(before, after, kPx * 4) == 0) continue;
         patch.addTile(tx, ty, ls.tileRect(tx, ty), before, after);
+        // The confirmed pixels: what the preview showed.
+        if (after) std::memcpy(ls.tileForWrite(tx, ty), after, kPx * 4);
+        else ls.releaseTile(tx, ty);
+        ls.markChanged(ls.tileRect(tx, ty));
     }
-    selection_.translate(move_.dx, move_.dy);
+    int32_t dx = 0, dy = 0;
+    if (integerShift(move_.xf, dx, dy)) selection_.translate(dx, dy);
+    else selection_.transform(move_.xf);
     std::vector<std::unique_ptr<HistoryCommand>> parts;
     if (!patch.empty()) parts.push_back(std::make_unique<PixelCommand>(HistoryKind::MoveSelection, a->info.id, std::move(patch)));
     std::vector<uint8_t> after;
@@ -472,15 +526,13 @@ void CanvasDocument::commitMoveLocked() {
 
 void CanvasDocument::cancelMoveLocked() {
     if (!move_.active) return;
-    if (Layer* a = findLayer(move_.layerId)) {
-        RasterStore& ls = a->store;
-        for (const auto& [i, px] : move_.orig) {
-            const int32_t tx = i % ls.columns(), ty = i / ls.columns();
-            if (px) std::memcpy(ls.tileForWrite(tx, ty), px.get(), kPx * 4);
-            else ls.releaseTile(tx, ty);
-            ls.markChanged(ls.tileRect(tx, ty));
-        }
+    // The layer was never changed: the composite shows it again where the preview was.
+    if (pending_.size() != composite_.tileCount()) pending_.assign(composite_.tileCount(), 0);
+    for (int32_t i : move_.shown) {
+        uint8_t& p = pending_[static_cast<size_t>(i)];
+        if (!p) { p = 1; pendingCount_++; }
     }
+    pendingComposite_.store(pendingCount_ > 0, std::memory_order_release);
     move_ = {};
     bumpRevision();
 }
@@ -510,8 +562,8 @@ CanvasDocument::SelectionInfo CanvasDocument::selectionInfo() {
     s.clipboardBytes = clipboard_.bytesAllocated();
     s.version = selection_.version();
     s.moving = move_.active;
-    s.dx = move_.dx;
-    s.dy = move_.dy;
+    s.dx = static_cast<int32_t>(std::lround(move_.xf.tx));
+    s.dy = static_cast<int32_t>(std::lround(move_.xf.ty));
     s.clipboard = hasClipboard_;
     if (hasClipboard_) {
         int32_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;

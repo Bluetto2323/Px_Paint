@@ -189,6 +189,10 @@ public:
     // A future transform engine extends this floating content.
     LayerError moveBegin();
     LayerError moveTo(int32_t dx, int32_t dy);
+    // Any affine transform of the lifted content (floating -> canvas): move,
+    // scale, rotate, flip, skew (Block 12). Integer translations copy pixels
+    // exactly; other transforms sample bilinearly.
+    LayerError transformTo(const canvas::Affine2& m);
     LayerError moveCommit();
     void moveCancel();
     SelectionInfo selectionInfo();
@@ -292,23 +296,28 @@ private:
     canvas::SelectionMask shape_;                 // scratch: the shape being combined
     canvas::RasterStore clipboard_;               // copied / cut pixels (session, any document)
     bool hasClipboard_ = false;
-    // Moving selected content. The selected pixels of the active layer are
-    // lifted into `floating` (selection coverage applied); at an offset, the
-    // layer's affected tiles show the hole (1 - selection) with the floating
-    // pixels drawn over them, so what is displayed during the drag is exactly
-    // what the drop records, with the layer's own opacity and blend mode.
-    // A future transform engine replaces the integer offset by a transform of `floating`.
+    // Moving / transforming selected content (Blocks 10, 12). The selected
+    // pixels of the active layer are lifted into `floating` (selection coverage
+    // applied). The preview is non-destructive: affected tiles are recomposed
+    // into `preview` (hole = original x (1 - selection), the transformed
+    // floating pixels drawn over it) and the compositor reads them instead of
+    // the layer's, which is untouched until the transform is confirmed. What
+    // is displayed is exactly what the confirmation writes, with the layer's
+    // opacity and blend mode.
     struct Move {
         bool active = false;
         uint32_t layerId = 0;                     // the active layer being edited
-        canvas::RasterStore floating;             // lifted pixels, at offset 0
-        // Original pixels of every layer tile touched so far (null: no tile).
-        std::unordered_map<int32_t, std::unique_ptr<uint8_t[]>> orig;
-        std::vector<int32_t> shown;               // tiles rewritten for the current offset
+        canvas::RasterStore floating;             // lifted pixels, untransformed
+        canvas::RectI bounds;                     // selection bounds when lifted
+        canvas::Affine2 xf;                       // floating -> canvas
+        bool identity = true;
+        canvas::RasterStore preview;              // recomposed tiles (only those affected)
+        std::vector<uint8_t> previewTiles;        // per tile: read from `preview`
+        std::vector<int32_t> shown;               // tiles in the preview now
         std::vector<int32_t> next, work;          // scratch (reused while dragging)
         std::vector<uint8_t> scratch;
+        std::vector<canvas::RectI> dirty;         // preview regions to composite at the next frame
         std::vector<uint8_t> selectionBefore;
-        int32_t dx = 0, dy = 0;
     } move_;
     void composeMoveTileLocked(Layer& l, int32_t index, std::vector<uint8_t>& scratch);
     void commitMoveLocked();
