@@ -712,6 +712,139 @@ void testHistory() {
     check(d.paste(p) == LayerError::None && d.layerPixel(p, 150, 150).a > 0, "S7: paste into another (smaller) document keeps what fits");
 }
 
+void testFillGradient() {
+    section("S12 bucket fill and gradients (Block 13)");
+    const uint32_t W = 600, H = 400;
+    CanvasDocument d;
+    base(d, W, H);
+    // A closed black ring (antialiased stroke) on a transparent layer, a second layer elsewhere.
+    std::vector<pe::brush::StrokePoint> ring;
+    for (int i = 0; i <= 64; ++i) {
+        const double t = 2 * 3.14159265358979 * i / 64;
+        ring.push_back({300 + 100 * std::cos(t), 200 + 100 * std::sin(t), i * 4.0});
+    }
+    d.strokeBegin(brush(8, 0xFF000000u), ring[0]);
+    d.strokeSamples(ring.data() + 1, ring.size() - 1);
+    d.strokeEnd();
+    uint32_t other = 0;
+    d.addLayer(0, "Other", other);
+    d.fill({0, 0, 50, 50}, 0xFF00FF00u);
+    d.setActive(1);
+    d.clearHistory();
+    const uint64_t otherPx = d.layerChecksum(other);
+    const auto before = grab(d, 1, W, H);
+    CanvasDocument::FillOptions o;
+    o.tolerance = 40;
+    o.expand = 2;
+    const int64_t t0 = pe::nowNs();
+    check(d.bucketFill(300, 200, 0xFFE04020u, o) == LayerError::None, fmt("S12: fill inside the ring (%.1f ms)", ms(t0)));
+    const Rgba8 red = Rgba8::fromArgb(0xFFE04020u);
+    check(d.layerPixel(1, 300, 200) == red && d.layerPixel(1, 220, 200) == red, "S12: the inside is filled");
+    check(d.layerPixel(1, 10, 10).a == 0 && d.layerPixel(1, 590, 390).a == 0, "S12: the outside is not (the ring stops the fill)");
+    // Expansion: no transparent or light gap between the fill and the line.
+    int gap = 0;
+    for (int x = 300; x < 420; ++x) {
+        const Rgba8 p = d.layerPixel(1, x, 200);
+        if (p.a < 250 && x < 395) gap++;
+    }
+    check(gap == 0, "S12: expansion closes the gap under the antialiased line (no pixel below full alpha inside)");
+    const auto after = grab(d, 1, W, H);
+    size_t changedFar = 0;
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W; ++x) {
+            const double r = std::hypot(x + 0.5 - 300, y + 0.5 - 200);
+            if (r > 112 && !(before[y * W + x] == after[y * W + x])) changedFar++;
+        }
+    check(changedFar == 0 && d.layerChecksum(other) == otherPx, "S12: pixels outside the region and other layers unchanged");
+    check(d.historyEntries().size() == 1 && d.historyEntries()[0].kind == HistoryKind::Fill, "S12: one 'fill' step");
+    check(d.undo() == 1 && grab(d, 1, W, H) == before && d.redo() == 1 && grab(d, 1, W, H) == after, "S12: undo / redo exact");
+    // Antialiasing: partial alpha on the outer edge only when on.
+    CanvasDocument e;
+    base(e, 200, 200);
+    e.fill({50, 50, 100, 100}, 0xFF0000FFu);
+    CanvasDocument::FillOptions hard;
+    hard.tolerance = 0; hard.expand = 0; hard.antialias = false;
+    e.bucketFill(100, 100, 0xFFFFFF00u, hard);
+    check(e.layerPixel(1, 49, 100).a == 0 && e.layerPixel(1, 50, 100) == Rgba8::fromArgb(0xFFFFFF00u), "S12: no antialiasing: hard edge on the region");
+    e.undo();
+    CanvasDocument::FillOptions soft = hard;
+    soft.antialias = true;
+    e.bucketFill(100, 100, 0xFFFFFF00u, soft);
+    const Rgba8 edge = e.layerPixel(1, 49, 100);
+    check(edge.a > 0 && edge.a < 255, fmt("S12: antialiasing: soft outer edge (alpha %.0f)", edge.a));
+    // Global replacement: both separate squares of the same colour change.
+    CanvasDocument g;
+    base(g, 300, 200);
+    g.fill({10, 10, 40, 40}, 0xFF0000FFu);
+    g.fill({200, 100, 40, 40}, 0xFF0000FFu);
+    CanvasDocument::FillOptions glob = hard;
+    glob.contiguous = false;
+    g.bucketFill(20, 20, 0xFF00FF00u, glob);
+    check(g.layerPixel(1, 210, 110) == Rgba8::fromArgb(0xFF00FF00u) && g.layerPixel(1, 150, 150).a == 0,
+          "S12: global fill replaces every matching pixel, nothing else");
+    // Transparent region + selection: filled only inside the selection; tolerance.
+    CanvasDocument t;
+    base(t, 300, 300);
+    sel(t, rect(100, 100, 200, 200));
+    t.bucketFill(150, 150, 0x80FF0000u, hard);
+    check(t.layerPixel(1, 150, 150).a == 128 && t.layerPixel(1, 50, 50).a == 0, "S12: transparent area filled inside the selection only, colour alpha kept");
+    // Merged mode: the line on another layer stops the fill of an empty layer.
+    CanvasDocument m;
+    base(m, 400, 300);
+    m.fill({195, 0, 10, 300}, 0xFF000000u);   // a wall on layer 1
+    uint32_t paint = 0;
+    m.addLayer(0, "Paint", paint);
+    CanvasDocument::FillOptions mg = hard;
+    mg.merged = true;
+    m.bucketFill(50, 50, 0xFF00FF00u, mg);
+    check(m.layerPixel(paint, 50, 50).a == 255 && m.layerPixel(paint, 300, 50).a == 0 && m.layerPixel(1, 50, 50).a == 0,
+          "S12: merged mode: the visible wall stops the fill, which goes to the active layer only");
+
+    // Gradients: preview is non-destructive, commit is one step.
+    CanvasDocument r;
+    base(r, 400, 200);
+    r.fill({0, 0, 400, 200}, 0xFFFFFFFFu);
+    r.clearHistory();
+    const uint64_t layer0 = r.layerChecksum(1);
+    CanvasDocument::GradientSpec gs;
+    gs.x0 = 0; gs.y0 = 100; gs.x1 = 400; gs.y1 = 100;
+    gs.argb0 = 0xFF000000u; gs.argb1 = 0xFFFFFFFFu;
+    check(r.gradientSet(gs) == LayerError::None && r.layerChecksum(1) == layer0 && r.historyStats().undoSteps == 0,
+          "S12: gradient preview leaves the layer untouched");
+    const Rgba8 l = r.pixel(10, 100), mid = r.pixel(200, 100), rr = r.pixel(390, 100);
+    check(l.r < 15 && std::abs(mid.r - 128) <= 2 && rr.r > 240, fmt("S12: linear gradient shown: %.0f / %.0f / %.0f", l.r, mid.r, rr.r));
+    gs.radial = true; gs.x0 = 200; gs.y0 = 100; gs.x1 = 300; gs.y1 = 100;
+    gs.argb0 = 0xFFFF0000u; gs.argb1 = 0x00FF0000u;   // transparency gradient
+    r.gradientSet(gs);
+    const uint64_t shown = r.compositeChecksum();
+    check(r.gradientCommit() == LayerError::None && r.compositeChecksum() == shown, "S12: radial transparency gradient committed exactly as previewed");
+    const Rgba8 c = r.layerPixel(1, 200, 100), out = r.layerPixel(1, 350, 100), half = r.layerPixel(1, 250, 100);
+    check(c.r == 255 && c.g < 3 && out == Rgba8::fromArgb(0xFFFFFFFFu) && half.g > 100 && half.g < 160,
+          "S12: red at the centre, untouched beyond the radius, blended half way");
+    check(r.historyEntries().size() == 1 && r.historyEntries()[0].kind == HistoryKind::Gradient && r.undo() == 1 &&
+              r.layerChecksum(1) == layer0,
+          "S12: one 'gradient' step; undo restores the layer");
+    r.gradientSet(gs);
+    r.gradientCancel();
+    check(r.layerChecksum(1) == layer0 && r.compositeChecksum() != shown && r.historyStats().redoSteps == 1, "S12: cancelled gradient: nothing changed");
+    // Timing on a large canvas.
+    CanvasDocument big;
+    base(big, 4096, 4096);
+    CanvasDocument::GradientSpec bg;
+    bg.x1 = 4096; bg.y1 = 4096;
+    const int64_t g0 = pe::nowNs();
+    big.gradientSet(bg);
+    const double setMs = ms(g0);
+    const int64_t g1 = pe::nowNs();
+    big.gradientCommit();
+    const double commitMs = ms(g1);
+    big.clearHistory();
+    const int64_t f0 = pe::nowNs();
+    CanvasDocument::FillOptions bf;
+    big.bucketFill(10, 10, 0xFF102030u, bf);   // floods the whole gradient-free? no: tolerance 32 of a smooth gradient
+    std::printf("     4096 px: gradient preview %.1f ms, commit %.1f ms; bucket fill %.1f ms\n", setMs, commitMs, ms(f0));
+}
+
 void testFromContent() {
     section("S8 selection from visible content: alpha, layer opacity, hidden layers");
     CanvasDocument d;
@@ -833,6 +966,7 @@ int main() {
     testMove();
     testHistory();
     testTransform();
+    testFillGradient();
     testFromContent();
     testLarge();
     testBrushLatency();

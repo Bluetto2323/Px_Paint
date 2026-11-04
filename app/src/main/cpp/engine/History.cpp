@@ -44,6 +44,7 @@ const char* historyKindName(HistoryKind k) {
         case HistoryKind::Paste: return "paste";
         case HistoryKind::DuplicateSelection: return "duplicate_selection";
         case HistoryKind::MoveSelection: return "move_selection";
+        case HistoryKind::Gradient: return "gradient";
     }
     return "?";
 }

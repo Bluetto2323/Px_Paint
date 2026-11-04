@@ -54,6 +54,7 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/engine/History.cpp
     ${PE_CPP_DIR}/engine/CanvasDocument.cpp
     ${PE_CPP_DIR}/engine/CanvasSelection.cpp
+    ${PE_CPP_DIR}/engine/CanvasFill.cpp
     ${PE_CPP_DIR}/engine/CanvasController.cpp
     ${PE_CPP_DIR}/engine/Engine.cpp
 )
@@ -91,6 +92,7 @@ set(PE_HOT_SOURCES
     ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
     ${PE_CPP_DIR}/engine/CanvasDocument.cpp
     ${PE_CPP_DIR}/engine/CanvasSelection.cpp
+    ${PE_CPP_DIR}/engine/CanvasFill.cpp
 )
 
 set(PE_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter)

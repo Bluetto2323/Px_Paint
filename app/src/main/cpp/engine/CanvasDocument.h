@@ -193,6 +193,30 @@ public:
     // scale, rotate, flip, skew (Block 12). Integer translations copy pixels
     // exactly; other transforms sample bilinearly.
     LayerError transformTo(const canvas::Affine2& m);
+
+    // --- Fill and gradient (Block 13; any thread) --------------------------
+    struct FillOptions {
+        bool contiguous = true;   // false: every matching pixel of the canvas (global replace)
+        int32_t tolerance = 32;   // 0..255, largest channel difference (premultiplied RGBA) to the seed
+        int32_t expand = 1;       // 0..8 px grown around the region (closes gaps under antialiased lines)
+        bool antialias = true;    // a soft one-pixel outer edge
+        bool merged = false;      // match against the visible image instead of the active layer
+    };
+    // Fills the region around canvas pixel (x, y) of the active layer with
+    // straight ARGB `argb` (its alpha included), inside the selection if any.
+    // One "fill" history step; nothing filled -> BadValue.
+    LayerError bucketFill(int32_t x, int32_t y, uint32_t argb, const FillOptions& o);
+    struct GradientSpec {
+        bool radial = false;
+        double x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // canvas: start / end (radial: centre / radius point)
+        uint32_t argb0 = 0xFF000000u, argb1 = 0x00000000u;   // straight ARGB, alpha = transparency gradient
+    };
+    // Non-destructive preview of a gradient over the active layer (inside the
+    // selection if any); updating replaces it. Commit = one "gradient" step.
+    LayerError gradientSet(const GradientSpec& g);
+    LayerError gradientCommit();
+    void gradientCancel();
+    bool gradientActive() const;
     LayerError moveCommit();
     void moveCancel();
     SelectionInfo selectionInfo();
@@ -320,6 +344,18 @@ private:
         std::vector<uint8_t> selectionBefore;
     } move_;
     void composeMoveTileLocked(Layer& l, int32_t index, std::vector<uint8_t>& scratch);
+    // Gradient preview (Block 13): same non-destructive preview tiles as a transform.
+    struct GradientPreview {
+        bool active = false;
+        uint32_t layerId = 0;
+        GradientSpec spec;
+        canvas::RasterStore preview;
+        std::vector<uint8_t> previewTiles;
+        std::vector<int32_t> shown;
+        std::vector<canvas::RectI> dirty;
+    } grad_;
+    void commitGradientLocked();
+    void cancelGradientLocked();
     void commitMoveLocked();
     void cancelMoveLocked();
     void recordSelection(const std::vector<uint8_t>& before);

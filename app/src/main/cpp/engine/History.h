@@ -57,6 +57,8 @@ enum class HistoryKind : int32_t {
     Paste = 18,              // as a new layer
     DuplicateSelection = 19, // selected pixels to a new layer
     MoveSelection = 20,      // selected pixels (and the selection) moved
+    // Block 13 (bucket fill uses Fill = 3)
+    Gradient = 21,
 };
 const char* historyKindName(HistoryKind k);
 

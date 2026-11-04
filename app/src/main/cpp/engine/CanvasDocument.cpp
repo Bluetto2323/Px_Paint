@@ -196,6 +196,7 @@ void CanvasDocument::open(uint32_t width, uint32_t height) {
     pendingCount_ = 0;
     selection_.reset(width, height);
     move_ = {};
+    grad_ = {};
     open_ = true;
     refreshEditable();
     generation_.fetch_add(1, std::memory_order_acq_rel);
@@ -210,6 +211,7 @@ void CanvasDocument::close() {
     composite_.reset(0, 0);
     selection_.reset(0, 0);
     move_ = {};
+    grad_ = {};
     open_ = false;
     refreshEditable();
     generation_.fetch_add(1, std::memory_order_acq_rel);
@@ -297,13 +299,15 @@ std::string CanvasDocument::uniqueName(const std::string& base) const {
 }
 
 void CanvasDocument::processInputLocked() {
-    // A stroke started while content is being moved: the move lands first.
+    // A stroke started while content is being moved (or a gradient previewed): that lands first.
     if (move_.active && brush_.hasPending()) commitMoveLocked();
+    if (grad_.active && brush_.hasPending()) commitGradientLocked();
     if (Layer* a = activeLayer()) brush_.process(a->store);
 }
 
 void CanvasDocument::settleInputLocked() {
     commitMoveLocked();  // content being moved lands first (no-op without a move)
+    commitGradientLocked();
     Layer* a = activeLayer();
     if (!a) return;
     brush_.process(a->store);
@@ -341,6 +345,9 @@ void CanvasDocument::updateLocked(bool complete) {
             if (move_.active && l->info.id == move_.layerId) {
                 v.preview = &move_.preview;
                 v.previewTiles = move_.previewTiles.data();
+            } else if (grad_.active && l->info.id == grad_.layerId) {
+                v.preview = &grad_.preview;
+                v.previewTiles = grad_.previewTiles.data();
             }
             viewScratch_.push_back(v);
         }
@@ -351,6 +358,11 @@ void CanvasDocument::updateLocked(bool complete) {
         px += static_cast<uint64_t>(r.area());
     }
     move_.dirty.clear();
+    for (const auto& r : grad_.dirty) {
+        canvas::Compositor::composite(viewScratch_.data(), viewScratch_.size(), r, backdrop_, composite_);
+        px += static_cast<uint64_t>(r.area());
+    }
+    grad_.dirty.clear();
     for (const auto& l : layers_) {
         dirtyScratch_.clear();
         l->store.takeGpuDirty(dirtyScratch_);
@@ -460,6 +472,7 @@ size_t CanvasDocument::loadLegacy(const std::vector<ContentOp>& ops) {
     pendingCount_ = 0;
     selection_.reset(w, h);
     move_ = {};
+    grad_ = {};
     markAllContent();
     refreshEditable();
     generation_.fetch_add(1, std::memory_order_acq_rel);
@@ -773,6 +786,7 @@ bool CanvasDocument::setLayerStack(const std::vector<LayerInfo>& stack, uint32_t
     layers_.clear();
     selection_.reset(composite_.width(), composite_.height());
     move_ = {};
+    grad_ = {};
     for (const auto& info : stack) {
         auto l = std::make_unique<Layer>();
         l->info = info;
