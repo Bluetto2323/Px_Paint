@@ -16,6 +16,8 @@ import com.paintengine.pxpaint.core.BrushLibrary
 import com.paintengine.pxpaint.core.BrushPreset
 import com.paintengine.pxpaint.core.BrushState
 import com.paintengine.pxpaint.core.BrushTool
+import com.paintengine.pxpaint.core.MotionPolicy
+import com.paintengine.pxpaint.core.MotionTokens
 import com.paintengine.pxpaint.core.S
 import com.paintengine.pxpaint.core.tr
 import com.paintengine.pxpaint.ui.BrushPreviewView
@@ -129,6 +131,9 @@ class BrushLibraryPanel(
                 state.filter = f
                 buildChips()
                 buildList()
+                // Category change: the new list fades in (rows rise a little, a few at a time).
+                list?.let { l -> for (i in 0 until l.childCount) theme.motion.enter(l.getChildAt(i), dyDp = MotionTokens.NUDGE * 2,
+                    delay = MotionPolicy.stagger(i, theme.motion.level), duration = MotionTokens.SHORT) }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = theme.dp(6)
             })
@@ -255,6 +260,7 @@ class BrushLibraryPanel(
         host.updateBrushes(lib.select(tool, id))
         replaceRow(prev)
         replaceRow(id)
+        rows[id]?.let { theme.motion.pop(it, 1.03f) }   // brush selection: the chosen row answers
         refreshQuick()
         onSelected?.invoke()
     }

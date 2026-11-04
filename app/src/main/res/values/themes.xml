@@ -10,4 +10,11 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+    <!-- Light variant: used only for the window / splash of the next start (Android 13+). -->
+    <style name="Theme.PxPaint.Light" parent="Theme.PxPaint">
+        <item name="android:windowBackground">@color/px_bg_light</item>
+        <item name="android:colorBackground">@color/px_bg_light</item>
+        <item name="android:colorAccent">@color/px_ember_light</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

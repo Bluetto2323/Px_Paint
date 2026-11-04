@@ -35,6 +35,8 @@ class PxTheme(context: Context, val settings: AppSettings) {
     val scale: Float = settings.uiSize.scale
     private val density: Float = context.resources.displayMetrics.density
     val reduceMotion: Boolean = settings.reduceMotion
+    /** Motion system (Block 9): tokens, level (user setting + system animator scale), helpers. */
+    val motion = Motion(settings.motionLevel, context.resources.displayMetrics.density * settings.uiSize.scale)
     val touchTarget: Int get() = dp(
         (if (settings.largeTouchTargets) LayoutPolicy.LARGE_TOUCH_TARGET_DP else LayoutPolicy.TOUCH_TARGET_DP).toFloat(),
     )
@@ -72,7 +74,7 @@ class PxTheme(context: Context, val settings: AppSettings) {
     val pad get() = dp(com.paintengine.pxpaint.core.DesignTokens.SPACE_L)
     val disabledAlpha get() = com.paintengine.pxpaint.core.DesignTokens.DISABLED_ALPHA
     /** Animation length (0 with "reduce motion"). */
-    fun motion(ms: Long): Long = if (reduceMotion) 0L else ms
+    fun motion(ms: Long): Long = motion.d(ms)
 
     // --- typography (sp, scaled by the interface size; user font scale applies) -------
     enum class Type(val sp: Float, val medium: Boolean) {

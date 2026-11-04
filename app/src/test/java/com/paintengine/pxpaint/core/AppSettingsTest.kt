@@ -18,7 +18,7 @@ class AppSettingsTest {
             dockSide = DockSide.RIGHT, showToolLabels = true, twoFingerRotate = false, rotationSnap = false,
             fingerMode = FingerMode.GESTURES_ONLY, pressureCurve = PressureCurve.SOFT, pressureSensitivity = -0.5f,
             pressureSmoothing = 0.8f, render = RenderPreference.SMOOTH, backend = BackendChoice.GLES,
-            performanceOverlay = true, largeTouchTargets = true, reduceMotion = true, highContrast = true,
+            performanceOverlay = true, largeTouchTargets = true, motionLevel = MotionLevel.REDUCED, highContrast = true,
         )
         assertEquals(s, AppSettings.decode(s.encode()))
     }
@@ -57,7 +57,7 @@ class AppSettingsTest {
         // Changing a key would silently reset users' settings.
         assertEquals(
             setOf("theme", "ui_size", "language", "dock_side", "tool_labels", "two_finger_rotate", "rotation_snap",
-                "finger_mode", "tap_undo", "tap_redo", "quick_pinch_fit", "tap_fullscreen", "stylus_button_pick", "slider_side", "pinned_panel", "panel_width_dp", "pressure_curve", "pressure_sensitivity", "pressure_smoothing", "render", "backend", "performance_overlay", "large_touch_targets", "reduce_motion",
+                "finger_mode", "tap_undo", "tap_redo", "quick_pinch_fit", "tap_fullscreen", "stylus_button_pick", "slider_side", "pinned_panel", "panel_width_dp", "pressure_curve", "pressure_sensitivity", "pressure_smoothing", "render", "backend", "performance_overlay", "large_touch_targets", "motion_level",
                 "high_contrast"),
             AppSettings().encode().keys,
         )

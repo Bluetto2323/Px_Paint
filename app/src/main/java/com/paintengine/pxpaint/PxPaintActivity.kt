@@ -16,8 +16,11 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.widget.FrameLayout
+import com.paintengine.BuildConfig
+import com.paintengine.R
 import com.paintengine.app.DiagnosticsActivity
 import com.paintengine.engine.NativeEngine
+import com.paintengine.pxpaint.core.MotionTokens
 import com.paintengine.pxpaint.core.AppSettings
 import com.paintengine.pxpaint.core.BrushLibrary
 import com.paintengine.pxpaint.core.BrushPresetFormat
@@ -34,6 +37,7 @@ import com.paintengine.pxpaint.screens.DebugDemo
 import com.paintengine.pxpaint.screens.GalleryScreen
 import com.paintengine.pxpaint.screens.PxHost
 import com.paintengine.pxpaint.screens.Screen
+import com.paintengine.pxpaint.ui.Motion
 import com.paintengine.pxpaint.ui.BrushPreviews
 import com.paintengine.pxpaint.ui.OverlayHost
 import com.paintengine.pxpaint.ui.PxTheme
@@ -92,6 +96,15 @@ class PxPaintActivity : Activity(), PxHost {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var root: FrameLayout
     private lateinit var content: FrameLayout
+    /** Between the screens and the overlays: the project-opening container transform. */
+    private lateinit var transitionLayer: FrameLayout
+    private var transitionImage: View? = null
+    private var transitionFor: Screen? = null
+    private var transitionExpanded = false
+    private var transitionScreenReady = false
+    private var intro: com.paintengine.pxpaint.ui.BrandIntro? = null
+    override var debugInitDelayMs = 0L
+        private set
     private val stack = ArrayList<Screen>()
     private val views = HashMap<Screen, View>()
     private var engine: NativeEngine? = null
@@ -118,7 +131,9 @@ class PxPaintActivity : Activity(), PxHost {
         root = FrameLayout(this)
         content = FrameLayout(this)
         overlays = OverlayHost(this, theme)
+        transitionLayer = FrameLayout(this).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
         root.addView(content, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        root.addView(transitionLayer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(overlays, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         applyWindowStyle()
         root.setOnApplyWindowInsetsListener { _, wi ->
@@ -131,8 +146,17 @@ class PxPaintActivity : Activity(), PxHost {
             wi
         }
         setContentView(root)
-        push(GalleryScreen(this))
-        DebugDemo.from(intent)?.let { DebugDemo.start(this, it) }
+        val demo = DebugDemo.from(intent)
+        if (BuildConfig.DEBUG) debugInitDelayMs = intent?.getLongExtra("pxpaint.slowinit", 0L) ?: 0L
+        // Startup animation over the gallery (cold start only; scripted debug states skip it).
+        if (savedInstanceState == null && (demo == null || intent?.hasExtra("pxpaint.intro") == true)) {
+            intro = com.paintengine.pxpaint.ui.BrandIntro(this, theme) { intro = null }.also {
+                root.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            }
+        }
+        rememberSplashTheme()
+        pushWith(GalleryScreen(this), Enter.NONE)
+        demo?.let { DebugDemo.start(this, it) }
     }
 
     override fun onResume() {
@@ -199,11 +223,20 @@ class PxPaintActivity : Activity(), PxHost {
     // ----------------------------------------------------------- navigation
     private fun top(): Screen? = stack.lastOrNull()
 
-    override fun push(screen: Screen) {
+    // ------------------------------------------------------------- navigation
+    // Shared-axis transitions (Block 9): the incoming screen fades in moving a
+    // little along x (forward from the right, back from the left) over the
+    // outgoing one, which is removed when the incoming has entered. The
+    // outgoing screen is never animated itself (a workspace holds a SurfaceView).
+    private enum class Enter { NONE, FORWARD, BACK }
+
+    override fun push(screen: Screen) = pushWith(screen, Enter.FORWARD)
+
+    private fun pushWith(screen: Screen, enter: Enter) {
         overlays.dismissAll()
-        top()?.let { detach(it) }
+        val outgoing = top()?.let { views[it] }
         stack += screen
-        show(screen)
+        show(screen, enter, outgoing)
     }
 
     override fun pop() {
@@ -212,30 +245,112 @@ class PxPaintActivity : Activity(), PxHost {
             return
         }
         overlays.dismissAll()
+        clearTransition()
         val s = stack.removeAt(stack.lastIndex)
-        detach(s)
-        views.remove(s)
+        val outgoing = views.remove(s)
         s.onRemoved()
-        show(stack.last())
+        show(stack.last(), Enter.BACK, outgoing)
     }
 
     override fun replaceTop(screen: Screen) {
         overlays.dismissAll()
+        var outgoing: View? = null
         stack.removeLastOrNull()?.let {
-            detach(it)
-            views.remove(it)
+            outgoing = views.remove(it)
             it.onRemoved()
         }
         stack += screen
-        show(screen)
+        show(screen, Enter.FORWARD, outgoing)
     }
 
-    private fun show(screen: Screen) {
+    private fun show(screen: Screen, enter: Enter = Enter.NONE, outgoing: View? = null) {
         val v = views.getOrPut(screen) { screen.createView() }
         (v.parent as? FrameLayout)?.removeView(v)
+        // Leftovers of an interrupted transition (rapid back / forward): only the outgoing view may stay.
+        for (i in content.childCount - 1 downTo 0) content.getChildAt(i).let { if (it !== outgoing) content.removeView(it) }
+        v.animate().cancel()
+        v.alpha = 1f; v.translationX = 0f; v.translationY = 0f; v.scaleX = 1f; v.scaleY = 1f
         content.addView(v, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         screen.onShown()
         if (resumed) screen.onResume()
+        val m = theme.motion
+        val dropOutgoing = Runnable { if (outgoing != null && outgoing !== v) content.removeView(outgoing) }
+        if (enter == Enter.NONE || screen.ownEntrance || !m.enabled) {
+            dropOutgoing.run()
+            return
+        }
+        m.enter(v, dyDp = 0f, dxDp = if (enter == Enter.FORWARD) MotionTokens.SLIDE else -MotionTokens.SLIDE) { dropOutgoing.run() }
+    }
+
+    override fun pushFrom(screen: Screen, origin: View, image: android.graphics.Bitmap?) {
+        val m = theme.motion
+        if (!m.movement || image == null || !origin.isAttachedToWindow || root.width == 0) {
+            push(screen)
+            return
+        }
+        clearTransition()
+        val r = android.graphics.Rect()
+        origin.getGlobalVisibleRect(r)
+        val rootPos = IntArray(2).also { root.getLocationInWindow(it) }
+        r.offset(-rootPos[0], -rootPos[1])
+        val iv = android.widget.ImageView(this).apply {
+            setImageBitmap(image)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            pivotX = 0f
+            pivotY = 0f
+            x = r.left.toFloat()
+            y = r.top.toFloat()
+        }
+        transitionLayer.addView(iv, FrameLayout.LayoutParams(r.width().coerceAtLeast(1), r.height().coerceAtLeast(1)))
+        transitionImage = iv
+        transitionFor = screen
+        transitionExpanded = false
+        transitionScreenReady = false
+        pushWith(screen, Enter.FORWARD)
+        // Grow to the canvas area (the workspace fits the canvas to the screen).
+        val w = root.width.toFloat()
+        val h = root.height.toFloat()
+        val s = minOf(w * 0.94f / r.width(), h * 0.8f / r.height())
+        iv.animate().x((w - r.width() * s) / 2f).y((h - r.height() * s) / 2f).scaleX(s).scaleY(s)
+            .setDuration(m.d(MotionTokens.LONG)).setInterpolator(Motion.decelerate)
+            .withEndAction {
+                transitionExpanded = true
+                if (transitionScreenReady) fadeTransition()
+                // Still loading: reveal the screen's own loading indicator shortly after.
+                else handler.postDelayed({ if (transitionImage === iv) fadeTransition() }, MotionTokens.LOADING_DELAY)
+            }.start()
+    }
+
+    override fun screenReady(screen: Screen) {
+        if (screen !== transitionFor) return
+        transitionScreenReady = true
+        if (transitionExpanded) fadeTransition()
+    }
+
+    private fun fadeTransition() {
+        val iv = transitionImage ?: return
+        transitionImage = null
+        transitionFor = null
+        theme.motion.exit(iv, dyDp = 0f, duration = MotionTokens.SHORT) { transitionLayer.removeView(iv) }
+    }
+
+    private fun clearTransition() {
+        transitionImage?.let { it.animate().cancel(); transitionLayer.removeView(it) }
+        transitionImage = null
+        transitionFor = null
+    }
+
+    override fun appReady() {
+        val i = intro ?: return
+        // After the gallery's first frame with its data, never before.
+        root.post { i.ready(); (top() as? GalleryScreen)?.animateIn() }
+    }
+
+    /** Android 13+: the system splash of the next start follows the app theme (dark / light). */
+    private fun rememberSplashTheme() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            runCatching { splashScreen.setSplashScreenTheme(if (theme.dark) R.style.Theme_PxPaint else R.style.Theme_PxPaint_Light) }
+        }
     }
 
     private fun detach(screen: Screen) {
@@ -268,7 +383,7 @@ class PxPaintActivity : Activity(), PxHost {
         if (old.render != newSettings.render) engine?.setRenderMode(renderMode(newSettings))
         val visual = old.theme != newSettings.theme || old.uiSize != newSettings.uiSize ||
             old.language != newSettings.language || old.highContrast != newSettings.highContrast ||
-            old.largeTouchTargets != newSettings.largeTouchTargets || old.reduceMotion != newSettings.reduceMotion
+            old.largeTouchTargets != newSettings.largeTouchTargets || old.motionLevel != newSettings.motionLevel
         if (visual) retheme() else {
             // Toolbar / gesture / overlay changes: rebuild the visible screen.
             if (rebuild) top()?.let { rebuild(it) }
@@ -278,6 +393,7 @@ class PxPaintActivity : Activity(), PxHost {
 
     private fun retheme() {
         theme = makeTheme()
+        rememberSplashTheme()
         overlays.setTheme(theme)
         applyWindowStyle()
         val s = top() ?: return

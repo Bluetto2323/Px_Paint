@@ -53,9 +53,13 @@ data class AppSettings(
     val performanceOverlay: Boolean = false,
     // Accessibility
     val largeTouchTargets: Boolean = false,
-    val reduceMotion: Boolean = false,
+    /** Block 9: full / reduced / no animation (replaces the Block 2 "reduce motion" switch). */
+    val motionLevel: MotionLevel = MotionLevel.FULL,
     val highContrast: Boolean = false,
 ) {
+    /** Anything but full motion (kept for the views that only need a yes / no). */
+    val reduceMotion: Boolean get() = motionLevel != MotionLevel.FULL
+
     fun encode(): Map<String, String> = mapOf(
         K_THEME to theme.name,
         K_UI_SIZE to uiSize.name,
@@ -80,7 +84,7 @@ data class AppSettings(
         K_BACKEND to backend.name,
         K_OVERLAY to performanceOverlay.toString(),
         K_LARGE_TARGETS to largeTouchTargets.toString(),
-        K_REDUCE_MOTION to reduceMotion.toString(),
+        K_MOTION to motionLevel.name,
         K_HIGH_CONTRAST to highContrast.toString(),
     )
 
@@ -111,7 +115,9 @@ data class AppSettings(
         const val K_BACKEND = "backend"
         const val K_OVERLAY = "performance_overlay"
         const val K_LARGE_TARGETS = "large_touch_targets"
+        /** Block 2-8 boolean; read only to migrate to [K_MOTION]. */
         const val K_REDUCE_MOTION = "reduce_motion"
+        const val K_MOTION = "motion_level"
         const val K_HIGH_CONTRAST = "high_contrast"
 
         fun decode(map: Map<String, String>): AppSettings {
@@ -144,7 +150,8 @@ data class AppSettings(
                 backend = enumOr(map[K_BACKEND], d.backend),
                 performanceOverlay = boolOr(map[K_OVERLAY], d.performanceOverlay),
                 largeTouchTargets = boolOr(map[K_LARGE_TARGETS], d.largeTouchTargets),
-                reduceMotion = boolOr(map[K_REDUCE_MOTION], d.reduceMotion),
+                motionLevel = enumValues<MotionLevel>().firstOrNull { it.name == map[K_MOTION] }
+                    ?: if (map[K_REDUCE_MOTION] == "true") MotionLevel.REDUCED else d.motionLevel,
                 highContrast = boolOr(map[K_HIGH_CONTRAST], d.highContrast),
             )
         }

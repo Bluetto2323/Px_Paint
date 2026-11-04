@@ -291,3 +291,25 @@ be found on the A33, this was why; the REPORT for KI-1 can now be opened from
   is no wide-gamut (P3) colour picking.
 * **One pinned panel** at a time, on tablets only. Phones use sheets.
 
+## KI-14 — Motion: limits of the Block 9 implementation
+
+* **Emulator only.** The startup, transitions and frame times were recorded
+  and measured on the CI emulator (SwiftShader, no GPU, debug build). There
+  are no measurements on the A33 or on a low-end phone. Emulator frame times
+  are pessimistic and noisy.
+* **Fast starts.** When the app is ready almost at once, the intro is cut
+  short by design: only the mark and the exit show. The full reveal
+  (≈1.2 s) is seen only on slow starts.
+* **Container transform.** It lands on an estimated canvas area (the engine
+  fits the canvas after loading), so the last frames can be off by a few
+  percent before the cross-fade.
+* **Project closing** is a fade over the workspace, not a shrink back into the
+  card: the canvas is a SurfaceView, which cannot be captured without a GPU
+  readback.
+* **Layer animations** run when the Layers panel rebuilds after an operation.
+  A deleted row disappears at once; the rows around it close the gap.
+* **Not animated:**
+  * rotation or resize transitions of the chrome (it is rebuilt);
+  * selection and transform tools (not implemented);
+  * import and export (not implemented).
+

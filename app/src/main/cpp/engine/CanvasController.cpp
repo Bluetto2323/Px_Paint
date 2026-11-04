@@ -304,6 +304,7 @@ void CanvasController::fillStatus(CanvasStatus& c) const {
     c.compositeTiles = d.compositeTiles;
     c.compositeLastMs = d.lastCompositeMs;
     c.compositeMaxMs = d.maxCompositeMs;
+    c.compositePending = doc_.hasPendingComposite();
     c.historyUndo = static_cast<uint32_t>(d.history.undoSteps);
     c.historyRedo = static_cast<uint32_t>(d.history.redoSteps);
     c.historyBytes = d.history.bytes;

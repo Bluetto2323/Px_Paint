@@ -37,6 +37,7 @@ struct CanvasStatus {
     uint32_t layers = 0;                     // Block 6: layer count
     uint64_t compositeTiles = 0;
     double compositeLastMs = 0, compositeMaxMs = 0;
+    bool compositePending = false;            // Block 9: stale composite tiles still being updated
     // Block 7: undo / redo history
     uint32_t historyUndo = 0, historyRedo = 0;
     uint64_t historyBytes = 0, historyBudget = 0, historyDropped = 0, historyRefused = 0;

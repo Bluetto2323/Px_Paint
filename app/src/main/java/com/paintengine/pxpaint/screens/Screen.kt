@@ -55,6 +55,17 @@ interface PxHost {
     fun openDiagnostics()
     /** Hides (true) or shows the system bars: the workspace's "hide interface" mode. */
     fun setImmersive(on: Boolean)
+    /** Block 9: the first screen has its data: the startup animation leaves now. */
+    fun appReady()
+    /**
+     * Opens [screen] with a container transform: [image] (the project
+     * thumbnail) grows from [origin] to the canvas area, then fades when the
+     * screen calls [screenReady] (or shortly after, revealing its loader).
+     */
+    fun pushFrom(screen: Screen, origin: View, image: android.graphics.Bitmap?)
+    fun screenReady(screen: Screen)
+    /** Debug builds only: simulated slow start (CI tests of the loading state); 0 otherwise. */
+    val debugInitDelayMs: Long
     fun tipsShown(id: String): Boolean
     fun markTipShown(id: String)
     fun resetTips()
@@ -81,4 +92,9 @@ abstract class Screen(protected val host: PxHost) {
     open fun onResume() {}
     /** Window size / orientation / insets changed; default rebuilds the view. */
     open fun onLayoutChanged(): Boolean = true
+    /**
+     * True: the screen animates its own entrance (e.g. a SurfaceView, which
+     * must not be faded as a whole); the host then only swaps it in.
+     */
+    open val ownEntrance: Boolean get() = false
 }

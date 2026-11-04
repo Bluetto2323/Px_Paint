@@ -9,6 +9,7 @@ import com.paintengine.BuildConfig
 import com.paintengine.pxpaint.core.AppSettings
 import com.paintengine.pxpaint.core.BackendChoice
 import com.paintengine.pxpaint.core.DockSide
+import com.paintengine.pxpaint.core.MotionLevel
 import com.paintengine.pxpaint.core.PinnedPanel
 import com.paintengine.pxpaint.core.Side
 import com.paintengine.pxpaint.core.FingerMode
@@ -119,7 +120,9 @@ class SettingsScreen(host: PxHost) : Screen(host) {
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_ACCESSIBILITY)))
         page.addView(Widgets.switchRow(context, theme, tr(S.LARGE_TARGETS), null, s.largeTouchTargets) { set(s.copy(largeTouchTargets = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.HIGH_CONTRAST), null, s.highContrast) { set(s.copy(highContrast = it)) })
-        page.addView(Widgets.switchRow(context, theme, tr(S.REDUCE_MOTION), null, s.reduceMotion) { set(s.copy(reduceMotion = it)) })
+        page.addView(choice(tr(S.MOTION_LEVEL), tr(S.MOTION_LEVEL_DESC), listOf(
+            MotionLevel.FULL to tr(S.MOTION_FULL), MotionLevel.REDUCED to tr(S.MOTION_REDUCED), MotionLevel.OFF to tr(S.MOTION_OFF),
+        ), s.motionLevel) { set(s.copy(motionLevel = it)) })
 
         // --- About
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_ABOUT)))

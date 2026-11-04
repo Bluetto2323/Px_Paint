@@ -87,6 +87,63 @@ shot 13-settings
 adb shell input swipe 540 1900 540 600 600; sleep 2
 shot 14-settings-gestures
 
+# ---------------- Motion (Block 9): startup animation, project opening, panel frame times
+record() {   # record <name> <seconds>: screen recording in the background (pulled by pull_rec)
+  adb shell screenrecord --time-limit "$2" --bit-rate 4000000 "/sdcard/$1.mp4" > /dev/null 2>&1 &
+  sleep 1
+}
+pull_rec() {
+  sleep "${2:-1}"
+  adb pull "/sdcard/$1.mp4" "$OUT/$1.mp4" > /dev/null 2>&1 || echo "no recording $1"
+  if command -v ffmpeg > /dev/null && [ -f "$OUT/$1.mp4" ]; then
+    ffmpeg -loglevel error -y -i "$OUT/$1.mp4" -vf "fps=6,scale=200:-1,tile=10x1" -frames:v 1 "$OUT/$1-strip.png" || true
+  fi
+}
+# Cold start, normal (no demo state: the startup animation runs).
+adb shell am force-stop "$PKG"; adb shell pm clear "$PKG" > /dev/null
+adb logcat -c
+record 60-startup 5
+adb shell am start -W -n "$ACT" > "$OUT/60-startup-am.txt"
+pull_rec 60-startup 5
+shot 61-gallery-after-startup
+# Cold start with a simulated slow initialisation (2.5 s): loading state, then the exit.
+adb shell am force-stop "$PKG"
+record 62-startup-slow 6
+adb shell am start -n "$ACT" --el pxpaint.slowinit 2500 > /dev/null
+sleep 1.9
+shot 63-startup-loading-state
+pull_rec 62-startup-slow 5
+adb logcat -d -s PxPaint:I | grep -E "Intro:" > "$OUT/startup-intro-log.txt" || true
+# Project opening (container transform from the gallery card) and closing.
+start --es pxpaint.demo canvas
+adb shell input keyevent KEYCODE_BACK; sleep 3
+dump 64-gallery-with-project
+record 65-project-open-close 7
+if xy=$(centre 64-gallery-with-project "Brush demo"); then
+  adb shell input tap $xy; sleep 3
+  shot 66-project-opened
+  adb shell input keyevent KEYCODE_BACK; sleep 2
+fi
+pull_rec 65-project-open-close 3
+# Rapid repeated panel interactions: UI frame times with motion full, then off.
+for level in full off; do
+  start --es pxpaint.demo canvas --es pxpaint.motion "$level"
+  dump "67-panels-$level"
+  adb shell dumpsys gfxinfo "$PKG" reset > /dev/null
+  [ "$level" = full ] && record 68-panel-transitions 8
+  for i in 1 2 3 4 5; do
+    for b in "Layers" "Color" "Brush library"; do
+      if xy=$(centre "67-panels-$level" "$b"); then adb shell input tap $xy; sleep 0.45; adb shell input tap $xy; sleep 0.35; fi
+    done
+  done
+  [ "$level" = full ] && pull_rec 68-panel-transitions 1
+  adb shell dumpsys gfxinfo "$PKG" > "$OUT/gfxinfo-panels-$level.txt"
+done
+python3 tools/ci/motion_perf.py "$OUT" "panels motion full=gfxinfo-panels-full.txt" "panels motion off=gfxinfo-panels-off.txt" \
+  | tee "$OUT/motion-perf.txt" || true
+start --es pxpaint.demo color --es pxpaint.motion reduced
+shot 69-reduced-motion-color
+
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
 start --es pxpaint.demo canvas

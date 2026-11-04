@@ -1,4 +1,4 @@
-# PxPaint — Blocco 8 (nuova interfaccia) sul motore Paint Engine
+# PxPaint — Blocco 9 (motion design) sul motore Paint Engine
 
 App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3.x).
 
@@ -71,6 +71,14 @@ App di pittura nativa Android (Kotlin + C++/NDK, Vulkan con fallback OpenGL ES 3
     l'interfaccia, pizzico rapido adatta.
   * Token di design con contrasto WCAG verificato.
   * Dettagli: `docs/UI.md`, `docs/BLOCK8_REPORT.md`.
+* **Blocco 9**: **animazioni e identità visiva**.
+  * Splash di sistema con il logo PxPaint e animazione d'avvio (tile, tratto,
+    nome, luce), che non ritarda mai l'avvio.
+  * Transizioni tra schermate; il progetto si apre crescendo dalla sua scheda.
+  * Pannelli, livelli (FLIP), pennelli, colori.
+  * Indicatori di caricamento e di salvataggio.
+  * Impostazione Animazioni: complete, ridotte o disattivate.
+  * Dettagli: `docs/MOTION.md`, `docs/BLOCK9_REPORT.md`.
 
 L'interfaccia parla col motore **solo** attraverso `NativeEngine`
 (documentata in `docs/ENGINE_API.md`).

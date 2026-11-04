@@ -27,7 +27,11 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
     private val layers = ArrayList<View>()
     private val handler = Handler(Looper.getMainLooper())
     private var messageView: TextView? = null
-    private val hideMessage = Runnable { messageView?.let { removeView(it) }; messageView = null }
+    private val hideMessage = Runnable {
+        val v = messageView ?: return@Runnable
+        messageView = null
+        theme.motion.exit(v, dyDp = com.paintengine.pxpaint.core.MotionTokens.NUDGE) { removeView(v) }
+    }
     var insets = Rect()
 
     fun setTheme(t: PxTheme) {
@@ -50,8 +54,7 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
     fun dismiss(layer: View) {
         if (layers.remove(layer)) {
             hideKeyboard()
-            if (theme.reduceMotion) removeView(layer)
-            else layer.animate().alpha(0f).setDuration(120).withEndAction { removeView(layer) }.start()
+            theme.motion.exit(layer, dyDp = 0f) { removeView(layer) }
         }
     }
 
@@ -96,10 +99,7 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
         scrim.addView(CappedHeight(context, maxH).apply { addView(card) }, lp)
         scrim.setOnClickListener { dismiss(scrim) }
         push(scrim)
-        if (!theme.reduceMotion) {
-            card.translationY = theme.dpF(if (wide) 16f else 48f)
-            card.animate().translationY(0f).setDuration(180).start()
-        }
+        theme.motion.enter(card, dyDp = if (wide) com.paintengine.pxpaint.core.MotionTokens.SHIFT else com.paintengine.pxpaint.core.MotionTokens.SHEET)
         return scrim
     }
 
@@ -213,7 +213,8 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
     /** Short, non-blocking message at the bottom (announced by TalkBack). */
     fun message(text: String, long: Boolean = false) {
         handler.removeCallbacks(hideMessage)
-        messageView?.let { removeView(it) }
+        val replacing = messageView != null
+        messageView?.let { it.animate().cancel(); removeView(it) }
         val tv = theme.text(context, text, PxTheme.Type.LABEL, if (theme.dark) 0xFF101114.toInt() else 0xFFF4F4F4.toInt()).apply {
             background = theme.rounded(if (theme.dark) 0xFFE9EBEE.toInt() else 0xFF26282C.toInt(), theme.radiusS)
             setPadding(theme.dp(16), theme.dp(12), theme.dp(16), theme.dp(12))
@@ -227,16 +228,15 @@ class OverlayHost(context: Context, private var theme: PxTheme) : FrameLayout(co
             rightMargin = theme.dp(24)
         })
         messageView = tv
+        // A replaced message just swaps (no re-entry flicker on rapid messages).
+        if (!replacing) theme.motion.enter(tv, dyDp = com.paintengine.pxpaint.core.MotionTokens.SHIFT, duration = com.paintengine.pxpaint.core.MotionTokens.SHORT)
         handler.postDelayed(hideMessage, if (long) 4500 else 2600)
     }
 
     private fun push(layer: View) {
         layers += layer
         addView(layer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        if (!theme.reduceMotion) {
-            layer.alpha = 0f
-            layer.animate().alpha(1f).setDuration(140).start()
-        }
+        theme.motion.fadeTo(layer, 1f, from = 0f)
         messageView?.bringToFront()
     }
 

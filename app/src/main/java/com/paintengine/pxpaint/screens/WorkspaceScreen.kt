@@ -38,6 +38,8 @@ import com.paintengine.pxpaint.core.BrushTool
 import com.paintengine.pxpaint.core.TwoFinger
 import com.paintengine.pxpaint.core.WorkspaceSpec
 import com.paintengine.pxpaint.core.DesignTokens
+import com.paintengine.pxpaint.core.MotionTokens
+import com.paintengine.pxpaint.core.SaveTracker
 import com.paintengine.pxpaint.core.GestureShortcut
 import com.paintengine.pxpaint.core.PanelStyle
 import com.paintengine.pxpaint.core.PinnedPanel
@@ -56,6 +58,9 @@ import com.paintengine.pxpaint.ui.OverlayHost
 import com.paintengine.pxpaint.ui.PxSlider
 import com.paintengine.pxpaint.ui.PxTheme
 import com.paintengine.pxpaint.ui.QuickSlider
+import com.paintengine.pxpaint.ui.Motion
+import com.paintengine.pxpaint.ui.ProgressIndicator
+import com.paintengine.pxpaint.ui.SaveIndicator
 import com.paintengine.pxpaint.ui.SliderBubble
 import com.paintengine.pxpaint.ui.Thumbnails
 import com.paintengine.pxpaint.ui.Widgets
@@ -87,6 +92,19 @@ import kotlin.math.roundToInt
  * order and never see another canvas's content.
  */
 class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host) {
+    // The canvas is a SurfaceView: the host never fades this screen as a whole; its chrome enters itself.
+    override val ownEntrance: Boolean get() = true
+    private val motion get() = theme.motion
+    private val saveTracker = SaveTracker()
+    private var saveIndicator: SaveIndicator? = null
+    private var chromeEntered = false
+    private var shownPanel = Panel.NONE
+    private var lastPinned = PinnedPanel.NONE
+    private var loader: View? = null
+    private var loaderProgress: ProgressIndicator? = null
+    private var loaderText: TextView? = null
+    private var compositeIndicator: ProgressIndicator? = null
+    private var compositePolls = 0
     enum class Tool(val icon: Icon, val label: S, val desc: S) {
         MARKER(Icon.BRUSH, S.TOOL_MARKER, S.TOOL_MARKER_DESC),
         ERASER(Icon.ERASER, S.TOOL_ERASER, S.TOOL_ERASER_DESC),
@@ -260,8 +278,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                             st.layers.map { it.opacity }.toFloatArray(), st.layers.map { it.blend.code }.toIntArray(), st.activeId,
                         )
                     ) throw OpenFailure("layer stack rejected")
+                    val total = layered.tiles.size
+                    var done = 0
                     for ((lid, tiles) in layered.tiles) {
                         for (batch in tiles.importBatches()) if (e.importLayerTiles(lid, batch) < 0) throw OpenFailure("tile import rejected")
+                        done++
+                        // Real progress (layers read), shown only if opening takes long.
+                        if (total > 1) host.runOnMain { loaderProgress?.progress = done / total.toFloat(); loaderText?.text = tr(S.OPENING_LAYER, done, total) }
                     }
                     layerFiles.putAll(layered.tiles)
                     layersOnDisk.addAll(layered.tiles.keys)
@@ -290,6 +313,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     savedRevision = e.canvasContentRevision()
                     lastAutosave = SystemClock.uptimeMillis()
                     loaded = true
+                    hideLoader()
+                    host.screenReady(this)
                     demo?.let { d -> handler.postDelayed({ runDemo(d) }, 600) }
                 }.onFailure {
                     // Never overwrite damaged content with an empty canvas.
@@ -424,8 +449,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         savedRevision = rev
         lastAutosave = SystemClock.uptimeMillis()
         val id = meta.id
+        saveTracker.saveStarted()
+        saveIndicator?.show(saveTracker.state)
         host.io.execute {
-            if (!ioReady) return@execute
+            if (!ioReady) {
+                host.runOnMain { savedRevision = -1L; saveTracker.saveSkipped(); saveIndicator?.show(saveTracker.state) }
+                return@execute
+            }
             val r = runCatching {
                 val stack = LayerStack.parse(e.layers()) ?: throw IllegalStateException("no layers")
                 val changed = HashMap<Int, TileContent>()
@@ -456,6 +486,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                         savedRevision = -1L   // retry at the next autosave
                         host.overlays.message(tr(S.SAVE_FAILED, it.message ?: "?"), long = true)
                     }
+                saveTracker.saveFinished(r.isSuccess, SystemClock.uptimeMillis())
+                saveIndicator?.show(saveTracker.state)
             }
         }
     }
@@ -475,6 +507,17 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         updateViewport(e.viewport(ViewOp.QUERY))
         refreshHistoryButtons()
+        if (loaded) {
+            saveTracker.poll(e.canvasContentRevision() != savedRevision, SystemClock.uptimeMillis())
+            saveIndicator?.show(saveTracker.state)
+        }
+        // Heavy layer compositing (spread over frames): a small ring once it lasts.
+        compositePolls = if (s.optBoolean("compositePending")) compositePolls + 1 else 0
+        compositeIndicator?.let { ci ->
+            val show = compositePolls >= 2
+            if (show && ci.visibility != View.VISIBLE) { ci.visibility = View.VISIBLE; motion.fadeTo(ci, 1f, from = 0f) }
+            else if (!show && ci.visibility == View.VISIBLE) motion.exit(ci, dyDp = 0f) { ci.visibility = View.GONE; ci.alpha = 1f }
+        }
         hud?.let { h ->
             val fps = if (s.optBoolean("rateValid")) String.format(java.util.Locale.US, " · %.0f fps", s.optDouble("fps")) else ""
             h.text = String.format(
@@ -611,6 +654,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             GestureShortcut.FULLSCREEN -> setFullscreen(!fullscreen)
             GestureShortcut.FIT -> {
                 viewOp(ViewOp.FIT)
+                zoomChip?.let { motion.pop(it) }        // canvas fit: the zoom chip answers
                 host.overlays.message(tr(S.FIT_DONE))
             }
         }
@@ -710,6 +754,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     if (target != view.rotation) {
                         val f = P((prevA.x + prevB.x) / 2, (prevA.y + prevB.y) / 2)
                         viewOp(ViewOp.SET_ROTATION_AT, target, f.x, f.y)
+                        // Rotation snapped: a tick and the chip answers (no animation of the canvas itself).
+                        surfaceView?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                        zoomChip?.let { motion.pop(it) }
                     }
                 }
             }
@@ -794,7 +841,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             background = theme.pressable(theme.rounded(theme.chrome, theme.radiusPill, theme.outline), theme.radiusPill)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             isClickable = true
-            setOnClickListener { viewOp(ViewOp.FIT) }
+            setOnClickListener { viewOp(ViewOp.FIT); motion.pop(this) }
             setOnLongClickListener { canvasMenu(this); true }
         }
         c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -872,11 +919,65 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             })
         } else null
 
+        shownPanel = Panel.NONE          // the rebuilt chrome has no panel yet
         if (panel != Panel.NONE) showPanel(panel)
         refreshDock()
+        // Workspace transition: the chrome arrives once (not on every rebuild); a new pinned panel slides in.
+        if (!chromeEntered) {
+            chromeEntered = true
+            for (i in 0 until c.childCount) {
+                val v = c.getChildAt(i)
+                val (dx, dy) = when {
+                    v === pinnedView -> (if (s.panelSide == Side.LEFT) -MotionTokens.SLIDE else MotionTokens.SLIDE) to 0f
+                    v === slidersView -> (if (s.sliderSide == Side.LEFT) -MotionTokens.SHIFT else MotionTokens.SHIFT) to 0f
+                    i == 0 -> 0f to -MotionTokens.SHIFT                       // top bar
+                    else -> 0f to MotionTokens.SHIFT
+                }
+                motion.enter(v, dyDp = dy, dxDp = dx, delay = if (i == 0) 0L else MotionTokens.STAGGER)
+            }
+        } else if (s.pinned != PinnedPanel.NONE && s.pinned != lastPinned) {
+            pinnedView?.let { motion.enter(it, dyDp = 0f, dxDp = if (s.panelSide == Side.LEFT) -MotionTokens.SLIDE else MotionTokens.SLIDE) }
+        }
+        lastPinned = s.pinned
+        if (!loaded && !closed) showLoaderLater()
         if (com.paintengine.BuildConfig.DEBUG) android.util.Log.i("PxPaint", String.format(java.util.Locale.US,
             "UI chrome %s (%dx%d dp, sw %d) built in %.2f ms", s.kind, host.windowWidthDp, host.windowHeightDp, host.smallestWidthDp,
             (SystemClock.elapsedRealtimeNanos() - t0) / 1e6))
+    }
+
+    /** Project loading: a card with a ring (real layer progress when there are several), only if it takes long. */
+    private fun showLoaderLater() {
+        handler.postDelayed({
+            val c = chrome ?: return@postDelayed
+            if (loaded || closed || loader != null) return@postDelayed
+            val ring = ProgressIndicator(context, theme, sizeDp = 36f)
+            val text = theme.text(context, "", PxTheme.Type.CAPTION, theme.textSecondary)
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                background = theme.rounded(theme.chrome, theme.radiusL, theme.outline)
+                setPadding(theme.dp(24), theme.dp(20), theme.dp(24), theme.dp(18))
+                addView(ring)
+                addView(theme.text(context, tr(S.OPENING_PROJECT, meta.name), PxTheme.Type.LABEL, lines = 1).apply {
+                    setPadding(0, theme.dp(12), 0, theme.dp(2))
+                })
+                addView(text)
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            loader = card
+            loaderProgress = ring
+            loaderText = text
+            c.addView(card, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            motion.enter(card, dyDp = 0f)
+        }, MotionTokens.LOADING_DELAY)
+    }
+
+    private fun hideLoader() {
+        val l = loader ?: return
+        loader = null
+        loaderProgress = null
+        loaderText = null
+        motion.exit(l, dyDp = 0f) { chrome?.removeView(l) }
     }
 
     private fun topBar(s: WorkspaceSpec): View = LinearLayout(context).apply {
@@ -899,6 +1000,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         } else {
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+        }
+        // Status: compositing ring (heavy layer updates) and save state.
+        compositeIndicator = ProgressIndicator(context, theme, sizeDp = 16f, strokeDp = 2f).apply {
+            visibility = View.GONE
+            contentDescription = tr(S.COMPOSITING)
+        }.also { addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = theme.dp(4) }) }
+        saveIndicator = SaveIndicator(context, theme) { save(force = true) }.also {
+            it.show(saveTracker.state)
+            addView(it)
         }
         // Undo / redo: tap = one step, long-press = the History panel.
         undoButton = IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}").apply {
@@ -1026,6 +1136,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             togglePanel(Panel.TOOL)
         } else {
             tool = t
+            toolButtons[t]?.let { motion.pop(it) }   // brush selection: the new tool answers
             if (panel == Panel.TOOL || panel == Panel.LIBRARY) showPanel(panel)
             if (spec?.pinned == PinnedPanel.BRUSHES) refreshPinned()
             host.overlays.message(tr(t.desc))
@@ -1074,10 +1185,18 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             refreshPinned()
             return
         }
+        val old = panelView
         panel = p
-        panelView?.let { chrome?.removeView(it) }
         panelView = null
-        slidersView?.visibility = View.VISIBLE
+        if (old != null) {
+            if (p == Panel.NONE) {
+                // Panel dismissal: slides / fades away the way it came.
+                val sheet = spec?.panelStyle == PanelStyle.BOTTOM_SHEET
+                motion.exit(old, dyDp = if (sheet) MotionTokens.SHEET else 0f) { chrome?.removeView(old) }
+            } else chrome?.removeView(old)
+        }
+        if (p == Panel.NONE) shownPanel = Panel.NONE
+        slidersView?.let { if (it.visibility != View.VISIBLE) { it.visibility = View.VISIBLE; motion.fadeTo(it, 1f, from = 0f) } }
         if (p != Panel.NONE) showPanel(p)
     }
 
@@ -1141,11 +1260,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         c.addView(frame, lp)
         // A bottom sheet covers the edge sliders: hide them until it closes.
         slidersView?.visibility = if (s.panelStyle == PanelStyle.BOTTOM_SHEET) View.INVISIBLE else View.VISIBLE
-        if (!theme.reduceMotion) {
-            frame.alpha = 0f
-            frame.translationY = if (s.panelStyle == PanelStyle.BOTTOM_SHEET) theme.dpF(24f) else 0f
-            frame.animate().alpha(1f).translationY(0f).setDuration(DesignTokens.MOTION_SHORT).start()
+        // Floating panel appearance: only when it newly opens (an update of the open panel just swaps).
+        if (p != shownPanel) when (s.panelStyle) {
+            PanelStyle.BOTTOM_SHEET -> motion.enter(frame, dyDp = MotionTokens.SHEET)
+            PanelStyle.SIDE_SHEET -> motion.enter(frame, dyDp = 0f, dxDp = if (s.panelSide == Side.LEFT) -MotionTokens.SLIDE else MotionTokens.SLIDE)
+            PanelStyle.POPOVER -> {
+                motion.enter(frame, dyDp = -MotionTokens.NUDGE * 2)
+                if (motion.movement) { frame.pivotY = 0f; frame.scaleX = MotionTokens.ENTER_SCALE; frame.scaleY = MotionTokens.ENTER_SCALE; frame.animate().scaleX(1f).scaleY(1f) }
+            }
         }
+        shownPanel = p
     }
 
     /**
@@ -1173,7 +1297,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     MotionEvent.ACTION_DOWN -> downY = e.rawY
                     MotionEvent.ACTION_MOVE -> card.translationY = (e.rawY - downY).coerceAtLeast(0f)
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        if (e.rawY - downY > theme.dpF(56f)) setPanel(Panel.NONE) else card.animate().translationY(0f).setDuration(theme.motion(DesignTokens.MOTION_SHORT)).start()
+                        if (e.rawY - downY > theme.dpF(56f)) setPanel(Panel.NONE)
+                        else card.animate().translationY(0f).setDuration(motion.d(MotionTokens.MEDIUM)).setInterpolator(Motion.spring).start()
                     }
                 }
                 true
@@ -1469,6 +1594,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         (colorButton as? FrameLayout)?.getChildAt(0)?.background = theme.oval(c, theme.text)
         if (!final) return
         host.updateBrush(host.brush.copy(color = c))
+        colorButton?.let { motion.pop(it) }      // colour selection: the swatch answers
         if (tool == Tool.ERASER || tool == Tool.MOVE) {
             tool = Tool.MARKER
             refreshDock()
@@ -1501,6 +1627,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             val l = loupe ?: View(context).also {
                 loupe = it
                 ch.addView(it, FrameLayout.LayoutParams(theme.dp(56), theme.dp(56)))
+                motion.pop(it, 0.6f)          // eyedropper activation: the loupe grows in
             }
             l.background = theme.oval(c, theme.text)
             l.translationX = x - theme.dp(28)
@@ -1528,7 +1655,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var pendingRecent = 0
     private val rememberColor = Runnable { host.updateBrush(host.brush.withRecent(pendingRecent)) }
 
-    private fun layersPanel(): View = LayersPanel(host, layerOps).view()
+    private val layersState = LayersPanel.State()
+    private fun layersPanel(): View = LayersPanel(host, layerOps, layersState).view()
 
     // ---------------------------------------------------------------- history
     private fun historyPanel(): View {
@@ -1544,6 +1672,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             else if (delta > 0) historyOp(NativeEngine.HistoryOp.REDO, delta, announce = false)
         }
         override fun clear() = historyOp(NativeEngine.HistoryOp.CLEAR)
+    }
+
+    /** Announces the step undone (the first undone one) or redone (the last done one). */
+    private fun announceStep(h: HistoryState?, op: NativeEngine.HistoryOp, announce: Boolean) {
+        if (!announce || h == null) return
+        val step = if (op == NativeEngine.HistoryOp.UNDO) h.steps.getOrNull(h.undo) else h.steps.getOrNull(h.undo - 1)
+        step?.let {
+            val what = tr(it.kind.label) + if (it.label.isNotEmpty()) " · ${it.label}" else ""
+            host.overlays.message(tr(if (op == NativeEngine.HistoryOp.UNDO) S.UNDONE else S.REDONE, what))
+        }
     }
 
     /** Enabled state of undo / redo from the engine's lock-free counts (cheap: every poll and after edits). */
@@ -1604,14 +1742,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     done < 0 -> host.overlays.message(tr(S.HISTORY_REFUSED), long = true)
                     op == NativeEngine.HistoryOp.CLEAR -> host.overlays.message(tr(S.HISTORY_CLEARED))
                     done == 0 -> host.overlays.message(tr(if (op == NativeEngine.HistoryOp.UNDO) S.NOTHING_TO_UNDO else S.NOTHING_TO_REDO))
-                    announce && h != null -> {
-                        // Undo: the first undone step; redo: the last done one.
-                        val step = if (op == NativeEngine.HistoryOp.UNDO) h.steps.getOrNull(h.undo) else h.steps.getOrNull(h.undo - 1)
-                        step?.let {
-                            val what = tr(it.kind.label) + if (it.label.isNotEmpty()) " · ${it.label}" else ""
-                            host.overlays.message(tr(if (op == NativeEngine.HistoryOp.UNDO) S.UNDONE else S.REDONE, what))
-                        }
-                    }
+                    done > 0 && op == NativeEngine.HistoryOp.UNDO -> { undoButton?.let { motion.nudge(it, -28f) }; announceStep(h, op, announce) }
+                    done > 0 && op == NativeEngine.HistoryOp.REDO -> { redoButton?.let { motion.nudge(it, 28f) }; announceStep(h, op, announce) }
                 }
                 if (panel == Panel.LAYERS || panel == Panel.HISTORY) showPanel(panel)
             }

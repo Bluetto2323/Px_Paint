@@ -14,6 +14,8 @@ import com.paintengine.engine.NativeEngine.LayerOp
 import com.paintengine.pxpaint.core.BlendMode
 import com.paintengine.pxpaint.core.LayerInfo
 import com.paintengine.pxpaint.core.LayerStack
+import com.paintengine.pxpaint.core.MotionPolicy
+import com.paintengine.pxpaint.core.MotionTokens
 import com.paintengine.pxpaint.core.S
 import com.paintengine.pxpaint.core.tr
 import com.paintengine.pxpaint.ui.CheckerDrawable
@@ -36,7 +38,20 @@ import kotlin.math.roundToInt
  * Every action goes through [Ops] (the workspace), which asks the engine,
  * shows why an operation is refused, and refreshes the panel.
  */
-class LayersPanel(private val host: PxHost, private val ops: Ops) {
+class LayersPanel(private val host: PxHost, private val ops: Ops, private val state: State = State()) {
+    /**
+     * What the previous panel showed (Block 9 animations, FLIP): each row's
+     * position, visibility and version, the active layer. Owned by the
+     * workspace so it survives the panel being rebuilt after every operation.
+     */
+    class State {
+        val tops = HashMap<Int, Int>()
+        val visible = HashMap<Int, Boolean>()
+        val versions = HashMap<Int, Long>()
+        var active = 0
+        var shown = false
+    }
+
     interface Ops {
         val stack: LayerStack?
         fun run(op: LayerOp, id: Int, arg: Int = 0, value: Float = 0f, text: String? = null, done: S? = null)
@@ -69,12 +84,60 @@ class LayersPanel(private val host: PxHost, private val ops: Ops) {
         val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         for (l in stack.topDown) list.addView(row(l, l.id == stack.activeId), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = theme.dp(4) })
+        animateChanges(list, stack)
         addView(list, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = theme.dp(6)
         })
         stack.active?.let { addView(activeControls(stack, it)) }
         addView(Widgets.divider(context, theme).apply { (layoutParams as LinearLayout.LayoutParams).setMargins(0, theme.dp(12), 0, theme.dp(10)) })
         addView(ops.background())
+    }
+
+    /**
+     * Layer animations (only the panel moves, never the canvas): new rows
+     * (add, duplicate) grow in; rows whose place changed (reorder, the gap
+     * left by a delete or merge) spring from where they were; a visibility
+     * change fades the row; the newly active row and a merged layer pulse.
+     */
+    private fun animateChanges(list: LinearLayout, stack: LayerStack) {
+        list.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                list.viewTreeObserver.removeOnPreDrawListener(this)
+                val m = theme.motion
+                val first = !state.shown
+                val removed = state.tops.keys.any { id -> stack.get(id) == null }
+                var newIndex = 0
+                for (i in 0 until list.childCount) {
+                    val row = list.getChildAt(i)
+                    val id = row.tag as? Int ?: continue
+                    val l = stack.get(id) ?: continue
+                    val oldTop = state.tops[id]
+                    if (!first) when {
+                        oldTop == null -> {
+                            m.enter(row, dyDp = -MotionTokens.SHIFT, delay = MotionPolicy.stagger(newIndex++, m.level))
+                            if (m.movement) { row.scaleY = 0.85f; row.animate().scaleY(1f) }
+                        }
+                        oldTop != row.top -> m.settle(row, (oldTop - row.top).toFloat())
+                    }
+                    val wasVisible = state.visible[id]
+                    if (!first && wasVisible != null && wasVisible != l.visible) {
+                        m.fadeTo(row, if (l.visible) 1f else ROW_HIDDEN_ALPHA, from = if (wasVisible) 1f else ROW_HIDDEN_ALPHA)
+                    }
+                    if (!first && id == stack.activeId && state.active != stack.activeId) m.pop(row, 1.03f)
+                    if (!first && removed && oldTop != null && state.versions[id] != l.version) m.pop(row, 1.04f)   // merged into
+                }
+                state.tops.clear(); state.visible.clear(); state.versions.clear()
+                for (i in 0 until list.childCount) {
+                    val row = list.getChildAt(i)
+                    val id = row.tag as? Int ?: continue
+                    state.tops[id] = row.top
+                    stack.get(id)?.let { state.visible[id] = it.visible; state.versions[id] = it.version }
+                }
+                state.active = stack.activeId
+                state.shown = true
+                return true
+            }
+        })
     }
 
     private fun subtitle(l: LayerInfo): String {
@@ -98,10 +161,14 @@ class LayersPanel(private val host: PxHost, private val ops: Ops) {
         contentDescription = "${l.name}${if (active) ", " + tr(S.LAYER_SELECTED, "") else ""}"
         setOnClickListener { if (!active) ops.run(LayerOp.ACTIVE, l.id) }
         setOnLongClickListener { layerMenu(this, l); true }
-        alpha = if (l.visible) 1f else 0.6f
+        alpha = if (l.visible) 1f else ROW_HIDDEN_ALPHA
+        tag = l.id
         val thumb = LayerThumb(context, theme)
         val size = theme.dp(42)
-        thumb.bitmap = ops.thumbnail(l, size) { b -> thumb.bitmap = b }
+        thumb.bitmap = ops.thumbnail(l, size) { b ->
+            thumb.bitmap = b
+            theme.motion.fadeTo(thumb, 1f, from = 0.35f)   // thumbnail updated: cross-fade
+        }
         addView(thumb, LinearLayout.LayoutParams(size, size))
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -261,5 +328,9 @@ class LayersPanel(private val host: PxHost, private val ops: Ops) {
             if (b != null) canvas.drawBitmap(b, null, r, paint)
             canvas.drawRect(r, frame)
         }
+    }
+
+    companion object {
+        private const val ROW_HIDDEN_ALPHA = 0.6f
     }
 }

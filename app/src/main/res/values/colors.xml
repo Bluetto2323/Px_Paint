@@ -4,4 +4,8 @@
     <color name="px_bg">#FF0F1012</color>
     <color name="px_ember">#FFFF7A59</color>
     <color name="px_ink">#FFEEF0F2</color>
+    <!-- Light theme (PxTheme light): splash of the next start when the app is light. -->
+    <color name="px_bg_light">#FFF4F2EE</color>
+    <color name="px_ember_light">#FFC24020</color>
+    <color name="px_ink_light">#FF18191B</color>
 </resources>

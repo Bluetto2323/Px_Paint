@@ -60,6 +60,19 @@ class IconButton(
         refresh()
     }
 
+    init {
+        // Toolbar interactions: a quick press-down scale (native StateListAnimator), when motion allows.
+        if (theme.motion.movement) {
+            stateListAnimator = android.animation.StateListAnimator().apply {
+                fun to(s: Float, ms: Long) = android.animation.ObjectAnimator.ofPropertyValuesHolder(this@IconButton,
+                    android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, s),
+                    android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, s)).setDuration(ms)
+                addState(intArrayOf(android.R.attr.state_pressed), to(com.paintengine.pxpaint.core.MotionTokens.PRESS_SCALE, com.paintengine.pxpaint.core.MotionTokens.MICRO))
+                addState(intArrayOf(), to(1f, com.paintengine.pxpaint.core.MotionTokens.SHORT))
+            }
+        }
+    }
+
     override fun setSelected(selected: Boolean) {
         super.setSelected(selected)
         refresh()

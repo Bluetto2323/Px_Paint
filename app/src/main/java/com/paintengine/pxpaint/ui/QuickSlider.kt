@@ -191,14 +191,17 @@ class SliderBubble(context: Context, private val theme: PxTheme) : View(context)
 
     fun show(size: Float?, opacity: Float?, color: Int, zoom: Double) {
         if (size == null && opacity == null) {
-            visibility = GONE
+            if (visibility == VISIBLE) theme.motion.exit(this, dyDp = 0f) { visibility = GONE; alpha = 1f }
             return
         }
         this.size = size
         this.opacity = opacity
         this.color = color
         this.zoom = if (zoom > 0) zoom else 1.0
-        visibility = VISIBLE
+        if (visibility != VISIBLE) {
+            visibility = VISIBLE
+            theme.motion.fadeTo(this, 1f, from = 0f)   // appears with the drag, never in the way of it
+        }
         invalidate()
     }
 

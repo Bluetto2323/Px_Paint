@@ -38,6 +38,8 @@ import java.util.Date
 class GalleryScreen(host: PxHost) : Screen(host) {
     private var projects: List<ProjectMeta> = emptyList()
     private var loaded = false
+    /** Project opened from here: its card pulses when the gallery comes back. */
+    private var lastOpened: String? = null
     private var search = ""
     private var sort = SortOrder.RECENT
     private var grid: GridLayoutView? = null
@@ -70,14 +72,39 @@ class GalleryScreen(host: PxHost) : Screen(host) {
     override fun onShown() = reload()
 
     fun reload() {
+        val firstLoad = !loaded
         host.io.execute {
+            // Debug builds only: a simulated slow start (CI test of the startup loading state).
+            if (firstLoad && host.debugInitDelayMs > 0) Thread.sleep(host.debugInitDelayMs.coerceAtMost(10_000))
             val list = runCatching { host.store.list() }
             host.runOnMain {
                 list.onSuccess { projects = it }.onFailure { host.overlays.message(tr(S.STORE_ERROR, it.message ?: "?")) }
                 loaded = true
                 render()
+                if (firstLoad) host.appReady()
+                // Back from a project: its card says "here it is".
+                lastOpened?.let { id -> cards[id]?.let { c -> c.post { theme.motion.pop(c, 0.94f) } } }
+                lastOpened = null
             }
         }
+    }
+
+    /** Gallery opening (after the startup animation): the cards rise in, a few at a time. */
+    fun animateIn() {
+        val g = grid ?: return
+        for (i in 0 until g.childCount) {
+            theme.motion.enter(g.getChildAt(i), dyDp = com.paintengine.pxpaint.core.MotionTokens.SHIFT,
+                delay = com.paintengine.pxpaint.core.MotionPolicy.stagger(i, theme.motion.level))
+        }
+    }
+
+    private val cards = HashMap<String, View>()
+
+    private fun open(p: ProjectMeta, origin: View?, image: android.widget.ImageView?) {
+        lastOpened = p.id
+        val bmp = (image?.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        if (origin != null && image != null) host.pushFrom(WorkspaceScreen(host, p), image, bmp)
+        else host.push(WorkspaceScreen(host, p))
     }
 
     private fun header(): View = LinearLayout(context).apply {
@@ -175,6 +202,7 @@ class GalleryScreen(host: PxHost) : Screen(host) {
         val state = stateArea ?: return
         grid.removeAllViews()
         state.removeAllViews()
+        cards.clear()
         countText?.text = when (projects.size) {
             0 -> tr(S.GALLERY_TITLE)
             1 -> tr(S.CANVAS_COUNT_ONE)
@@ -238,7 +266,6 @@ class GalleryScreen(host: PxHost) : Screen(host) {
             clipToOutline = true
             foreground = theme.pressable(null, theme.radiusM)
             isClickable = true
-            setOnClickListener { host.push(WorkspaceScreen(host, p)) }
             setOnLongClickListener { showProjectMenu(this, p); true }
         }
         val image = ImageView(context).apply {
@@ -249,7 +276,9 @@ class GalleryScreen(host: PxHost) : Screen(host) {
         thumbFrame.addView(image, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
             setMargins(pad, pad, pad, pad)
         })
+        thumbFrame.setOnClickListener { open(p, thumbFrame, image) }
         card.addView(thumbFrame)
+        cards[p.id] = card
         val meta = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.TOP
@@ -291,7 +320,12 @@ class GalleryScreen(host: PxHost) : Screen(host) {
                     bmp.also { host.store.saveThumbnail(p.id, Thumbnails.png(it)) }
                 }
             }.getOrNull()
-            host.runOnMain { if (image.isAttachedToWindow && bmp != null) apply(bmp) }
+            host.runOnMain {
+                if (image.isAttachedToWindow && bmp != null) {
+                    apply(bmp)
+                    theme.motion.fadeTo(image, 1f, from = 0f)   // thumbnail generated: cross-fade in
+                }
+            }
         }
     }
 
@@ -309,7 +343,7 @@ class GalleryScreen(host: PxHost) : Screen(host) {
 
     private fun showProjectMenu(anchor: View, p: ProjectMeta) {
         host.overlays.menu(anchor, listOf(
-            OverlayHost.MenuItem(tr(S.ACTION_OPEN), Icon.CHEVRON_RIGHT) { host.push(WorkspaceScreen(host, p)) },
+            OverlayHost.MenuItem(tr(S.ACTION_OPEN), Icon.CHEVRON_RIGHT) { open(p, null, null) },
             OverlayHost.MenuItem(tr(S.ACTION_RENAME), Icon.EDIT) { rename(p) },
             OverlayHost.MenuItem(tr(S.ACTION_DUPLICATE), Icon.COPY) { duplicate(p) },
             OverlayHost.MenuItem(tr(S.ACTION_DELETE), Icon.TRASH, destructive = true) { delete(p) },

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ system splash (Block 9): the official PxPaint mark on the
+         app background, no icon plate. The in-app intro (ui/BrandIntro) draws
+         the same mark at the same size and place, so the hand-over is seamless. -->
+    <style name="Theme.PxPaint" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/px_bg</item>
+        <item name="android:colorBackground">@color/px_bg</item>
+        <item name="android:colorAccent">@color/px_ember</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowSplashScreenBackground">@color/px_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+
+    <style name="Theme.PxPaint.Light" parent="Theme.PxPaint">
+        <item name="android:windowBackground">@color/px_bg_light</item>
+        <item name="android:colorBackground">@color/px_bg_light</item>
+        <item name="android:colorAccent">@color/px_ember_light</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowSplashScreenBackground">@color/px_bg_light</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_light</item>
+    </style>
+</resources>

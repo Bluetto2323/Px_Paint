@@ -485,3 +485,25 @@ Installa `PxPaint-block8-debug-….apk` **sopra** la build del Blocco 7 (progett
 
 Riporta OK / KO per ogni riga. I layout per tablet sono stati provati solo in finestre emulate: se hai un tablet Android, prova anche lì (pannello fissato con 📌 e bordo trascinabile per ridimensionarlo).
 
+
+---
+
+# Blocco 9 — Animazioni: checklist sul Galaxy A33
+
+Installa `PxPaint-block9-debug-….apk` sopra la build precedente.
+
+| # | Azione | Atteso |
+|---|---|---|
+| 1 | Chiudi l'app dalle recenti e riaprila | logo PxPaint su fondo scuro; il passaggio alla galleria è fluido; nessuna attesa in più rispetto a prima |
+| 2 | Tocca un progetto | la miniatura cresce verso il centro e lascia posto alla tela |
+| 3 | Indietro | la galleria ricompare, la scheda del progetto fa un piccolo "battito" |
+| 4 | Apri e chiudi velocemente Livelli, Colore, Libreria (10 volte) | nessun pannello resta a metà, nessun blocco |
+| 5 | Aggiungi, duplica, sposta, nascondi, unisci, elimina livelli | le righe entrano, si spostano e si richiudono con movimenti brevi; la tela cambia subito, senza animazioni |
+| 6 | Disegna subito dopo aver chiuso un pannello | il tratto parte subito, come prima |
+| 7 | Indicatore accanto a ↶: disegna e attendi | punto (non salvato), anello (salvataggio), segno di spunta che sparisce |
+| 8 | Impostazioni → Accessibilità → Animazioni: Ridotte, poi Disattivate | solo brevi dissolvenze, poi nessuna animazione |
+| 9 | Opzioni sviluppatore → Scala animazione 0x (se le usi) | nessuna animazione nell'app |
+| 10 | Tema chiaro, poi riavvia l'app due volte | dalla seconda volta lo splash è chiaro (Android 13+) |
+
+Riporta OK / KO e, se puoi, una registrazione dello schermo dell'avvio.
+

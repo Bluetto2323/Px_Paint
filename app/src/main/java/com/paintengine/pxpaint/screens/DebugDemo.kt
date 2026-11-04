@@ -21,18 +21,21 @@ import com.paintengine.pxpaint.core.BrushTool
  *   fullscreen      the demo strokes with the interface hidden
  *
  * Optional: --es pxpaint.pin brushes|color|layers  pins that panel (tablets).
+ *           --es pxpaint.motion full|reduced|off   animation level.
+ *           --el pxpaint.slowinit <ms>            simulated slow start (any launch).
+ *           --ez pxpaint.intro true               play the startup animation with a demo state.
  *
  * The strokes are drawn through the normal engine stroke API with finger-like
  * samples (no pressure: nothing is simulated).
  */
 object DebugDemo {
-    data class Script(val panel: String, val filter: BrushFilter?, val brush: String?, val pin: String? = null)
+    data class Script(val panel: String, val filter: BrushFilter?, val brush: String?, val pin: String? = null, val motion: String? = null)
 
     fun from(intent: Intent?): Script? {
         if (!BuildConfig.DEBUG || intent == null) return null
         val state = intent.getStringExtra("pxpaint.demo") ?: return null
         val filter = intent.getStringExtra("pxpaint.filter")?.let { f -> BrushFilter.entries.firstOrNull { it.name.equals(f, true) } }
-        return Script(state, filter, intent.getStringExtra("pxpaint.brush"), intent.getStringExtra("pxpaint.pin"))
+        return Script(state, filter, intent.getStringExtra("pxpaint.brush"), intent.getStringExtra("pxpaint.pin"), intent.getStringExtra("pxpaint.motion"))
     }
 
     fun start(host: PxHost, s: Script) {
@@ -40,6 +43,10 @@ object DebugDemo {
         val pin = com.paintengine.pxpaint.core.PinnedPanel.entries.firstOrNull { it.name.equals(s.pin ?: "none", true) }
             ?: com.paintengine.pxpaint.core.PinnedPanel.NONE
         host.updateSettings(host.settings.copy(pinnedPanel = pin), rebuild = false)
+        // --es pxpaint.motion full|reduced|off (frame-time comparisons, reduced-motion screenshots).
+        com.paintengine.pxpaint.core.MotionLevel.entries.firstOrNull { it.name.equals(s.motion ?: "", true) }?.let {
+            host.updateSettings(host.settings.copy(motionLevel = it), rebuild = false)
+        }
         if (s.panel == "settings") {
             host.push(SettingsScreen(host))
             return
