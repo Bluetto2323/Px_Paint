@@ -63,6 +63,8 @@ class BrandIntro(context: Context, private val theme: PxTheme, private val onDon
             topMargin = theme.dp(170)
         })
         if (m.enabled) clock.start()
+        // No animation clock with motion off: the loading state still comes after the reveal time.
+        else postDelayed({ if (readyAt == null && !finished) showLoading() }, MotionTokens.SPLASH_END)
     }
 
     /** Elapsed time of the reveal (the end state when motion is off). */
