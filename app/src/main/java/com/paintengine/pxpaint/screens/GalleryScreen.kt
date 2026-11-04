@@ -277,6 +277,7 @@ class GalleryScreen(host: PxHost) : Screen(host) {
             setMargins(pad, pad, pad, pad)
         })
         thumbFrame.setOnClickListener { open(p, thumbFrame, image) }
+        thumbFrame.contentDescription = "${tr(S.ACTION_OPEN)}: ${p.name}"
         card.addView(thumbFrame)
         cards[p.id] = card
         val meta = LinearLayout(context).apply {

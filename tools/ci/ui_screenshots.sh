@@ -99,6 +99,9 @@ pull_rec() {
     ffmpeg -loglevel error -y -i "$OUT/$1.mp4" -vf "fps=6,scale=200:-1,tile=10x1" -frames:v 1 "$OUT/$1-strip.png" || true
   fi
 }
+# The emulator action disables animations (scale 0, which PxPaint treats as "motion off"):
+# turn them on for this section only, at the normal 1x scale.
+for k in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global $k 1; done
 # Cold start, normal (no demo state: the startup animation runs).
 adb shell am force-stop "$PKG"; adb shell pm clear "$PKG" > /dev/null
 adb logcat -c
@@ -143,6 +146,7 @@ python3 tools/ci/motion_perf.py "$OUT" "panels motion full=gfxinfo-panels-full.t
   | tee "$OUT/motion-perf.txt" || true
 start --es pxpaint.demo color --es pxpaint.motion reduced
 shot 69-reduced-motion-color
+for k in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global $k 0; done
 
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
