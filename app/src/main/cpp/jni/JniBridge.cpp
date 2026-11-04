@@ -612,6 +612,103 @@ JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeHistoryOp(
     });
 }
 
+// --- Selection (Block 10) -------------------------------------------------------
+// shape: Engine::SelectShape, mode: SelectionMask::Mode, xy: screen points
+// (canvasSpace: canvas pixels, for tools / tests). Returns pe::LayerError.
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelect(JNIEnv* env, jclass, jlong handle, jint shape,
+                                                                           jint mode, jboolean antialias, jfloatArray xy,
+                                                                           jint points, jboolean canvasSpace) {
+    return guard("nativeSelect", static_cast<jint>(pe::LayerError::BadValue), [&]() -> jint {
+        if (!xy || shape < 0 || shape > 2 || points <= 0) return static_cast<jint>(pe::LayerError::BadValue);
+        const jsize n = std::min(env->GetArrayLength(xy), static_cast<jsize>(points) * 2);
+        if (n < 4) return static_cast<jint>(pe::LayerError::BadValue);
+        std::vector<float> f(static_cast<size_t>(n));
+        env->GetFloatArrayRegion(xy, 0, n, f.data());
+        const auto sh = static_cast<pe::Engine::SelectShape>(shape);
+        auto* e = fromHandle(handle);
+        const pe::LayerError r = canvasSpace ? e->selectShapeCanvas(sh, mode, antialias == JNI_TRUE, f.data(), f.size() / 2)
+                                             : e->selectShape(sh, mode, antialias == JNI_TRUE, f.data(), f.size() / 2);
+        return static_cast<jint>(r);
+    });
+}
+
+// (LayerError << 32) | new layer id (paste / duplicate). op: Engine::SelectionOp.
+JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionOp(JNIEnv*, jclass, jlong handle, jint op,
+                                                                                  jint mode) {
+    return guard("nativeSelectionOp", static_cast<jlong>(static_cast<int64_t>(pe::LayerError::BadValue) << 32), [&]() -> jlong {
+        if (op < 0 || op > 12) return static_cast<jlong>(static_cast<int64_t>(pe::LayerError::BadValue) << 32);
+        uint32_t newId = 0;
+        const pe::LayerError e = fromHandle(handle)->selectionOp(static_cast<pe::Engine::SelectionOp>(op), mode, newId);
+        return static_cast<jlong>((static_cast<int64_t>(e) << 32) | static_cast<int64_t>(newId));
+    });
+}
+
+// Offset of the lifted content from where it was lifted, in whole canvas pixels.
+JNIEXPORT jint JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionMove(JNIEnv*, jclass, jlong handle, jint dx, jint dy) {
+    return guard("nativeSelectionMove", static_cast<jint>(pe::LayerError::BadValue),
+                 [&]() -> jint { return static_cast<jint>(fromHandle(handle)->selectionMoveCanvas(dx, dy)); });
+}
+
+// [active, x, y, w, h, area, maskBytes, version, moving, dx, dy, clipboard, cx, cy, cw, ch, clipboardBytes]
+JNIEXPORT jdoubleArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionInfo(JNIEnv* env, jclass, jlong handle) {
+    return guard("nativeSelectionInfo", static_cast<jdoubleArray>(nullptr), [&]() -> jdoubleArray {
+        const auto i = fromHandle(handle)->selectionInfo();
+        const double v[17] = {i.active ? 1.0 : 0.0, double(i.bounds.x), double(i.bounds.y), double(i.bounds.w), double(i.bounds.h),
+                              i.area, double(i.bytes), double(i.version), i.moving ? 1.0 : 0.0, double(i.dx), double(i.dy),
+                              i.clipboard ? 1.0 : 0.0, double(i.clipboardBounds.x), double(i.clipboardBounds.y),
+                              double(i.clipboardBounds.w), double(i.clipboardBounds.h), double(i.clipboardBytes)};
+        jdoubleArray r = env->NewDoubleArray(17);
+        if (r) env->SetDoubleArrayRegion(r, 0, 17, v);
+        return r;
+    });
+}
+
+// (version << 1) | active: polled by the UI (cheap; changes with undo / redo too).
+JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionVersion(JNIEnv*, jclass, jlong handle) {
+    return guard("nativeSelectionVersion", jlong{0},
+                 [&]() -> jlong { return static_cast<jlong>(fromHandle(handle)->selectionVersion()); });
+}
+
+// Outline loops in canvas pixels: [loops, n0, x, y, ..., n1, ...] (SelectionMask::contours).
+JNIEXPORT jfloatArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionContours(JNIEnv* env, jclass, jlong handle) {
+    return guard("nativeSelectionContours", static_cast<jfloatArray>(nullptr), [&]() -> jfloatArray {
+        std::vector<float> c;
+        fromHandle(handle)->selectionContours(c);
+        if (c.empty()) c.push_back(0.0f);
+        jfloatArray r = env->NewFloatArray(static_cast<jsize>(c.size()));
+        if (r) env->SetFloatArrayRegion(r, 0, static_cast<jsize>(c.size()), c.data());
+        return r;
+    });
+}
+
+// Inverse coverage (255 = not selected), longer side <= maxSide: [w, h] in size, bytes returned.
+JNIEXPORT jbyteArray JNICALL Java_com_paintengine_engine_NativeEngine_nativeSelectionPreview(JNIEnv* env, jclass, jlong handle,
+                                                                                           jint maxSide, jintArray size) {
+    return guard("nativeSelectionPreview", static_cast<jbyteArray>(nullptr), [&]() -> jbyteArray {
+        uint32_t w = 0, h = 0;
+        std::vector<uint8_t> px;
+        fromHandle(handle)->selectionPreview(static_cast<uint32_t>(std::max(1, static_cast<int>(maxSide))), w, h, px);
+        if (px.empty() || !size || env->GetArrayLength(size) < 2) return nullptr;
+        const jint wh[2] = {static_cast<jint>(w), static_cast<jint>(h)};
+        env->SetIntArrayRegion(size, 0, 2, wh);
+        jbyteArray r = env->NewByteArray(static_cast<jsize>(px.size()));
+        if (r) env->SetByteArrayRegion(r, 0, static_cast<jsize>(px.size()), reinterpret_cast<const jbyte*>(px.data()));
+        return r;
+    });
+}
+
+// Canvas -> screen: a, b, c, d, tx, ty (x' = a x + c y + tx, y' = b x + d y + ty). False without a view.
+JNIEXPORT jboolean JNICALL Java_com_paintengine_engine_NativeEngine_nativeViewMatrix(JNIEnv* env, jclass, jlong handle,
+                                                                                   jfloatArray out) {
+    return guard("nativeViewMatrix", jboolean{JNI_FALSE}, [&]() -> jboolean {
+        double m[6];
+        if (!out || env->GetArrayLength(out) < 6 || !fromHandle(handle)->viewMatrix(m)) return JNI_FALSE;
+        const float f[6] = {float(m[0]), float(m[1]), float(m[2]), float(m[3]), float(m[4]), float(m[5])};
+        env->SetFloatArrayRegion(out, 0, 6, f);
+        return JNI_TRUE;
+    });
+}
+
 // (undo steps << 32) | redo steps, lock-free: cheap enough to poll from the UI thread.
 JNIEXPORT jlong JNICALL Java_com_paintengine_engine_NativeEngine_nativeHistoryCounts(JNIEnv*, jclass, jlong handle) {
     return guard("nativeHistoryCounts", jlong{0},

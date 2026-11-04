@@ -149,6 +149,7 @@ object Widgets {
             )
             isSelected = selected
             isClickable = true
+            contentDescription = text
             setOnClickListener { onClick() }
         }
 

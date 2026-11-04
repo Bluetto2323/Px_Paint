@@ -30,6 +30,13 @@ import com.paintengine.pxpaint.core.S
 import com.paintengine.pxpaint.core.SampleBuffer
 import com.paintengine.pxpaint.core.ToolKind
 import com.paintengine.pxpaint.core.TouchRouter
+import com.paintengine.pxpaint.core.Affine
+import com.paintengine.pxpaint.core.SelectionAction
+import com.paintengine.pxpaint.core.SelectionErrors
+import com.paintengine.pxpaint.core.SelectionGeometry
+import com.paintengine.pxpaint.core.SelectionGesture
+import com.paintengine.pxpaint.core.SelectionMode
+import com.paintengine.pxpaint.core.SelectionShape
 import com.paintengine.pxpaint.input.StylusInput
 import com.paintengine.pxpaint.core.TileContent
 import com.paintengine.pxpaint.core.BrushEncoding
@@ -58,6 +65,7 @@ import com.paintengine.pxpaint.ui.OverlayHost
 import com.paintengine.pxpaint.ui.PxSlider
 import com.paintengine.pxpaint.ui.PxTheme
 import com.paintengine.pxpaint.ui.QuickSlider
+import com.paintengine.pxpaint.ui.SelectionOverlay
 import com.paintengine.pxpaint.ui.Motion
 import com.paintengine.pxpaint.ui.ProgressIndicator
 import com.paintengine.pxpaint.ui.SaveIndicator
@@ -105,10 +113,38 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private var loaderText: TextView? = null
     private var compositeIndicator: ProgressIndicator? = null
     private var compositePolls = 0
+
+    // Selection (Block 10). The engine owns the mask; this is the tool state.
+    private val selGesture by lazy { SelectionGesture(tapSlopPx = theme.dpF(10f), closeRadiusPx = theme.dpF(22f)) }
+    private var selShape = SelectionShape.RECTANGLE
+    private var selMode = SelectionMode.REPLACE
+    private var selAntialias = true
+    private var selInfo = NativeEngine.SelectionInfo.NONE
+    private var selVersion = -1L
+    private var selOverlay: SelectionOverlay? = null
+    private var selBar: LinearLayout? = null
+    private var selBarRow: LinearLayout? = null
+    private var selBarKey = ""
+    private var selRefreshing = false
+    private var selRefreshAgain = false
+    // Moving selected content: drag start (screen), offset at the drag start and now (canvas px).
+    private var moveStartX = 0.0
+    private var moveStartY = 0.0
+    private var moveBaseX = 0
+    private var moveBaseY = 0
+    private var moveX = 0
+    private var moveY = 0
+    private val selMatrix = FloatArray(6)
+    private val selToScreen = Affine()
+    private val selToCanvas = Affine()
     enum class Tool(val icon: Icon, val label: S, val desc: S) {
         MARKER(Icon.BRUSH, S.TOOL_MARKER, S.TOOL_MARKER_DESC),
         ERASER(Icon.ERASER, S.TOOL_ERASER, S.TOOL_ERASER_DESC),
-        MOVE(Icon.MOVE, S.TOOL_MOVE, S.TOOL_MOVE_DESC),
+        SELECT(Icon.SELECT, S.TOOL_SELECT, S.TOOL_SELECT_DESC),
+        MOVE(Icon.MOVE, S.TOOL_MOVE, S.TOOL_MOVE_DESC);
+
+        /** Brush tools (size / opacity sliders and the brush library apply). */
+        val paints: Boolean get() = this == MARKER || this == ERASER
     }
 
     private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY, HISTORY }
@@ -189,6 +225,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         // A hovering stylus is detected (and its axes shown in the stylus info) before it touches.
         sv.setOnHoverListener { _, e -> host.stylus.onEvent(e); false }
         root.addView(sv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        // Selection feedback between the canvas and the chrome (never takes touches).
+        val so = SelectionOverlay(context, theme).also {
+            it.engine = engine
+            it.gesture = selGesture
+            it.shape = selShape
+            it.showDim = tool == Tool.SELECT
+        }
+        selOverlay = so
+        root.addView(so, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         val c = FrameLayout(context)
         chrome = c
         root.addView(c, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -236,6 +281,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             eyedropperArmed = false
             return true
         }
+        if (selGesture.busy) {
+            selectionCancel()
+            return true
+        }
+        if (selInfo.moving) {
+            runSelection(SelectionAction.MOVE_CANCEL)
+            return true
+        }
         if (panel != Panel.NONE) {
             setPanel(Panel.NONE)
             return true
@@ -254,6 +307,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         engine = e
         surfaceView?.engine = e
+        selOverlay?.engine = e
         opened = true
         e.setScene(NativeEngine.Scene.CANVAS)
         e.setCanvasColors(theme.workspace, meta.paperArgb, meta.transparentBackground)
@@ -406,6 +460,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 historyOp(NativeEngine.HistoryOp.UNDO, 3, announce = false)
                 handler.postDelayed({ setPanel(Panel.HISTORY) }, 600)
             }
+            "selection" -> {
+                // The layered picture, then the Select tool (shape from --es pxpaint.selshape): the CI drives it with real touches.
+                demoLayers(e, w, h, openPanel = false)
+                selShape = SelectionShape.of(d.shape?.uppercase())
+                selOverlay?.shape = selShape
+                selectTool(Tool.SELECT)
+            }
             "workspace" -> setPanel(Panel.TOOL)
             "color" -> {
                 applyColor(0xFF3B6EA8.toInt(), true)
@@ -507,6 +568,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         updateViewport(e.viewport(ViewOp.QUERY))
         refreshHistoryButtons()
+        // The selection changed elsewhere (undo / redo, a move landing): outline and actions follow.
+        if (loaded && e.selectionVersion() != selVersion) refreshSelection()
         if (loaded) {
             saveTracker.poll(e.canvasContentRevision() != savedRevision, SystemClock.uptimeMillis())
             saveIndicator?.show(saveTracker.state)
@@ -535,6 +598,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private fun updateViewport(v: NativeEngine.ViewportInfo) {
+        if (v.zoom != view.zoom || v.rotation != view.rotation || v != view) selOverlay?.invalidate()
         view = v
         val chip = zoomChip ?: return
         val txt = "${Format.zoomPercent(v.zoom)} · ${Format.degrees(v.rotation)}"
@@ -616,6 +680,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 router.fingerMode = st.fingerMode
                 router.moveTool = tool == Tool.MOVE
                 router.eraserTool = tool == Tool.ERASER
+                router.selectTool = tool == Tool.SELECT
                 // Deliver MOVE events as they arrive, not batched per frame.
                 surfaceView?.requestUnbufferedDispatch(e)
                 router.down(id, kind, e.eventTime, e.getX(i), e.getY(i))
@@ -669,8 +734,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     /** Executes the router's decisions on the current event. */
     private inner class RouterActions : TouchRouter.Actions {
         override fun beginStroke(pointerId: Int, kind: ToolKind, eraser: Boolean) {
+            if (tool == Tool.SELECT) { selectionDown(pointerId); return }
             val e = event ?: return
             val engine = engine ?: return
+            selOverlay?.paused = true   // the ants stand still while painting
             strokeT0 = e.eventTime
             strokeKind = kind
             samples.clear()
@@ -691,6 +758,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
 
         override fun strokeSamples(pointerId: Int) {
+            if (tool == Tool.SELECT) { selectionDrag(pointerId); return }
             val e = event ?: return
             samples.clear()
             if (!StylusInput.append(e, pointerId, strokeKind, strokeT0, samples)) return
@@ -700,6 +768,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
 
         override fun endStroke(pointerId: Int) {
+            if (tool == Tool.SELECT) { selectionUp(pointerId); return }
+            selOverlay?.paused = false
             val e = event
             if (e != null) {
                 // The final position (and its history) is part of the stroke.
@@ -713,6 +783,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
 
         override fun cancelStroke() {
+            if (tool == Tool.SELECT) { selectionCancel(); return }
+            selOverlay?.paused = false
             engine?.strokeCancel()
         }
 
@@ -851,6 +923,18 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             if (pinnedLeft) leftMargin = pinnedW / 2
         })
         updateViewport(view)
+
+        // Contextual selection actions, under the zoom chip (over the canvas area).
+        selBar = selectionBar().also { bar ->
+            c.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = belowBar + theme.touchTarget + m
+                val side = (if (s.toolbar == ToolbarPlacement.SIDE) railW else 0) + theme.touchTarget + theme.dp(8)
+                leftMargin = ins.left + side + (if (pinnedLeft) pinnedW else 0)
+                rightMargin = ins.right + side + (if (pinnedRight) pinnedW else 0)
+            })
+        }
+        refreshSelectionBar()
 
         // Tools: bottom dock / side rail (on tablets they are in the top bar).
         var dockH = 0
@@ -1040,7 +1124,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         for (t in Tool.entries) {
             val b = IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null)
             b.setOnClickListener { selectTool(t) }
-            if (t != Tool.MOVE) b.setOnLongClickListener {
+            if (t.paints) b.setOnLongClickListener {
                 // Long press: straight to the brush library of that tool.
                 if (tool != t) selectTool(t)
                 setPanel(Panel.LIBRARY)
@@ -1051,7 +1135,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             box.addView(b, toolLp(vertical))
         }
         box.addView(separator(vertical))
-        val preset = host.brushes.selectedPreset(brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool))
+        val preset = host.brushes.selectedPreset(brushTool(if (!tool.paints) Tool.MARKER else tool))
         libraryButton = IconButton(context, theme, Icon.LIBRARY, tr(S.BRUSH_LIBRARY_DESC, preset.displayName()),
             label = if (s.toolLabels) tr(S.BRUSH_LIBRARY) else null).apply {
             setOnClickListener { togglePanel(Panel.LIBRARY) }
@@ -1092,7 +1176,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     private fun quickSliders(s: WorkspaceSpec, lengthPx: Int): View = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
-        val bt = brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool)
+        val bt = brushTool(if (!tool.paints) Tool.MARKER else tool)
         val b = host.brushes.effective(bt)
         val size = QuickSlider(context, theme, tr(S.QUICK_SIZE), wedge = true).apply {
             valueText = { BrushState.sizeLabel(BrushState.sliderToSize(it)) }
@@ -1115,10 +1199,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         addView(size, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
         addView(View(context), LinearLayout.LayoutParams(1, theme.dp(14)))
         addView(opacity, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
-        if (tool == Tool.MOVE) alpha = theme.disabledAlpha
+        if (!tool.paints) alpha = theme.disabledAlpha
     }
 
-    private fun currentBrushTool(): BrushTool = brushTool(if (tool == Tool.MOVE) Tool.MARKER else tool)
+    private fun currentBrushTool(): BrushTool = brushTool(if (!tool.paints) Tool.MARKER else tool)
 
     private fun refreshDock() {
         for ((t, b) in toolButtons) b.isSelected = t == tool
@@ -1128,14 +1212,21 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         sizeSlider?.setValue(BrushState.sizeToSlider(b.size))
         opacitySlider?.setValue(b.opacity)
         libraryButton?.contentDescription = tr(S.BRUSH_LIBRARY_DESC, host.brushes.selectedPreset(bt).displayName())
-        for (sl in listOfNotNull(sizeSlider, opacitySlider)) (sl.parent as? View)?.alpha = if (tool == Tool.MOVE) theme.disabledAlpha else 1f
+        for (sl in listOfNotNull(sizeSlider, opacitySlider)) (sl.parent as? View)?.alpha = if (!tool.paints) theme.disabledAlpha else 1f
     }
 
     private fun selectTool(t: Tool) {
         if (t == tool && t != Tool.MOVE) {
             togglePanel(Panel.TOOL)
         } else {
+            // Leaving the selection tool: content being moved lands, a polygon in progress is dropped.
+            if (tool == Tool.SELECT && t != Tool.SELECT) {
+                if (selInfo.moving) runSelection(SelectionAction.MOVE_DONE)
+                selGesture.cancel()
+            }
             tool = t
+            selOverlay?.showDim = t == Tool.SELECT
+            refreshSelectionBar()
             toolButtons[t]?.let { motion.pop(it) }   // brush selection: the new tool answers
             if (panel == Panel.TOOL || panel == Panel.LIBRARY) showPanel(panel)
             if (spec?.pinned == PinnedPanel.BRUSHES) refreshPinned()
@@ -1151,6 +1242,272 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (on) panel = Panel.NONE
         buildChrome()
         if (on) host.overlays.message(tr(S.FULLSCREEN_HINT))
+    }
+
+    // ------------------------------------------------------------ selection
+    // Touches with the Select tool (TouchRouter routes them as "strokes").
+    private fun selectionDown(pointerId: Int) {
+        val p = pos(pointerId) ?: return
+        if (selInfo.moving) {
+            moveStartX = p.x
+            moveStartY = p.y
+            moveBaseX = moveX
+            moveBaseY = moveY
+            return
+        }
+        selGesture.shape = selShape
+        selOverlay?.shape = selShape
+        selGesture.down(p.x.toFloat(), p.y.toFloat())
+        selOverlay?.invalidate()
+        if (selGesture.phase == SelectionGesture.Phase.POLYGON) refreshSelectionBar()
+    }
+
+    private fun selectionDrag(pointerId: Int) {
+        val e = event ?: return
+        val i = e.findPointerIndex(pointerId)
+        if (i < 0) return
+        router.strokeMovedTo(e.getX(i), e.getY(i))
+        if (selInfo.moving) {
+            val engine = engine ?: return
+            if (!engine.viewMatrix(selMatrix)) return
+            selToScreen.set(selMatrix)
+            if (!selToScreen.invertInto(selToCanvas)) return
+            val (dx, dy) = SelectionGeometry.canvasOffset(selToCanvas, e.getX(i) - moveStartX, e.getY(i) - moveStartY)
+            val nx = moveBaseX + dx
+            val ny = moveBaseY + dy
+            if (nx != moveX || ny != moveY) {
+                moveX = nx
+                moveY = ny
+                engine.selectionMove(nx, ny)
+                selOverlay?.setMoveOffset(nx, ny)
+            }
+            return
+        }
+        // Every sample (historical first): the lasso follows the finger exactly.
+        for (h in 0 until e.historySize) selGesture.move(e.getHistoricalX(i, h), e.getHistoricalY(i, h))
+        selGesture.move(e.getX(i), e.getY(i))
+        selOverlay?.invalidate()
+    }
+
+    private fun selectionUp(pointerId: Int) {
+        if (selInfo.moving) return
+        val p = pos(pointerId)
+        val n = selGesture.points.count
+        val x = p?.x?.toFloat() ?: if (n > 0) selGesture.points.x(n - 1) else 0f
+        val y = p?.y?.toFloat() ?: if (n > 0) selGesture.points.y(n - 1) else 0f
+        when (selGesture.up(x, y)) {
+            SelectionGesture.Outcome.SELECT -> commitSelection()
+            SelectionGesture.Outcome.TAP -> if (selMode == SelectionMode.REPLACE && selInfo.active) runSelection(SelectionAction.DESELECT)
+            SelectionGesture.Outcome.NONE -> Unit
+        }
+        selOverlay?.invalidate()
+        refreshSelectionBar()
+    }
+
+    private fun selectionCancel() {
+        // A second finger right after the first (a pinch) or a system cancel: the shape is dropped.
+        if (selGesture.phase != SelectionGesture.Phase.POLYGON) selGesture.cancel()
+        selOverlay?.invalidate()
+        refreshSelectionBar()
+    }
+
+    /** The finished shape goes to the engine (off the UI thread); the preview stays until the outline arrives. */
+    private fun commitSelection() {
+        val e = engine ?: return
+        val g = selGesture
+        val shape = when (selShape) {
+            SelectionShape.RECTANGLE -> NativeEngine.SelectShape.RECT
+            SelectionShape.ELLIPSE -> NativeEngine.SelectShape.ELLIPSE
+            else -> NativeEngine.SelectShape.POLYGON
+        }
+        val count = if (shape == NativeEngine.SelectShape.POLYGON) g.points.count else 2
+        val xy = g.points.data.copyOf(count * 2)
+        val mode = NativeEngine.SelectMode.entries[selMode.code]
+        val aa = selAntialias
+        val name = selShape.name
+        layerExec.execute {
+            val t0 = System.nanoTime()
+            val err = e.select(shape, mode, aa, xy, count)
+            val ms = (System.nanoTime() - t0) / 1e6
+            host.runOnMain {
+                if (closed) return@runOnMain
+                logSelection("select $name ${mode.name} ($count points)", ms, err)
+                if (err != 0) host.overlays.message(tr(S.SEL_ERR_GENERIC))
+                g.cancel()
+                refreshSelection()
+                handler.postDelayed(historyRefresh, 50)
+            }
+        }
+    }
+
+    /** Runs a selection action; refusals are explained, layers / history / outline follow. */
+    private fun runSelection(a: SelectionAction) {
+        val e = engine ?: return
+        if (closed || !loaded) return
+        when (a) {
+            SelectionAction.POLYGON_CLOSE -> { if (selGesture.closePolygon()) commitSelection(); refreshSelectionBar(); selOverlay?.invalidate(); return }
+            SelectionAction.POLYGON_UNDO -> { selGesture.undoVertex(); refreshSelectionBar(); selOverlay?.invalidate(); return }
+            SelectionAction.POLYGON_CANCEL -> { selGesture.cancel(); refreshSelectionBar(); selOverlay?.invalidate(); return }
+            else -> Unit
+        }
+        val op = when (a) {
+            SelectionAction.MOVE -> NativeEngine.SelectionOp.MOVE_BEGIN
+            SelectionAction.COPY -> NativeEngine.SelectionOp.COPY
+            SelectionAction.COPY_MERGED -> NativeEngine.SelectionOp.COPY_MERGED
+            SelectionAction.CUT -> NativeEngine.SelectionOp.CUT
+            SelectionAction.PASTE -> NativeEngine.SelectionOp.PASTE
+            SelectionAction.DUPLICATE -> NativeEngine.SelectionOp.DUPLICATE
+            SelectionAction.CLEAR -> NativeEngine.SelectionOp.CLEAR
+            SelectionAction.INVERT -> NativeEngine.SelectionOp.INVERT
+            SelectionAction.DESELECT -> NativeEngine.SelectionOp.DESELECT
+            SelectionAction.SELECT_ALL -> NativeEngine.SelectionOp.SELECT_ALL
+            SelectionAction.FROM_CONTENT -> NativeEngine.SelectionOp.FROM_CONTENT
+            SelectionAction.MOVE_DONE -> NativeEngine.SelectionOp.MOVE_COMMIT
+            else -> NativeEngine.SelectionOp.MOVE_CANCEL
+        }
+        // Moving needs the Select tool (its drags move the content).
+        if (a == SelectionAction.MOVE && tool != Tool.SELECT) selectTool(Tool.SELECT)
+        val mode = NativeEngine.SelectMode.entries[selMode.code]
+        val layerName = layerStack?.active?.name ?: ""
+        layerExec.execute {
+            val t0 = System.nanoTime()
+            val r = e.selectionOp(op, mode)
+            val ms = (System.nanoTime() - t0) / 1e6
+            val changesLayers = a == SelectionAction.PASTE || a == SelectionAction.DUPLICATE
+            val table = if (changesLayers) e.layers() else null
+            host.runOnMain {
+                if (closed) return@runOnMain
+                logSelection(a.name, ms, r.error)
+                val err = SelectionErrors.message(a, r.error)
+                when {
+                    err != null -> host.overlays.message(tr(err))
+                    a == SelectionAction.COPY -> host.overlays.message(tr(S.SEL_DONE_COPY, layerName))
+                    a == SelectionAction.COPY_MERGED -> host.overlays.message(tr(S.SEL_DONE_COPY_MERGED))
+                    a == SelectionAction.CUT -> host.overlays.message(tr(S.SEL_DONE_CUT, layerName))
+                    a == SelectionAction.PASTE -> host.overlays.message(tr(S.SEL_DONE_PASTE))
+                    a == SelectionAction.DUPLICATE -> host.overlays.message(tr(S.SEL_DONE_DUPLICATE))
+                    a == SelectionAction.CLEAR -> host.overlays.message(tr(S.SEL_DONE_CLEAR, layerName))
+                    a == SelectionAction.FROM_CONTENT -> host.overlays.message(tr(S.SEL_DONE_FROM_CONTENT))
+                    a == SelectionAction.MOVE -> host.overlays.message(tr(S.SEL_HINT_MOVE))
+                }
+                if (a == SelectionAction.MOVE && r.error == 0) { moveX = 0; moveY = 0; moveBaseX = 0; moveBaseY = 0 }
+                table?.let { t -> LayerStack.parse(t)?.let { layerStack = it } }
+                if (changesLayers && spec?.pinned == PinnedPanel.LAYERS) refreshPinned()
+                if (changesLayers && panel == Panel.LAYERS) showPanel(Panel.LAYERS)
+                refreshHistoryButtons()
+                handler.postDelayed(historyRefresh, 50)
+                refreshSelection()
+            }
+        }
+    }
+
+    /** Fetches the selection state, outline and coverage preview off the UI thread, then shows them. */
+    private fun refreshSelection() {
+        val e = engine ?: return
+        if (closed) return
+        if (selRefreshing) { selRefreshAgain = true; return }
+        selRefreshing = true
+        layerExec.execute {
+            val version = e.selectionVersion()
+            val info = e.selectionInfo()
+            val contours = if (info.active) e.selectionContours() else null
+            val size = IntArray(2)
+            val preview = if (info.active) e.selectionPreview(SELECTION_PREVIEW_PX, size) else null
+            host.runOnMain {
+                selRefreshing = false
+                if (closed) return@runOnMain
+                selVersion = version
+                selInfo = info
+                if (!info.moving) { moveX = 0; moveY = 0 }
+                selOverlay?.setSelection(contours, preview, size[0], size[1], meta.width, meta.height)
+                selOverlay?.setMoveOffset(if (info.moving) moveX else 0, if (info.moving) moveY else 0)
+                refreshSelectionBar()
+                if (selRefreshAgain) { selRefreshAgain = false; refreshSelection() }
+            }
+        }
+    }
+
+    private fun logSelection(what: String, ms: Double, error: Int) {
+        if (com.paintengine.BuildConfig.DEBUG) android.util.Log.i("PxPaint", String.format(java.util.Locale.US,
+            "Selection: %s %.2f ms (error %d)", what, ms, error))
+    }
+
+    private fun selectionEditable(): Boolean = layerStack?.active?.let { it.visible && !it.locked } ?: false
+
+    /** The contextual bar: only actions that can act now; hidden when there is nothing to do. */
+    private fun selectionBar(): LinearLayout {
+        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        selBarRow = row
+        selBarKey = ""
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = theme.rounded(theme.chrome, theme.radiusPill, theme.outline)
+            elevation = theme.dpF(3f)
+            setPadding(theme.dp(4), theme.dp(2), theme.dp(4), theme.dp(2))
+            contentDescription = tr(S.SEL_ACTIONS)
+            addView(android.widget.HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(row)
+            })
+            visibility = View.GONE
+        }
+    }
+
+    private fun refreshSelectionBar() {
+        val bar = selBar ?: return
+        val row = selBarRow ?: return
+        val polygon = if (selGesture.phase == SelectionGesture.Phase.POLYGON) selGesture.points.count else 0
+        val actions = if (tool == Tool.SELECT || selInfo.active || selInfo.moving)
+            SelectionAction.available(selInfo.active, selInfo.clipboard, selInfo.moving, selectionEditable(), polygon) else emptyList()
+        val key = actions.joinToString(",") { it.name }
+        if (key != selBarKey) {
+            selBarKey = key
+            row.removeAllViews()
+            for (a in actions) {
+                val primary = a == SelectionAction.MOVE_DONE || a == SelectionAction.POLYGON_CLOSE
+                row.addView(Widgets.chip(context, theme, tr(a.label), primary) { runSelection(a) }.apply {
+                    contentDescription = tr(a.label)
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, theme.touchTarget).apply {
+                    marginStart = theme.dp(2); marginEnd = theme.dp(2)
+                })
+            }
+        }
+        val show = actions.isNotEmpty() && !fullscreen
+        if (show && bar.visibility != View.VISIBLE) { bar.visibility = View.VISIBLE; motion.enter(bar, dyDp = -MotionTokens.SHIFT) }
+        else if (!show && bar.visibility == View.VISIBLE) motion.exit(bar, dyDp = -MotionTokens.SHIFT) { bar.visibility = View.GONE }
+    }
+
+    /** Selection tool options (the tool's panel): shape, mode, edges, whole-canvas actions. */
+    private fun selectionSettings(): View = column(context, theme, horizontalPadding = false) {
+        addView(theme.text(context, tr(S.SEL_TITLE), PxTheme.Type.HEADLINE).apply { minHeight = theme.dp(36); gravity = Gravity.CENTER_VERTICAL })
+        addView(theme.text(context, tr(S.SEL_SHAPE), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(8), 0, theme.dp(6)) })
+        addView(Widgets.segmented(context, theme, SelectionShape.entries.map { it to tr(it.label) }, selShape) {
+            selGesture.cancel()
+            selShape = it
+            selOverlay?.shape = it
+            host.overlays.message(tr(when (it) {
+                SelectionShape.RECTANGLE -> S.SEL_HINT_RECTANGLE
+                SelectionShape.ELLIPSE -> S.SEL_HINT_ELLIPSE
+                SelectionShape.LASSO -> S.SEL_HINT_LASSO
+                SelectionShape.POLYGON -> S.SEL_HINT_POLYGON
+            }))
+            showPanel(panel)
+            refreshSelectionBar()
+        })
+        addView(theme.text(context, tr(S.SEL_MODE), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(0, theme.dp(12), 0, theme.dp(6)) })
+        addView(Widgets.segmented(context, theme, SelectionMode.entries.map { it to tr(it.label) }, selMode) {
+            selMode = it
+            showPanel(panel)
+        })
+        addView(compactSwitch(tr(S.SEL_ANTIALIAS), tr(S.SEL_ANTIALIAS_DESC), selAntialias, true) { selAntialias = it })
+        val whole = mutableListOf(SelectionAction.SELECT_ALL, SelectionAction.FROM_CONTENT)
+        if (selInfo.active) { whole += SelectionAction.INVERT; whole += SelectionAction.DESELECT }
+        addView(com.paintengine.pxpaint.ui.FlowRow(context, theme.dp(8)).apply {
+            setPadding(0, theme.dp(8), 0, 0)
+            for (a in whole) addView(Widgets.chip(context, theme, tr(a.label), false) { runSelection(a); setPanel(Panel.NONE) }.apply {
+                contentDescription = tr(a.label)
+            })
+        })
     }
 
     // --------------------------------------------------------------- panels
@@ -1201,7 +1558,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private fun panelContent(p: Panel): View? = when (p) {
-        Panel.TOOL -> toolSettings()
+        Panel.TOOL -> if (tool == Tool.SELECT) selectionSettings() else toolSettings()
         Panel.COLOR -> colorPicker()
         Panel.LAYERS -> layersPanel()
         Panel.LIBRARY -> libraryPanel()
@@ -1419,7 +1776,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private fun toolSettings(): View = column(context, theme, horizontalPadding = false) {
-        val t = if (tool == Tool.MOVE) Tool.MARKER else tool
+        val t = if (!tool.paints) Tool.MARKER else tool
         val bt = brushTool(t)
         addView(theme.text(context, tr(t.label), PxTheme.Type.HEADLINE).apply { minHeight = theme.dp(36); gravity = Gravity.CENTER_VERTICAL })
         // The tool's brush: live preview + name; opens the library.
@@ -1491,7 +1848,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private fun libraryPanel(): View {
-        val t = if (tool == Tool.MOVE) Tool.MARKER else tool
+        val t = if (!tool.paints) Tool.MARKER else tool
         val panel = BrushLibraryPanel(host, brushTool(t), libraryState,
             onEdit = { bt -> host.push(BrushEditorScreen(host, bt)) },
             onChanged = {
@@ -1595,7 +1952,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (!final) return
         host.updateBrush(host.brush.copy(color = c))
         colorButton?.let { motion.pop(it) }      // colour selection: the swatch answers
-        if (tool == Tool.ERASER || tool == Tool.MOVE) {
+        if (tool != Tool.MARKER) {
             tool = Tool.MARKER
             refreshDock()
         }
@@ -1746,6 +2103,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                     done > 0 && op == NativeEngine.HistoryOp.REDO -> { redoButton?.let { motion.nudge(it, 28f) }; announceStep(h, op, announce) }
                 }
                 if (panel == Panel.LAYERS || panel == Panel.HISTORY) showPanel(panel)
+                refreshSelection()
             }
         }
     }
@@ -1978,6 +2336,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     companion object {
+        /** Longer side of the coverage image used to dim the unselected area. */
+        const val SELECTION_PREVIEW_PX = 512
         const val TIP_GESTURES = "workspace.gestures"
         private const val AUTOSAVE_MS = 20_000L
         private const val EXPORT_BATCH = 32

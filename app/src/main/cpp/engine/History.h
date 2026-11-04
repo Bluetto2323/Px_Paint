@@ -50,6 +50,13 @@ enum class HistoryKind : int32_t {
     Blend = 12,
     MergeDown = 13,
     Flatten = 14,
+    // Block 10: selection
+    Selection = 15,          // select / add / subtract / intersect / invert / all / deselect / from content
+    ClearSelected = 16,      // pixels of the active layer inside the selection
+    Cut = 17,
+    Paste = 18,              // as a new layer
+    DuplicateSelection = 19, // selected pixels to a new layer
+    MoveSelection = 20,      // selected pixels (and the selection) moved
 };
 const char* historyKindName(HistoryKind k);
 
@@ -69,6 +76,8 @@ public:
     virtual void layerPropertiesChanged(uint32_t id) = 0;
     // Every tile of every layer recomposited (structure changed).
     virtual void stackChanged() = 0;
+    // Block 10: the selection mask from a compact copy (SelectionMask::encode).
+    virtual bool restoreSelection(const std::vector<uint8_t>& encoded) = 0;
 };
 
 // XOR delta of one tile over the rectangle that changed.
@@ -168,6 +177,33 @@ private:
     int32_t index_;
     uint32_t activeBefore_, activeAfter_;
     std::unique_ptr<LayerData> kept_;
+};
+
+/** Selection change: the mask before and after, compact (uniform tiles free, RLE edges). */
+class SelectionCommand : public HistoryCommand {
+public:
+    SelectionCommand(std::vector<uint8_t> before, std::vector<uint8_t> after) : before_(std::move(before)), after_(std::move(after)) {}
+    HistoryKind kind() const override { return HistoryKind::Selection; }
+    uint64_t bytes() const override { return before_.size() + after_.size() + sizeof(*this); }
+    bool undo(HistoryTarget& t) override { return t.restoreSelection(before_); }
+    bool redo(HistoryTarget& t) override { return t.restoreSelection(after_); }
+
+private:
+    std::vector<uint8_t> before_, after_;
+};
+
+/** Several commands as one step (e.g. moved pixels + moved selection). */
+class GroupCommand : public HistoryCommand {
+public:
+    GroupCommand(HistoryKind k, std::vector<std::unique_ptr<HistoryCommand>> parts) : kind_(k), parts_(std::move(parts)) {}
+    HistoryKind kind() const override { return kind_; }
+    uint64_t bytes() const override;
+    bool undo(HistoryTarget& t) override;
+    bool redo(HistoryTarget& t) override;
+
+private:
+    HistoryKind kind_;
+    std::vector<std::unique_ptr<HistoryCommand>> parts_;
 };
 
 class MoveLayerCommand : public HistoryCommand {

@@ -16,6 +16,8 @@ import com.paintengine.pxpaint.core.BrushTool
  *   settings        settings screen
  *   layers          five layers (modes, opacity, hidden, locked) + the Layers panel
  *   history         the layers demo (all recorded), 3 steps undone, the History panel
+ *   selection       the layers demo with the Select tool active (no selection yet);
+ *                   --es pxpaint.selshape rectangle|ellipse|lasso|polygon
  *   color           the colour workspace
  *   canvas          the demo strokes, no panel open
  *   fullscreen      the demo strokes with the interface hidden
@@ -29,13 +31,17 @@ import com.paintengine.pxpaint.core.BrushTool
  * samples (no pressure: nothing is simulated).
  */
 object DebugDemo {
-    data class Script(val panel: String, val filter: BrushFilter?, val brush: String?, val pin: String? = null, val motion: String? = null)
+    data class Script(
+        val panel: String, val filter: BrushFilter?, val brush: String?, val pin: String? = null, val motion: String? = null,
+        val shape: String? = null,
+    )
 
     fun from(intent: Intent?): Script? {
         if (!BuildConfig.DEBUG || intent == null) return null
         val state = intent.getStringExtra("pxpaint.demo") ?: return null
         val filter = intent.getStringExtra("pxpaint.filter")?.let { f -> BrushFilter.entries.firstOrNull { it.name.equals(f, true) } }
-        return Script(state, filter, intent.getStringExtra("pxpaint.brush"), intent.getStringExtra("pxpaint.pin"), intent.getStringExtra("pxpaint.motion"))
+        return Script(state, filter, intent.getStringExtra("pxpaint.brush"), intent.getStringExtra("pxpaint.pin"), intent.getStringExtra("pxpaint.motion"),
+            intent.getStringExtra("pxpaint.selshape"))
     }
 
     fun start(host: PxHost, s: Script) {

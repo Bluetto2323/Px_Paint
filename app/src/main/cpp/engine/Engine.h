@@ -202,6 +202,39 @@ public:
     HistoryStats historyStats() { return doc_.historyStats(); }
     void setHistoryBudget(uint64_t bytes, size_t maxSteps) { doc_.setHistoryBudget(bytes, maxSteps); }
 
+    // --- Selection (any thread; Block 10). Applies at the next frame. ---------
+    // Shapes from screen points (view pixels), mapped to the canvas through the
+    // current view: Rect / Ellipse take 2 points (drag start, drag end) and are
+    // axis-aligned on the CANVAS (a rotated view shows them rotated; the
+    // rectangle snaps to whole pixels), Polygon takes the lasso / polygon
+    // vertices (>= 3). mode: SelectionMask::Mode.
+    enum class SelectShape : int32_t { Rect = 0, Ellipse = 1, Polygon = 2 };
+    LayerError selectShape(SelectShape shape, int32_t mode, bool antialias, const float* screenXY, size_t points);
+    // The same in canvas pixels (tests / tooling).
+    LayerError selectShapeCanvas(SelectShape shape, int32_t mode, bool antialias, const float* canvasXY, size_t points);
+    enum class SelectionOp : int32_t {
+        SelectAll = 0, Deselect = 1, Invert = 2, FromContent = 3, Clear = 4, Copy = 5, CopyMerged = 6, Cut = 7,
+        Paste = 8, Duplicate = 9, MoveBegin = 10, MoveCommit = 11, MoveCancel = 12,
+    };
+    // `mode`: FromContent's combine mode. `outId`: the new layer of Paste / Duplicate.
+    LayerError selectionOp(SelectionOp op, int32_t mode, uint32_t& outId);
+    // Moves the lifted content (after MoveBegin) by a screen-space offset from
+    // where the drag started, converted to whole canvas pixels.
+    LayerError selectionMoveScreen(double screenDx, double screenDy);
+    // The same in whole canvas pixels (the UI converts its drags itself, so a
+    // move can continue over several drags and view changes).
+    LayerError selectionMoveCanvas(int32_t dx, int32_t dy);
+    CanvasDocument::SelectionInfo selectionInfo() { return doc_.selectionInfo(); }
+    uint64_t selectionVersion() const { return doc_.selectionVersion(); }
+    void selectionContours(std::vector<float>& out) { doc_.selectionContours(out); }
+    void selectionPreview(uint32_t maxSide, uint32_t& w, uint32_t& h, std::vector<uint8_t>& out) {
+        doc_.selectionPreview(maxSide, w, h, out);
+    }
+    // Current canvas -> screen transform (a, b, c, d, tx, ty); false without a view.
+    bool viewMatrix(double out[6]) const;
+    // Polygon of a rect / ellipse between two canvas points (shared with tests).
+    static void shapePolygon(SelectShape shape, double x0, double y0, double x1, double y1, std::vector<float>& out);
+
     // Viewport: applied immediately (thread-safe), drawn at the next frame.
     ViewportInfo viewportOp(ViewOp op, const double* args, size_t argCount);
     canvas::Vec2 screenToCanvas(canvas::Vec2 screen) const;

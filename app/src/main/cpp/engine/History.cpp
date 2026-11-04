@@ -38,8 +38,33 @@ const char* historyKindName(HistoryKind k) {
         case HistoryKind::Blend: return "blend";
         case HistoryKind::MergeDown: return "merge_down";
         case HistoryKind::Flatten: return "flatten";
+        case HistoryKind::Selection: return "selection";
+        case HistoryKind::ClearSelected: return "clear_selected";
+        case HistoryKind::Cut: return "cut";
+        case HistoryKind::Paste: return "paste";
+        case HistoryKind::DuplicateSelection: return "duplicate_selection";
+        case HistoryKind::MoveSelection: return "move_selection";
     }
     return "?";
+}
+
+// ----------------------------------------------------------------- group
+uint64_t GroupCommand::bytes() const {
+    uint64_t b = sizeof(*this);
+    for (const auto& p : parts_) b += p->bytes();
+    return b;
+}
+
+bool GroupCommand::undo(HistoryTarget& t) {
+    for (auto it = parts_.rbegin(); it != parts_.rend(); ++it)
+        if (!(*it)->undo(t)) return false;
+    return true;
+}
+
+bool GroupCommand::redo(HistoryTarget& t) {
+    for (auto& p : parts_)
+        if (!p->redo(t)) return false;
+    return true;
 }
 
 // ----------------------------------------------------------------- patch

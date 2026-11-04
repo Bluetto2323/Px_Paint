@@ -550,6 +550,102 @@ bool Engine::sampleColor(double screenX, double screenY, uint32_t& argb) const {
     return doc_.sampleColor(static_cast<int32_t>(std::floor(c.x)), static_cast<int32_t>(std::floor(c.y)), argb);
 }
 
+// ------------------------------------------------------------------ selection (Block 10)
+void Engine::shapePolygon(SelectShape shape, double x0, double y0, double x1, double y1, std::vector<float>& out) {
+    canvas::SelectionMask::shapePolygon(shape == SelectShape::Ellipse, x0, y0, x1, y1, out);
+}
+
+LayerError Engine::selectShapeCanvas(SelectShape shape, int32_t mode, bool antialias, const float* xy, size_t points) {
+    if (mode < 0 || mode > 3 || !xy) return LayerError::BadValue;
+    const auto m = static_cast<canvas::SelectionMask::Mode>(mode);
+    LayerError e;
+    if (shape == SelectShape::Polygon) {
+        e = doc_.select(xy, points, m, antialias);
+    } else {
+        if (points < 2) return LayerError::BadValue;
+        std::vector<float> poly;
+        shapePolygon(shape, xy[0], xy[1], xy[2], xy[3], poly);
+        e = doc_.select(poly.data(), poly.size() / 2, m, antialias && shape == SelectShape::Ellipse);
+    }
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return e;
+}
+
+LayerError Engine::selectShape(SelectShape shape, int32_t mode, bool antialias, const float* screenXY, size_t points) {
+    if (!screenXY || points == 0) return LayerError::BadValue;
+    canvas::Affine2 m;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        if (!view_.valid()) return LayerError::NoCanvas;
+        m = view_.screenToCanvas();
+    }
+    std::vector<float> c(points * 2);
+    for (size_t i = 0; i < points; ++i) {
+        const canvas::Vec2 p = m.apply({screenXY[i * 2], screenXY[i * 2 + 1]});
+        if (!std::isfinite(p.x) || !std::isfinite(p.y)) return LayerError::BadValue;
+        c[i * 2] = static_cast<float>(p.x);
+        c[i * 2 + 1] = static_cast<float>(p.y);
+    }
+    return selectShapeCanvas(shape, mode, antialias, c.data(), points);
+}
+
+LayerError Engine::selectionOp(SelectionOp op, int32_t mode, uint32_t& outId) {
+    LayerError e = LayerError::BadValue;
+    const auto m = static_cast<canvas::SelectionMask::Mode>(std::clamp(mode, 0, 3));
+    switch (op) {
+        case SelectionOp::SelectAll: e = doc_.selectAll(); break;
+        case SelectionOp::Deselect: e = doc_.deselect(); break;
+        case SelectionOp::Invert: e = doc_.invertSelection(); break;
+        case SelectionOp::FromContent: e = doc_.selectFromContent(m); break;
+        case SelectionOp::Clear: e = doc_.clearSelected(); break;
+        case SelectionOp::Copy: e = doc_.copySelection(false); break;
+        case SelectionOp::CopyMerged: e = doc_.copySelection(true); break;
+        case SelectionOp::Cut: e = doc_.cutSelection(); break;
+        case SelectionOp::Paste: e = doc_.paste(outId); break;
+        case SelectionOp::Duplicate: e = doc_.duplicateSelection(outId); break;
+        case SelectionOp::MoveBegin: e = doc_.moveBegin(); break;
+        case SelectionOp::MoveCommit: e = doc_.moveCommit(); break;
+        case SelectionOp::MoveCancel: doc_.moveCancel(); e = LayerError::None; break;
+    }
+    queue_.post([this] {
+        scheduler_.requestFrame();
+        publishStatus(true);
+    });
+    return e;
+}
+
+LayerError Engine::selectionMoveScreen(double sdx, double sdy) {
+    canvas::Affine2 m;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        if (!view_.valid()) return LayerError::NoCanvas;
+        m = view_.screenToCanvas();
+    }
+    // Linear part only: an offset, not a point.
+    const double dx = m.a * sdx + m.c * sdy, dy = m.b * sdx + m.d * sdy;
+    if (!std::isfinite(dx) || !std::isfinite(dy)) return LayerError::BadValue;
+    const LayerError e = doc_.moveTo(static_cast<int32_t>(std::lround(dx)), static_cast<int32_t>(std::lround(dy)));
+    if (e == LayerError::None) queue_.post([this] { scheduler_.requestFrame(); });
+    return e;
+}
+
+LayerError Engine::selectionMoveCanvas(int32_t dx, int32_t dy) {
+    const LayerError e = doc_.moveTo(dx, dy);
+    if (e == LayerError::None) queue_.post([this] { scheduler_.requestFrame(); });
+    return e;
+}
+
+bool Engine::viewMatrix(double out[6]) const {
+    std::lock_guard<std::mutex> lock(viewMutex_);
+    if (!view_.valid()) return false;
+    const canvas::Affine2 m = view_.canvasToScreen();
+    out[0] = m.a; out[1] = m.b; out[2] = m.c; out[3] = m.d; out[4] = m.tx; out[5] = m.ty;
+    return true;
+}
+
 canvas::Vec2 Engine::screenToCanvas(canvas::Vec2 p) const {
     std::lock_guard<std::mutex> lock(viewMutex_);
     return view_.valid() ? view_.toCanvas(p) : canvas::Vec2{};

@@ -16,7 +16,7 @@ enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
     EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE, HISTORY,
-    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP,
+    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -102,6 +102,13 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 line(c, 12f, 3.5f, 12f, 20.5f); line(c, 3.5f, 12f, 20.5f, 12f)
                 poly(c, 9.5f, 6f, 12f, 3.5f, 14.5f, 6f); poly(c, 9.5f, 18f, 12f, 20.5f, 14.5f, 18f)
                 poly(c, 6f, 9.5f, 3.5f, 12f, 6f, 14.5f); poly(c, 18f, 9.5f, 20.5f, 12f, 18f, 14.5f)
+            }
+            Icon.SELECT -> {
+                // Dashed selection rectangle with a pointer at its corner.
+                line(c, 4f, 4f, 7f, 4f); line(c, 10.5f, 4f, 13.5f, 4f); line(c, 17f, 4f, 20f, 4f)
+                line(c, 4f, 4f, 4f, 7f); line(c, 4f, 10.5f, 4f, 13.5f); line(c, 4f, 17f, 4f, 20f)
+                line(c, 20f, 7.5f, 20f, 10f); line(c, 7.5f, 20f, 10f, 20f)
+                poly(c, 13f, 13f, 20.5f, 16f, 17.2f, 17.2f, 16f, 20.5f, close = true)
             }
             Icon.LAYERS -> {
                 poly(c, 12f, 4f, 20.5f, 8.5f, 12f, 13f, 3.5f, 8.5f, close = true)

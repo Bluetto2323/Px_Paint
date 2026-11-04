@@ -34,9 +34,12 @@ cmake -S "$ROOT/tools/host_test" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   "-DPE_KHRONOS_INCLUDE=$INCLUDES" "${EXTRA[@]}"
 ninja -C "$BUILD"
 export EGL_PLATFORM=surfaceless
+# Final selection frame of each backend (suite brush, S14), compared below.
+export PE_CAPTURE_DIR="$BUILD"
+rm -f "$BUILD"/s14_*.rgba
 fail=0
 # Pure-CPU suites (no GPU): canvas math / tiles / storage, brush engine.
-for t in pe_canvas_test pe_brush_test pe_layer_test pe_history_test; do
+for t in pe_canvas_test pe_brush_test pe_layer_test pe_history_test pe_selection_test; do
   if "$BUILD/$t" > "$BUILD/$t.log" 2>&1; then
     echo "PASS  $t  ($(grep -o '[0-9]*/[0-9]* checks passed' "$BUILD/$t.log"))"
   else
@@ -74,6 +77,19 @@ run canvas_vulkan          "$ICD"               vulkan vulkan --no-fallback --su
 # PxPaint brush engine end to end (screen samples -> raster -> uploads -> display)
 run brush_gles             "$ICD"               gles   gles   --suite brush
 run brush_vulkan           "$ICD"               vulkan vulkan --no-fallback --suite brush
+# Vulkan / GLES consistency of the selection work (same document, zoom 1, no rotation).
+if [[ -f "$BUILD/s14_gles.rgba" && -f "$BUILD/s14_vulkan.rgba" ]]; then
+  if python3 - "$BUILD/s14_gles.rgba" "$BUILD/s14_vulkan.rgba" <<'PY'
+import sys
+a = open(sys.argv[1], 'rb').read(); b = open(sys.argv[2], 'rb').read()
+if len(a) != len(b): print("      selection frame GLES vs Vulkan: different sizes"); sys.exit(1)
+d = [abs(x - y) for x, y in zip(a, b)]
+n = sum(1 for v in d if v); m = max(d)
+print(f"      selection frame GLES vs Vulkan: {len(a)//4} px, max channel diff {m}, differing channels {n}")
+sys.exit(0 if m <= 2 else 1)
+PY
+  then echo "PASS  selection_gles_vs_vulkan"; else echo "FAIL  selection_gles_vs_vulkan"; fail=1; fi
+fi
 # drawing performance scenario (numbers only; compared with the Block 2 baseline)
 run perf_gles              "$ICD"               gles   gles   --suite perf
 run perf_vulkan            "$ICD"               vulkan vulkan --no-fallback --suite perf

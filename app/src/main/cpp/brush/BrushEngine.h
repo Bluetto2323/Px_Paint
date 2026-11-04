@@ -67,6 +67,7 @@ public:
     bool strokeActive() const { return comp_.active(); }
     // Receives every committed stroke (history). Called under the caller's lock.
     void setCommitHook(StrokeCompositor::CommitHook hook) { comp_.setCommitHook(std::move(hook)); }
+    void setClip(const canvas::SelectionMask* clip) { comp_.setClip(clip); }
     // Time (nowNs) the oldest event consumed by the last process() call was
     // queued, then 0 until another call consumes input. Input-to-display
     // latency is measured from it when that frame is presented.

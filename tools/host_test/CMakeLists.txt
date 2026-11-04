@@ -51,7 +51,7 @@ if(PE_SANITIZE)
 endif()
 
 # Pure-CPU layer system tests (compositing, layer operations, persistence) - Block 6.
-add_executable(pe_layer_test layer_test.cpp ${PE_BRUSH_CORE_SOURCES} ${PE_CPP_DIR}/engine/CanvasDocument.cpp ${PE_CPP_DIR}/engine/History.cpp)
+add_executable(pe_layer_test layer_test.cpp ${PE_BRUSH_CORE_SOURCES} ${PE_CPP_DIR}/engine/CanvasDocument.cpp ${PE_CPP_DIR}/engine/CanvasSelection.cpp ${PE_CPP_DIR}/engine/History.cpp)
 target_include_directories(pe_layer_test PRIVATE ${PE_CPP_DIR})
 target_compile_options(pe_layer_test PRIVATE ${PE_WARNING_FLAGS} -Werror -O2)
 target_link_libraries(pe_layer_test PRIVATE Threads::Threads)
@@ -60,7 +60,7 @@ if(PE_SANITIZE)
   target_link_options(pe_layer_test PRIVATE -fsanitize=address,undefined)
 endif()
 
-add_executable(pe_history_test history_test.cpp ${PE_BRUSH_CORE_SOURCES} ${PE_CPP_DIR}/engine/CanvasDocument.cpp ${PE_CPP_DIR}/engine/History.cpp)
+add_executable(pe_history_test history_test.cpp ${PE_BRUSH_CORE_SOURCES} ${PE_CPP_DIR}/engine/CanvasDocument.cpp ${PE_CPP_DIR}/engine/CanvasSelection.cpp ${PE_CPP_DIR}/engine/History.cpp)
 target_include_directories(pe_history_test PRIVATE ${PE_CPP_DIR})
 target_compile_definitions(pe_history_test PRIVATE
   PE_BRUSH_ASSET="${CMAKE_CURRENT_LIST_DIR}/../../app/src/main/assets/brushes/builtin.pxb")
@@ -69,4 +69,16 @@ target_link_libraries(pe_history_test PRIVATE Threads::Threads)
 if(PE_SANITIZE)
   target_compile_options(pe_history_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
   target_link_options(pe_history_test PRIVATE -fsanitize=address,undefined)
+endif()
+
+# Selection engine tests (mask, operations, history, latency) - Block 10.
+add_executable(pe_selection_test selection_test.cpp ${PE_BRUSH_CORE_SOURCES} ${PE_CPP_DIR}/engine/CanvasDocument.cpp ${PE_CPP_DIR}/engine/CanvasSelection.cpp ${PE_CPP_DIR}/engine/History.cpp)
+target_include_directories(pe_selection_test PRIVATE ${PE_CPP_DIR})
+target_compile_definitions(pe_selection_test PRIVATE
+  PE_BRUSH_ASSET="${CMAKE_CURRENT_LIST_DIR}/../../app/src/main/assets/brushes/builtin.pxb")
+target_compile_options(pe_selection_test PRIVATE ${PE_WARNING_FLAGS} -Werror -O2)
+target_link_libraries(pe_selection_test PRIVATE Threads::Threads)
+if(PE_SANITIZE)
+  target_compile_options(pe_selection_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+  target_link_options(pe_selection_test PRIVATE -fsanitize=address,undefined)
 endif()

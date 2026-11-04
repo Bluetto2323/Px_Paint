@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -1439,6 +1440,148 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
                 engine.closeCanvas();
                 engine.waitForStatus([](const EngineStatus& st) { return !st.canvas.open; }, 5s);
             }
+        }
+
+        section("S14 selection on the GPU (Block 10): clipped painting, moving content, undo / redo on screen");
+        {
+            auto settled = [&] {
+                return brushIdle(engine) &&
+                       engine.waitForStatus([&](const EngineStatus&) { return !engine.document().hasPendingComposite(); }, 10s);
+            };
+            auto diff = [](const Cap& a, const Cap& b) {
+                if (a.c.width != b.c.width || a.c.height != b.c.height) return 999;
+                int worst = 0;
+                for (size_t i = 0; i < a.c.rgba.size(); ++i) worst = std::max(worst, std::abs(int(a.c.rgba[i]) - int(b.c.rgba[i])));
+                return worst;
+            };
+            // Waits for a frame presented after now (the change is on screen); returns ms.
+            auto shownMs = [&](const std::function<void()>& f) {
+                const uint64_t f0 = frames(engine);
+                const auto t0 = std::chrono::steady_clock::now();
+                f();
+                engine.waitForStatus([&](const EngineStatus& st) {
+                    return st.frames.framesPresented > f0 && !engine.document().hasPendingComposite();
+                }, 10s);
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            };
+            check(engine.createCanvas({1200, 800, kPaper}).empty(), "S14: canvas");
+            engine.waitForStatus([](const EngineStatus& st) { return st.canvas.gpuReady; }, 10s);
+            engine.setCanvasColors(0xFF202020u, 0xFFE8D8B8u, false);
+            double fit[] = {0.0};
+            engine.viewportOp(pe::ViewOp::Fit, fit, 0);
+            double rot[] = {0.4, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetRotationAt, rot, 3);
+            const uint32_t live0 = engine.status().resources.totalLive();
+            engine.document().fill({100, 100, 1000, 600}, 0xFF3070B0u);
+            uint32_t lid = 0;
+            engine.layerOp(pe::Engine::LayerOp::Add, 0, 0, 0, "", lid);
+            engine.document().fill({500, 0, 200, 800}, 0x9020C040u);   // semi-transparent band on a second layer
+            engine.layerOp(pe::Engine::LayerOp::Active, 1, 0, 0, "", lid);
+            check(settled(), "S14: content settled");
+            // Ellipse dragged on screen (rotated view: the shape is axis-aligned on the canvas).
+            const float drag[4] = {250, 150, 650, 450};
+            double selMs = shownMs([&] {
+                check(engine.selectShape(pe::Engine::SelectShape::Ellipse, 0, true, drag, 2) == pe::LayerError::None &&
+                          engine.selectionInfo().active,
+                      "S14: ellipse selected from screen points");
+            });
+            Cap before, after;
+            check(settled() && capture(engine, before), "S14: frame before painting");
+            screenStroke(engine, brushOf(70, 1.0f, 0xFFD02020u), screenLine(80, 300, 820, 300, 60));
+            check(settled() && capture(engine, after), "S14: frame after a stroke across the selection");
+            // Screen pixels over canvas pixels whose 5x5 neighbourhood is entirely outside / inside.
+            auto region = [&](int x, int y) {
+                const auto c = engine.screenToCanvas({x + 0.5, y + 0.5});
+                const int cx = static_cast<int>(std::floor(c.x)), cy = static_cast<int>(std::floor(c.y));
+                int lo = 255, hi = 0;
+                for (int j = -2; j <= 2; ++j)
+                    for (int i = -2; i <= 2; ++i) {
+                        const int v = engine.document().selectionAt(cx + i, cy + j);
+                        lo = std::min(lo, v);
+                        hi = std::max(hi, v);
+                    }
+                return hi == 0 ? 0 : lo == 255 ? 2 : 1;
+            };
+            size_t outChanged = 0, inChanged = 0, outPx = 0;
+            for (int y = 0; y < static_cast<int>(after.c.height); ++y)
+                for (int x = 0; x < static_cast<int>(after.c.width); ++x) {
+                    const bool changed = std::memcmp(before.at(x, y), after.at(x, y), 4) != 0;
+                    const int r = region(x, y);
+                    if (r == 0) { outPx++; outChanged += changed; }
+                    if (r == 2) inChanged += changed;
+                }
+            std::printf("    screen: %zu px outside the selection (all unchanged: %s), %zu px changed inside\n", outPx,
+                        outChanged == 0 ? "yes" : "NO", inChanged);
+            check(outChanged == 0 && inChanged > 2000 && outPx > 100000,
+                  "S14: on screen, the stroke changed pixels inside the selection only (rotated, zoomed view)");
+            // Moving the selected content: lifted into floating content, composited by the GPU while dragged.
+            Cap m0, moving, moved;
+            check(settled() && capture(engine, m0), "S14: frame before moving");
+            double beginMs = shownMs([&] { uint32_t x; engine.selectionOp(pe::Engine::SelectionOp::MoveBegin, 0, x); });
+            Cap lifted;
+            check(settled() && capture(engine, lifted) && diff(m0, lifted) == 0, "S14: lifting the content does not change the picture");
+            double stepMax = 0, stepSum = 0;
+            for (int i = 1; i <= 12; ++i) {
+                const double m = shownMs([&] { engine.selectionMoveScreen(10.0 * i, 5.0 * i); });
+                stepMax = std::max(stepMax, m);
+                stepSum += m;
+            }
+            check(settled() && capture(engine, moving) && diff(m0, moving) > 0, "S14: the moved content is displayed during the drag");
+            uint32_t none = 0;
+            double commitMs = shownMs([&] { engine.selectionOp(pe::Engine::SelectionOp::MoveCommit, 0, none); });
+            check(settled() && capture(engine, moved) && diff(moving, moved) == 0, "S14: dropping it shows exactly what the drag showed");
+            const uint64_t f0 = frames(engine);
+            check(engine.historyOp(pe::Engine::HistoryOp::Undo, 1) == 1 &&
+                      engine.waitForStatus([&](const EngineStatus& st) { return st.frames.framesPresented > f0; }, 10s) && settled(),
+                  "S14: undo the move");
+            Cap undone, redone;
+            check(capture(engine, undone) && diff(m0, undone) == 0, "S14: undo: the frame before the move, exactly");
+            engine.historyOp(pe::Engine::HistoryOp::Redo, 1);
+            check(settled() && capture(engine, redone) && diff(moved, redone) == 0, "S14: redo: the moved frame, exactly");
+            // Clear selected, cut + paste: undo / redo exact on screen.
+            Cap c0, c1, c2, c3;
+            check(settled() && capture(engine, c0), "S14: frame before clearing");
+            double clearMs = shownMs([&] { engine.selectionOp(pe::Engine::SelectionOp::Clear, 0, none); });
+            check(settled() && capture(engine, c1) && diff(c0, c1) > 0, "S14: clear selected shows the transparent area");
+            engine.historyOp(pe::Engine::HistoryOp::Undo, 1);
+            check(settled() && capture(engine, c2) && diff(c0, c2) == 0, "S14: undo clear: exact frame");
+            engine.historyOp(pe::Engine::HistoryOp::Redo, 1);
+            check(settled() && capture(engine, c3) && diff(c1, c3) == 0, "S14: redo clear: exact frame");
+            uint32_t pid = 0;
+            engine.historyOp(pe::Engine::HistoryOp::Undo, 1);
+            engine.selectionOp(pe::Engine::SelectionOp::Copy, 0, none);
+            double pasteMs = shownMs([&] { engine.selectionOp(pe::Engine::SelectionOp::Paste, 0, pid); });
+            Cap p1;
+            check(pid != 0 && settled() && capture(engine, p1), "S14: pasted as a new layer");
+            Cap p2, p3;
+            engine.historyOp(pe::Engine::HistoryOp::Undo, 1);
+            check(settled() && capture(engine, p2) && diff(c0, p2) == 0, "S14: undo paste: exact frame without the pasted layer");
+            engine.historyOp(pe::Engine::HistoryOp::Redo, 1);
+            check(settled() && capture(engine, p3) && diff(p1, p3) == 0, "S14: redo paste: exact frame with it");
+            std::printf("    select -> frame %.1f ms | move: begin %.1f ms, drag step avg %.1f / max %.1f ms, drop %.1f ms | "
+                        "clear %.1f ms | paste %.1f ms\n", selMs, beginMs, stepSum / 12, stepMax, commitMs, clearMs, pasteMs);
+            // Same final picture on every backend: unrotated, zoom 1, compared by run_host_tests.sh.
+            double z1[] = {1.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetZoomAt, z1, 3);
+            double r0[] = {0.0, 450, 300};
+            engine.viewportOp(pe::ViewOp::SetRotationAt, r0, 3);
+            engine.requestRender();
+            Cap fin;
+            if (settled() && engine.waitForStatus([&](const EngineStatus&) { return true; }, 1s) && capture(engine, fin)) {
+                if (const char* dir = std::getenv("PE_CAPTURE_DIR")) {
+                    const std::string path = std::string(dir) + "/s14_" + expected + ".rgba";
+                    if (FILE* f = std::fopen(path.c_str(), "wb")) {
+                        std::fwrite(fin.c.rgba.data(), 1, fin.c.rgba.size(), f);
+                        std::fclose(f);
+                    }
+                }
+                std::printf("    S14 composite checksum %016llx (CPU, identical on every backend)\n",
+                            static_cast<unsigned long long>(engine.document().compositeChecksum()));
+            }
+            engine.closeCanvas();
+            engine.waitForStatus([](const EngineStatus& st) { return !st.canvas.open; }, 5s);
+            check(engine.waitForStatus([&](const EngineStatus& st) { return st.resources.totalLive() <= live0; }, 5s),
+                  "S14: GPU resources back to the level before the selection work (floating content adds none)");
         }
 
         section("S9 close -> resources released");

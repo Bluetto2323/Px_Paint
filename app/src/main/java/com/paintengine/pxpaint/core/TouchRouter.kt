@@ -23,6 +23,7 @@ enum class FingerMode { DRAW, PAN, GESTURES_ONLY }
  *  * A pointer lifted with FLAG_CANCELED (the system recognised a palm or an
  *    accidental touch) cancels its stroke instead of committing it.
  *  * Strokes follow their pointer ID, not pointer index 0.
+ *  * The Select tool: one pointer (finger or stylus) selects instead of painting.
  */
 class TouchRouter(private val actions: Actions, private val gate: StrokeGate = StrokeGate()) {
     interface Actions {
@@ -46,6 +47,12 @@ class TouchRouter(private val actions: Actions, private val gate: StrokeGate = S
     var moveTool = false
     /** The Eraser tool is selected: strokes erase. */
     var eraserTool = false
+    /**
+     * The Select tool is selected: one pointer of any kind (finger whatever
+     * [fingerMode], stylus, mouse) draws a selection shape or moves selected
+     * content, through the same "stroke" actions (the workspace routes them).
+     */
+    var selectTool = false
 
     var mode = Mode.IDLE
         private set
@@ -177,6 +184,7 @@ class TouchRouter(private val actions: Actions, private val gate: StrokeGate = S
         val stylusLike = kind.isStylus || kind == ToolKind.MOUSE
         if (!stylusLike && id !in fingers) fingers += id
         when {
+            selectTool -> beginStroke(id, kind, timeMs, x, y)
             moveTool -> {
                 panPointer = id
                 mode = Mode.PAN

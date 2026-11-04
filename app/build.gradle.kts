@@ -15,8 +15,8 @@ android {
         applicationId = "com.paintengine"
         minSdk = 26          // Android 8.0: guaranteed libvulkan loader + GLES 3.x
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.9.0-block9"
+        versionCode = 10
+        versionName = "0.10.0-block10"
 
         ndk {
             // arm64-v8a: Galaxy A33 and virtually every current device.

@@ -257,6 +257,73 @@ class NativeEngine(config: Config) : AutoCloseable {
     @Synchronized
     fun setHistoryBudget(bytes: Long, maxSteps: Int) = withHandle { nativeSetHistoryBudget(it, bytes, maxSteps) }
 
+    // --- Selection (Block 10; any thread) ---------------------------------------
+    /** Shapes; codes = engine Engine::SelectShape. Lasso and polygon are both POLYGON. */
+    enum class SelectShape(val code: Int) { RECT(0), ELLIPSE(1), POLYGON(2) }
+
+    /** How a new shape combines with the selection; codes = canvas::SelectionMask::Mode. */
+    enum class SelectMode(val code: Int) { REPLACE(0), ADD(1), SUBTRACT(2), INTERSECT(3) }
+
+    /** Selection operations; codes = engine Engine::SelectionOp. */
+    enum class SelectionOp(val code: Int) {
+        SELECT_ALL(0), DESELECT(1), INVERT(2), FROM_CONTENT(3), CLEAR(4), COPY(5), COPY_MERGED(6), CUT(7), PASTE(8),
+        DUPLICATE(9), MOVE_BEGIN(10), MOVE_COMMIT(11), MOVE_CANCEL(12),
+    }
+
+    /** Selection state; bounds in canvas pixels, area in pixels (coverage summed). */
+    data class SelectionInfo(
+        val active: Boolean, val x: Int, val y: Int, val width: Int, val height: Int, val area: Double, val maskBytes: Long,
+        val version: Long, val moving: Boolean, val dx: Int, val dy: Int, val clipboard: Boolean, val clipboardBytes: Long,
+    ) {
+        companion object {
+            val NONE = SelectionInfo(false, 0, 0, 0, 0, 0.0, 0, 0, false, 0, 0, false, 0)
+            fun of(v: DoubleArray?): SelectionInfo = if (v == null || v.size < 17) NONE else SelectionInfo(
+                v[0] != 0.0, v[1].toInt(), v[2].toInt(), v[3].toInt(), v[4].toInt(), v[5], v[6].toLong(), v[7].toLong(),
+                v[8] != 0.0, v[9].toInt(), v[10].toInt(), v[11] != 0.0, v[16].toLong(),
+            )
+        }
+    }
+
+    /**
+     * Selects a shape from [points] (x, y pairs in [xy]): screen pixels, or
+     * canvas pixels with [canvasSpace]. RECT / ELLIPSE take 2 points (drag
+     * start and end), POLYGON at least 3. Returns the engine error (0 = done).
+     */
+    @Synchronized
+    fun select(shape: SelectShape, mode: SelectMode, antialias: Boolean, xy: FloatArray, points: Int, canvasSpace: Boolean = false): Int =
+        handle.let { if (it != 0L) nativeSelect(it, shape.code, mode.code, antialias, xy, points, canvasSpace) else 1 }
+
+    /** [mode]: FROM_CONTENT's combine mode. newId: the layer made by PASTE / DUPLICATE. */
+    @Synchronized
+    fun selectionOp(op: SelectionOp, mode: SelectMode = SelectMode.REPLACE): LayerResult {
+        val h = handle
+        if (h == 0L) return LayerResult(1, 0)
+        val r = nativeSelectionOp(h, op.code, mode.code)
+        return LayerResult((r ushr 32).toInt(), (r and 0xFFFFFFFFL).toInt())
+    }
+
+    /** Offset (whole canvas pixels) of the lifted content (after MOVE_BEGIN) from where it was lifted. */
+    @Synchronized
+    fun selectionMove(dx: Int, dy: Int): Int = handle.let { if (it != 0L) nativeSelectionMove(it, dx, dy) else 1 }
+
+    @Synchronized
+    fun selectionInfo(): SelectionInfo = handle.let { if (it != 0L) SelectionInfo.of(nativeSelectionInfo(it)) else SelectionInfo.NONE }
+
+    /** (version shl 1) or active: cheap, to notice selection changes (undo / redo included). */
+    fun selectionVersion(): Long = handle.let { if (it != 0L) nativeSelectionVersion(it) else 0L }
+
+    /** Outline loops, canvas pixels: [loops, n0, x, y, ..., n1, ...] (pxpaint.core.SelectionOutline). */
+    @Synchronized
+    fun selectionContours(): FloatArray? = handle.let { if (it != 0L) nativeSelectionContours(it) else null }
+
+    /** Inverse coverage (255 = not selected), longer side <= [maxSide]; [size] receives width, height. */
+    @Synchronized
+    fun selectionPreview(maxSide: Int, size: IntArray): ByteArray? =
+        handle.let { if (it != 0L) nativeSelectionPreview(it, maxSide, size) else null }
+
+    /** Canvas -> screen transform into [out] (a, b, c, d, tx, ty); false without a canvas view. Allocation-free. */
+    fun viewMatrix(out: FloatArray): Boolean = handle.let { it != 0L && nativeViewMatrix(it, out) }
+
     // --- Persistence (any thread; synchronized with [close]) -----------------
     /**
      * Up to [maxTiles] canvas tiles as records (little-endian): int count, then
@@ -354,6 +421,16 @@ class NativeEngine(config: Config) : AutoCloseable {
         @JvmStatic private external fun nativeHistoryOp(handle: Long, op: Int, count: Int): Int
         @JvmStatic private external fun nativeSampleColor(handle: Long, x: Double, y: Double): Long
         @JvmStatic private external fun nativeHistoryCounts(handle: Long): Long
+        @JvmStatic private external fun nativeSelect(
+            handle: Long, shape: Int, mode: Int, antialias: Boolean, xy: FloatArray, points: Int, canvasSpace: Boolean,
+        ): Int
+        @JvmStatic private external fun nativeSelectionOp(handle: Long, op: Int, mode: Int): Long
+        @JvmStatic private external fun nativeSelectionMove(handle: Long, dx: Int, dy: Int): Int
+        @JvmStatic private external fun nativeSelectionInfo(handle: Long): DoubleArray?
+        @JvmStatic private external fun nativeSelectionVersion(handle: Long): Long
+        @JvmStatic private external fun nativeSelectionContours(handle: Long): FloatArray?
+        @JvmStatic private external fun nativeSelectionPreview(handle: Long, maxSide: Int, size: IntArray): ByteArray?
+        @JvmStatic private external fun nativeViewMatrix(handle: Long, out: FloatArray): Boolean
         @JvmStatic private external fun nativeHistory(handle: Long): String?
         @JvmStatic private external fun nativeSetHistoryBudget(handle: Long, bytes: Long, maxSteps: Int)
         @JvmStatic private external fun nativeLayerOp(handle: Long, op: Int, id: Int, arg: Int, value: Float, text: String?): Long

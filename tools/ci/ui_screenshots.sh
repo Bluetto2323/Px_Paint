@@ -43,8 +43,8 @@ dump() {
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 && adb pull /sdcard/ui.xml "$OUT/$1.xml" > /dev/null 2>&1 || true
   echo "$1 $(adb shell wm density | tail -1 | grep -o '[0-9]*$')" >> "$OUT/dumps.txt"
 }
-# Centre of the first node whose content-desc starts with $2 in dump $1.
-centre() { python3 tools/ci/ui_find.py "$OUT/$1.xml" "$2"; }
+# Centre of the first node whose content-desc starts with $2 (equals it if $3 = exact) in dump $1.
+centre() { python3 tools/ci/ui_find.py "$OUT/$1.xml" "$2" ${3:-}; }
 display() {   # wm size WxH, density D (an emulated phone / tablet window on the same emulator)
   if [ "$1" = reset ]; then adb shell wm size reset; adb shell wm density reset
   else adb shell wm size "$1"; adb shell wm density "$2"; fi
@@ -148,6 +148,71 @@ start --es pxpaint.demo color --es pxpaint.motion reduced
 shot 69-reduced-motion-color
 for k in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global $k 0; done
 
+# ---------------- Selection (Block 10): real selection operations, driven by touches
+# (adb input: a single-finger drag, taps on the real controls found in UI dumps).
+tapc() {   # tapc <dump> <content-desc> [exact]: dump the screen, tap that control
+  dump "$1"
+  if xy=$(centre "$1" "$2" "${3:-}"); then adb shell input tap $xy; sleep 2; else echo "  no control '$2' in $1"; fi
+}
+lasso() {  # lasso cx cy r: a closed freehand loop with one finger (input motionevent)
+  adb shell input motionevent DOWN $(( $1 + $3 )) $2
+  for a in 15 30 45 60 75 90 105 120 135 150 165 180 195 210 225 240 255 270 285 300 315 330 345 360; do
+    x=$(python3 -c "import math;print(int($1+$3*math.cos(math.radians($a))*(1+0.15*math.sin(math.radians(3*$a)))))")
+    y=$(python3 -c "import math;print(int($2+$3*math.sin(math.radians($a))))")
+    adb shell input motionevent MOVE $x $y
+  done
+  adb shell input motionevent UP $(( $1 + $3 )) $2
+  sleep 2
+}
+start --es pxpaint.demo selection --es pxpaint.selshape ellipse
+adb logcat -c
+record 70-selection-ops 180
+adb shell input swipe 250 700 850 1450 700; sleep 3
+shot 71-selection-ellipse
+tapc 71-selection-ellipse "Move" exact
+adb shell input swipe 550 1075 760 1300 900; sleep 2
+shot 72-selection-moving
+tapc 72-selection-moving "Done" exact
+shot 73-selection-moved
+tapc 73-selection-moved "Copy" exact
+tapc 73b-selection-copied "Paste" exact
+shot 74-selection-pasted
+tapc 74-selection-pasted "Clear" exact
+shot 75-selection-cleared
+# A brush stroke across the whole canvas stays inside the selection.
+tapc 75-selection-cleared "Brush" exact
+adb shell input swipe 60 1100 1020 1180 800; sleep 3
+shot 76-selection-clipped-stroke
+# Lasso, added to the selection; then inverted; then undo.
+tapc 76-selection-clipped-stroke "Select" exact
+tapc 76b-select-tool "Select" exact
+tapc 76c-selection-options "Lasso" exact
+tapc 76d-selection-options "Add" exact
+shot 77-selection-options
+adb shell input keyevent KEYCODE_BACK; sleep 1
+lasso 560 1750 260
+shot 78-selection-lasso-add
+tapc 78-selection-lasso-add "Invert" exact
+shot 79-selection-inverted
+tapc 79-selection-inverted "Undo"
+shot 80-selection-undo-invert
+# Polygon: three corners, then the first corner again closes it.
+tapc 80-selection-undo-invert "Select" exact
+tapc 80b-selection-options "Polygon" exact
+tapc 80c-selection-options "New" exact
+adb shell input keyevent KEYCODE_BACK; sleep 1
+for xy in "300 600" "800 650" "700 1000"; do adb shell input tap $xy; sleep 1; done
+shot 81-selection-polygon-building
+adb shell input tap 302 602; sleep 3
+shot 82-selection-polygon
+# Ants animating, nothing else: UI frame times (the canvas itself is not redrawn by them).
+adb shell dumpsys gfxinfo "$PKG" reset > /dev/null
+sleep 6
+adb shell dumpsys gfxinfo "$PKG" > "$OUT/gfxinfo-selection-ants.txt"
+pull_rec 70-selection-ops 1
+adb logcat -d -s PxPaint:I | grep -E "Selection:" > "$OUT/selection-log.txt" || true
+python3 tools/ci/motion_perf.py "$OUT" "selection ants=gfxinfo-selection-ants.txt" | tee "$OUT/selection-perf.txt" || true
+
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
 start --es pxpaint.demo canvas
@@ -158,6 +223,10 @@ shot 21-phone-landscape-color
 start --es pxpaint.demo layers
 shot 22-phone-landscape-layers
 dump 22-phone-landscape-layers
+start --es pxpaint.demo selection --es pxpaint.selshape rectangle
+adb shell input swipe 900 300 1500 800 600; sleep 3
+shot 23-phone-landscape-selection
+dump 23-phone-landscape-selection
 
 # ---------------- Tablet portrait (emulated window 1600x2560 @320 -> 800x1280 dp)
 display 1600x2560 320
@@ -169,6 +238,11 @@ shot 31-tablet-portrait-color-popover
 start --es pxpaint.demo layers --es pxpaint.pin layers
 shot 32-tablet-portrait-layers-pinned
 dump 32-tablet-portrait-layers-pinned
+start --es pxpaint.demo selection --es pxpaint.selshape ellipse
+adb shell input swipe 400 900 1200 1700 700; sleep 3
+shot 33-tablet-portrait-selection
+tapc 33-tablet-portrait-selection "Select" exact
+shot 34-tablet-portrait-selection-options
 
 # ---------------- Tablet landscape (2560x1600 @320 -> 1280x800 dp)
 display 2560x1600 320
@@ -180,6 +254,10 @@ shot 41-tablet-landscape-library-and-pinned-layers
 dump 41-tablet-landscape-library-and-pinned-layers
 start --es pxpaint.demo workspace --es pxpaint.pin color
 shot 42-tablet-landscape-brush-and-pinned-color
+start --es pxpaint.demo selection --es pxpaint.selshape lasso
+lasso 1280 800 380
+shot 43-tablet-landscape-selection
+dump 43-tablet-landscape-selection
 
 # ---------------- Small window (720x1280 @320 -> 360x640 dp) and large display (1920x1080 dp)
 display 720x1280 320

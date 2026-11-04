@@ -487,8 +487,18 @@ void StrokeCompositor::composite(RasterStore& store, StrokeTile& st) {
     if (!dst) return;
     const int32_t ox = st.tx * kTile, oy = st.ty * kTile;
     const float inv = 1.0f / 65535.0f;
+    // Selection (Block 10): the stroke's coverage is multiplied by the selection's, so nothing
+    // changes outside it and its antialiased edge fades the paint. Unselected tile: base kept.
+    const bool clipped = clip_ && clip_->active();
+    const auto clipState = clipped ? clip_->state(st.tx, st.ty) : canvas::SelectionMask::TileState::Full;
+    const uint8_t* clipPx = clipped ? clip_->tile(st.tx, st.ty) : nullptr;
     for (int32_t y = region.y; y < region.bottom(); ++y) {
         const size_t rowOff = static_cast<size_t>(y - oy) * kTile;
+        if (clipState == canvas::SelectionMask::TileState::Empty) {
+            std::memcpy(dst + rowOff * 4 + static_cast<size_t>(region.x - ox) * 4, st.base.get() + rowOff * 4 + static_cast<size_t>(region.x - ox) * 4,
+                        static_cast<size_t>(region.w) * 4);
+            continue;
+        }
         const uint16_t* m0 = st.mask.get() + rowOff;
         const uint16_t* m1 = st.tail.get() + rowOff;
         const uint8_t* b = st.base.get() + rowOff * 4;
@@ -502,6 +512,7 @@ void StrokeCompositor::composite(RasterStore& store, StrokeTile& st) {
                 const uint32_t i = m >> kShift, f = m & ((1u << kShift) - 1u);
                 m = (wetLut_[i] * ((1u << kShift) - f) + wetLut_[std::min<uint32_t>(i + 1, 1u << kWetLutBits)] * f) >> kShift;
             }
+            if (clipPx) m = (m * clipPx[rowOff + static_cast<size_t>(x)] + 127u) / 255u;
             const uint8_t* bp = b + static_cast<size_t>(x) * 4;
             uint8_t* op = o + static_cast<size_t>(x) * 4;
             if (m == 0) {

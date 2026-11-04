@@ -40,6 +40,7 @@
 #include "brush/BrushTextures.h"
 #include "brush/BrushTypes.h"
 #include "canvas/RasterStore.h"
+#include "canvas/SelectionMask.h"
 
 namespace pe::brush {
 
@@ -68,6 +69,8 @@ public:
     // (the history records the stroke from it). Not called for cancels.
     using CommitHook = std::function<void(const canvas::RasterStore&, const std::vector<CommittedTile>&, bool erase)>;
     void setCommitHook(CommitHook hook) { commitHook_ = std::move(hook); }
+    /** Selection the strokes are clipped to (null or inactive: not clipped). Owned by the caller. */
+    void setClip(const canvas::SelectionMask* clip) { clip_ = clip; }
 
     struct Stats {
         uint64_t dabs = 0;
@@ -140,6 +143,7 @@ private:
     std::vector<std::unique_ptr<StrokeTile>> pool_;
     Stats stats_;
     CommitHook commitHook_;
+    const canvas::SelectionMask* clip_ = nullptr;
     std::vector<CommittedTile> committedScratch_;
 };
 

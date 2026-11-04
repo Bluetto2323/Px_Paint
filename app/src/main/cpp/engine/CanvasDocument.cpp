@@ -50,6 +50,8 @@ CanvasDocument::CanvasDocument() {
     // Every committed stroke becomes one history step (called under mutex_).
     brush_.setCommitHook([this](const RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
                                 bool erase) { onStrokeCommitted(store, tiles, erase); });
+    // Strokes and erasing stay inside the selection (no selection: everywhere).
+    brush_.setClip(&selection_);
 }
 
 void CanvasDocument::onStrokeCommitted(const RasterStore& store, const std::vector<brush::StrokeCompositor::CommittedTile>& tiles,
@@ -167,13 +169,13 @@ void CanvasDocument::setHistoryBudget(uint64_t bytes, size_t maxSteps) {
 
 std::vector<HistoryEntry> CanvasDocument::historyEntries() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (Layer* a = activeLayer()) brush_.process(a->store);
+    processInputLocked();
     return history_.entries();
 }
 
 HistoryStats CanvasDocument::historyStats() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (Layer* a = activeLayer()) brush_.process(a->store);
+    processInputLocked();
     return history_.stats();
 }
 
@@ -192,6 +194,8 @@ void CanvasDocument::open(uint32_t width, uint32_t height) {
     composite_.reset(width, height);
     pending_.assign(composite_.tileCount(), 0);
     pendingCount_ = 0;
+    selection_.reset(width, height);
+    move_ = {};
     open_ = true;
     refreshEditable();
     generation_.fetch_add(1, std::memory_order_acq_rel);
@@ -204,6 +208,8 @@ void CanvasDocument::close() {
     history_.clear();
     layers_.clear();
     composite_.reset(0, 0);
+    selection_.reset(0, 0);
+    move_ = {};
     open_ = false;
     refreshEditable();
     generation_.fetch_add(1, std::memory_order_acq_rel);
@@ -290,7 +296,14 @@ std::string CanvasDocument::uniqueName(const std::string& base) const {
     }
 }
 
+void CanvasDocument::processInputLocked() {
+    // A stroke started while content is being moved: the move lands first.
+    if (move_.active && brush_.hasPending()) commitMoveLocked();
+    if (Layer* a = activeLayer()) brush_.process(a->store);
+}
+
 void CanvasDocument::settleInputLocked() {
+    commitMoveLocked();  // content being moved lands first (no-op without a move)
     Layer* a = activeLayer();
     if (!a) return;
     brush_.process(a->store);
@@ -317,8 +330,8 @@ void CanvasDocument::markAllContent() {
 }
 
 void CanvasDocument::updateLocked(bool complete) {
+    processInputLocked();
     Layer* a = activeLayer();
-    if (a) brush_.process(a->store);
     const int64_t t0 = nowNs();
     viewScratch_.clear();
     for (const auto& l : layers_)
@@ -431,6 +444,8 @@ size_t CanvasDocument::loadLegacy(const std::vector<ContentOp>& ops) {
     composite_.reset(w, h);
     pending_.assign(composite_.tileCount(), 0);
     pendingCount_ = 0;
+    selection_.reset(w, h);
+    move_ = {};
     markAllContent();
     refreshEditable();
     generation_.fetch_add(1, std::memory_order_acq_rel);
@@ -742,6 +757,8 @@ bool CanvasDocument::setLayerStack(const std::vector<LayerInfo>& stack, uint32_t
     brush_.discard();
     history_.clear();  // a loaded document starts a new history
     layers_.clear();
+    selection_.reset(composite_.width(), composite_.height());
+    move_ = {};
     for (const auto& info : stack) {
         auto l = std::make_unique<Layer>();
         l->info = info;

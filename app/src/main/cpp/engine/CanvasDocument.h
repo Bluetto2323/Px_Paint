@@ -34,11 +34,13 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "brush/BrushEngine.h"
 #include "canvas/Compositor.h"
 #include "canvas/RasterStore.h"
+#include "canvas/SelectionMask.h"
 #include "engine/History.h"
 #include "engine/LayerTypes.h"
 
@@ -152,6 +154,51 @@ public:
     // (undo steps << 32) | redo steps; lock-free, does not consume input (UI buttons).
     uint64_t historyCounts() const { return history_.counts(); }
 
+    // --- Selection (Block 10; any thread) --------------------------------------
+    // The selection is a coverage mask independent from the layers (canvas/
+    // SelectionMask). With a selection, strokes and erasing are clipped to it.
+    // Every change is one history step; pixel operations act on the active
+    // layer only (copyMerged reads the visible image). Queued strokes are
+    // applied first, and a move in progress is committed first.
+    struct SelectionInfo {
+        bool active = false;
+        canvas::RectI bounds;
+        double area = 0;          // selected pixels (coverage summed)
+        uint64_t bytes = 0;       // mask pixel memory (partial tiles)
+        uint64_t clipboardBytes = 0;
+        uint64_t version = 0;     // changes with the mask (outline caches)
+        bool moving = false;
+        int32_t dx = 0, dy = 0;   // offset of the content being moved
+        bool clipboard = false;
+        canvas::RectI clipboardBounds;
+    };
+    LayerError select(const float* canvasXY, size_t points, canvas::SelectionMask::Mode mode, bool antialias);
+    LayerError selectAll();
+    LayerError deselect();
+    LayerError invertSelection();
+    // Visible content (all visible layers, layer opacity applied) as a shape.
+    LayerError selectFromContent(canvas::SelectionMask::Mode mode);
+    LayerError clearSelected();
+    LayerError copySelection(bool merged);
+    LayerError cutSelection();
+    LayerError paste(uint32_t& newId);
+    LayerError duplicateSelection(uint32_t& newId);
+    // Moving the selected pixels of the active layer (whole canvas pixels):
+    // begin lifts them into a floating layer above it, moveTo offsets that,
+    // commit drops them (one history step with the selection), cancel restores.
+    // Block 11 (transform) extends this floating content.
+    LayerError moveBegin();
+    LayerError moveTo(int32_t dx, int32_t dy);
+    LayerError moveCommit();
+    void moveCancel();
+    SelectionInfo selectionInfo();
+    void selectionContours(std::vector<float>& out);
+    void selectionPreview(uint32_t maxSide, uint32_t& w, uint32_t& h, std::vector<uint8_t>& out);
+    uint8_t selectionAt(int32_t x, int32_t y);
+    uint64_t selectionChecksum();
+    // (version << 1) | active: cheap, for the UI to notice changes (undo / redo included).
+    uint64_t selectionVersion() const;
+
     // --- Persistence (any thread) --------------------------------------------
     // Applies queued input, then appends up to `maxTiles` tiles of layer `id`
     // (changed since their last export if `changedOnly`, else every allocated
@@ -213,6 +260,8 @@ private:
     void markAllContent();
     // Under mutex_: queued strokes applied and a stroke in progress committed.
     void settleInputLocked();
+    // Under mutex_: queued strokes applied (a move in progress lands first).
+    void processInputLocked();
     int32_t indexOf(uint32_t id) const;
     Layer* activeLayer();
     void refreshEditable();
@@ -238,6 +287,37 @@ private:
     std::vector<canvas::LayerView> viewScratch_;
     brush::BrushEngine brush_;    // input side self-synchronised; processing under mutex_
     History history_;             // guarded by mutex_
+    // Block 10 (guarded by mutex_)
+    canvas::SelectionMask selection_;
+    canvas::SelectionMask shape_;                 // scratch: the shape being combined
+    canvas::RasterStore clipboard_;               // copied / cut pixels (session, any document)
+    bool hasClipboard_ = false;
+    // Moving selected content. The selected pixels of the active layer are
+    // lifted into `floating` (selection coverage applied); at an offset, the
+    // layer's affected tiles show the hole (1 - selection) with the floating
+    // pixels drawn over them, so what is displayed during the drag is exactly
+    // what the drop records, with the layer's own opacity and blend mode.
+    // Block 11 replaces the integer offset by a transform of `floating`.
+    struct Move {
+        bool active = false;
+        uint32_t layerId = 0;                     // the active layer being edited
+        canvas::RasterStore floating;             // lifted pixels, at offset 0
+        // Original pixels of every layer tile touched so far (null: no tile).
+        std::unordered_map<int32_t, std::unique_ptr<uint8_t[]>> orig;
+        std::vector<int32_t> shown;               // tiles rewritten for the current offset
+        std::vector<uint8_t> selectionBefore;
+        int32_t dx = 0, dy = 0;
+    } move_;
+    void composeMoveTileLocked(Layer& l, int32_t index, std::vector<uint8_t>& scratch);
+    void commitMoveLocked();
+    void cancelMoveLocked();
+    void recordSelection(const std::vector<uint8_t>& before);
+    // Applies `op` to every tile of the active layer that the selection touches
+    // (op(px, mask px or null when fully selected) modifies px in place) as one step.
+    template <typename Fn>
+    LayerError editSelectedLocked(HistoryKind kind, Fn&& op);
+    bool copySelectedLocked(bool merged, canvas::RasterStore& out);
+    LayerError insertStoreAsLayerLocked(const canvas::RasterStore& src, const std::string& name, HistoryKind kind, uint32_t& newId);
 
     // HistoryTarget (called by history commands under mutex_).
     LayerData* findLayer(uint32_t id) override;
@@ -249,11 +329,13 @@ private:
     void layerPixelsChanged(uint32_t id, const canvas::RectI& rect) override;
     void layerPropertiesChanged(uint32_t id) override;
     void stackChanged() override { markAllContent(); }
+    bool restoreSelection(const std::vector<uint8_t>& encoded) override;
     // Records a property change of layer `id` made by `apply`.
     template <typename Fn>
     void recordProperty(HistoryKind kind, Layer& l, Fn&& apply) {
         // Strokes already ended are steps before this one (chronological order);
         // a stroke still in progress continues (an opacity drag does not cut it).
+        commitMoveLocked();
         if (Layer* a = activeLayer()) brush_.process(a->store);
         const LayerInfo before = l.info;
         apply();

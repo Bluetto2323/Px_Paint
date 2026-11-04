@@ -14,6 +14,7 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
     ${PE_CPP_DIR}/canvas/Compositor.cpp
+    ${PE_CPP_DIR}/canvas/SelectionMask.cpp
     # brush engine (CPU, no GPU, no UI)
     ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/BrushTextures.cpp
@@ -52,6 +53,7 @@ set(PE_ENGINE_SOURCES
     ${PE_CPP_DIR}/engine/TestScene.cpp
     ${PE_CPP_DIR}/engine/History.cpp
     ${PE_CPP_DIR}/engine/CanvasDocument.cpp
+    ${PE_CPP_DIR}/engine/CanvasSelection.cpp
     ${PE_CPP_DIR}/engine/CanvasController.cpp
     ${PE_CPP_DIR}/engine/Engine.cpp
 )
@@ -65,6 +67,7 @@ set(PE_BRUSH_CORE_SOURCES
     ${PE_CPP_DIR}/canvas/TileGrid.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
     ${PE_CPP_DIR}/canvas/Compositor.cpp
+    ${PE_CPP_DIR}/canvas/SelectionMask.cpp
     ${PE_CPP_DIR}/brush/BrushDynamics.cpp
     ${PE_CPP_DIR}/brush/BrushTextures.cpp
     ${PE_CPP_DIR}/brush/BrushPreview.cpp
@@ -84,8 +87,10 @@ set(PE_HOT_SOURCES
     ${PE_CPP_DIR}/brush/BrushEngine.cpp
     ${PE_CPP_DIR}/canvas/RasterStore.cpp
     ${PE_CPP_DIR}/canvas/Compositor.cpp
+    ${PE_CPP_DIR}/canvas/SelectionMask.cpp
     ${PE_CPP_DIR}/canvas/CanvasSurface.cpp
     ${PE_CPP_DIR}/engine/CanvasDocument.cpp
+    ${PE_CPP_DIR}/engine/CanvasSelection.cpp
 )
 
 set(PE_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter)
