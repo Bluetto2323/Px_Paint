@@ -1006,7 +1006,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             c.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                 topMargin = belowBar
-                val side = (if (s.toolbar == ToolbarPlacement.SIDE) railW else 0) + theme.touchTarget + theme.dp(8)
+                // The size / opacity sliders start below this bar: only a side rail needs clearing.
+                val side = (if (s.toolbar == ToolbarPlacement.SIDE) railW else 0) + theme.dp(8)
                 leftMargin = ins.left + side + (if (pinnedLeft) pinnedW else 0)
                 rightMargin = ins.right + side + (if (pinnedRight) pinnedW else 0)
             })
@@ -1040,7 +1041,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
 
         // Quick size / opacity sliders on a screen edge.
-        val sliderTop = belowBar + theme.dp(40)
+        val sliderTop = belowBar + theme.touchTarget + theme.dp(12)   // clear of the selection bar
         val sliderBottom = ins.bottom + dockH + m
         val availPx = (if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()) - sliderTop - sliderBottom
         val lengthPx = ((availPx - theme.dp(16)) / 2).coerceIn(theme.dp(72), theme.dp(QuickSlider.LENGTH_DP))
