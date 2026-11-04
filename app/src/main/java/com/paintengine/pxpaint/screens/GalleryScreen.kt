@@ -247,6 +247,7 @@ class GalleryScreen(host: PxHost) : Screen(host) {
             background = theme.pressable(theme.rounded(theme.accentSoft, theme.radiusM, theme.accent, 1.2f), theme.radiusM)
             isClickable = true
             setOnClickListener { newCanvas() }
+            contentDescription = tr(S.NEW_CANVAS)
             addView(View(context).apply { background = IconDrawable(Icon.PLUS, theme.accent, 2f) },
                 FrameLayout.LayoutParams(theme.dp(36), theme.dp(36), Gravity.CENTER))
         }

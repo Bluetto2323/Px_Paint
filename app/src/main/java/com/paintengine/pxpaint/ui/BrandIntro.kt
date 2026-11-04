@@ -38,6 +38,12 @@ import com.paintengine.pxpaint.core.tr
 @SuppressLint("ViewConstructor")
 class BrandIntro(context: Context, private val theme: PxTheme, private val onDone: () -> Unit) : FrameLayout(context) {
     private val m = theme.motion
+    /**
+     * Android 12+ already showed the complete mark (system splash): the intro
+     * continues from it (light along the stroke, wordmark) instead of
+     * drawing it again from nothing. Before 12 it draws the mark itself.
+     */
+    private val continued = android.os.Build.VERSION.SDK_INT >= 31
     private val startMs = SystemClock.uptimeMillis()
     private var readyAt: Long? = null
     private var finished = false
@@ -161,17 +167,21 @@ class BrandIntro(context: Context, private val theme: PxTheme, private val onDon
             val t = t()
             val move = m.movement
             // 1. The tile fades in (and settles from 96 %).
-            val sym = IntroTimeline.segment(t, MotionTokens.SPLASH_SYMBOL, MotionTokens.SPLASH_SYMBOL_END)
+            val sym = if (continued) 1f else IntroTimeline.segment(t, MotionTokens.SPLASH_SYMBOL, MotionTokens.SPLASH_SYMBOL_END)
             tilePaint.alpha = alpha(sym)
             canvas.save()
-            if (move) {
+            if (move && !continued) {
                 val s = 0.96f + 0.04f * Motion.decelerate.getInterpolation(sym)
                 canvas.scale(s, s, cx, cy)
             }
             val r = 12.5f * unit
             canvas.drawRoundRect(tile, r, r, tilePaint)
             // 2. The ember stroke draws through it (reduced motion: fades with the tile).
-            val st = if (move) Motion.decelerate.getInterpolation(IntroTimeline.segment(t, MotionTokens.SPLASH_STROKE, MotionTokens.SPLASH_STROKE_END)) else sym
+            val st = when {
+                continued -> 1f
+                move -> Motion.decelerate.getInterpolation(IntroTimeline.segment(t, MotionTokens.SPLASH_STROKE, MotionTokens.SPLASH_STROKE_END))
+                else -> sym
+            }
             if (st > 0f) {
                 partial.reset()
                 measure.getSegment(0f, length * (if (move) st else 1f), partial, true)
