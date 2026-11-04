@@ -1,0 +1,7 @@
+Starting: Intent { cmp=com.paintengine/.pxpaint.PxPaintActivity }
+Status: ok
+LaunchState: COLD
+Activity: com.paintengine/.pxpaint.PxPaintActivity
+TotalTime: 1682
+WaitTime: 1727
+Complete

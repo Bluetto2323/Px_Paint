@@ -1,0 +1,66 @@
+Applications Graphics Acceleration Info:
+Uptime: 466223 Realtime: 466223
+
+** Graphics info for pid 8583 [com.paintengine] **
+
+Stats since: 454564962891ns
+Total frames rendered: 212
+Janky frames: 197 (92.92%)
+Janky frames (legacy): 211 (99.53%)
+50th percentile: 69ms
+90th percentile: 150ms
+95th percentile: 150ms
+99th percentile: 300ms
+Number Missed Vsync: 59
+Number High input latency: 30
+Number Slow UI thread: 98
+Number Slow bitmap uploads: 29
+Number Slow issue draw commands: 196
+Number Frame deadline missed: 197
+Number Frame deadline missed (legacy): 195
+HISTOGRAM: 5ms=0 6ms=0 7ms=0 8ms=0 9ms=0 10ms=0 11ms=0 12ms=0 13ms=0 14ms=0 15ms=1 16ms=0 17ms=0 18ms=0 19ms=0 20ms=0 21ms=0 22ms=0 23ms=0 24ms=0 25ms=0 26ms=1 27ms=0 28ms=0 29ms=0 30ms=0 31ms=0 32ms=6 34ms=4 36ms=4 38ms=6 40ms=1 42ms=4 44ms=4 46ms=4 48ms=14 53ms=15 57ms=11 61ms=8 65ms=15 69ms=23 73ms=4 77ms=11 81ms=8 85ms=9 89ms=9 93ms=3 97ms=4 101ms=1 105ms=3 109ms=2 113ms=3 117ms=3 121ms=3 125ms=1 129ms=0 133ms=4 150ms=17 200ms=2 250ms=0 300ms=2 350ms=0 400ms=1 450ms=0 500ms=1 550ms=0 600ms=0 650ms=0 700ms=0 750ms=0 800ms=0 850ms=0 900ms=0 950ms=0 1000ms=0 1050ms=0 1100ms=0 1150ms=0 1200ms=0 1250ms=0 1300ms=0 1350ms=0 1400ms=0 1450ms=0 1500ms=0 1550ms=0 1600ms=0 1650ms=0 1700ms=0 1750ms=0 1800ms=0 1850ms=0 1900ms=0 1950ms=0 2000ms=0 2050ms=0 2100ms=0 2150ms=0 2200ms=0 2250ms=0 2300ms=0 2350ms=0 2400ms=0 2450ms=0 2500ms=0 2550ms=0 2600ms=0 2650ms=0 2700ms=0 2750ms=0 2800ms=0 2850ms=0 2900ms=0 2950ms=0 3000ms=0 3050ms=0 3100ms=0 3150ms=0 3200ms=0 3250ms=0 3300ms=0 3350ms=0 3400ms=0 3450ms=0 3500ms=0 3550ms=0 3600ms=0 3650ms=0 3700ms=0 3750ms=0 3800ms=0 3850ms=0 3900ms=0 3950ms=0 4000ms=0 4050ms=0 4100ms=0 4150ms=0 4200ms=0 4250ms=0 4300ms=0 4350ms=0 4400ms=0 4450ms=0 4500ms=0 4550ms=0 4600ms=0 4650ms=0 4700ms=0 4750ms=0 4800ms=0 4850ms=0 4900ms=0 4950ms=0
+50th gpu percentile: 4950ms
+90th gpu percentile: 4950ms
+95th gpu percentile: 4950ms
+99th gpu percentile: 4950ms
+GPU HISTOGRAM: 1ms=0 2ms=0 3ms=0 4ms=0 5ms=0 6ms=0 7ms=1 8ms=4 9ms=2 10ms=5 11ms=1 12ms=4 13ms=0 14ms=0 15ms=5 16ms=1 17ms=4 18ms=3 19ms=5 20ms=4 21ms=6 22ms=7 23ms=4 24ms=5 25ms=3 4950ms=148
+
+Pipeline=Skia (OpenGL)
+Memory policy:
+  Max surface area: 2592000
+  Max resource usage: 124.42MB (x48)
+  Background retention: 50% (altUiHidden = true)
+  GPU Context timeout: 10
+Contexts: 1 (stopped = 0)
+CPU Caches:
+  Glyph Cache: 87.19 KB (1 entry)
+  Glyph Count: 26 
+Total CPU memory usage:
+  89286 bytes, 87.19 KB (0.00 bytes is purgeable)
+GPU Caches:
+  Other:
+    Buffer Object: 38.50 KB (5 entries)
+    Other: 2.88 KB (1 entry)
+    StencilAttachment: 656.00 KB (6 entries)
+  Image:
+    Texture: 119.44 KB (10 entries)
+  Scratch:
+    RenderTarget: 1.30 MB (12 entries)
+    Texture: 2.00 MB (3 entries)
+    Buffer Object: 144.00 KB (4 entries)
+Total GPU memory usage:
+  4449636 bytes, 4.24 MB (1.49 MB is purgeable)
+
+Profile data in ms:
+
+	com.paintengine/com.paintengine.pxpaint.PxPaintActivity/android.view.ViewRootImpl@b2d9b35 (visibility=0)
+View hierarchy:
+
+  com.paintengine/com.paintengine.pxpaint.PxPaintActivity/android.view.ViewRootImpl@b2d9b35
+  57 views, 126.09 kB of render nodes
+
+
+Total ViewRootImpl   : 1
+Total attached Views : 57
+Total RenderNode     : 126.09 kB (used) / 391.49 kB (capacity)
+

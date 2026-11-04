@@ -1,0 +1,71 @@
+01-phone-portrait-canvas (density 420): 11 interactive nodes, 0 problems
+02-phone-portrait-brush-panel (density 420): 14 interactive nodes, 0 problems
+04-phone-portrait-color (density 420): 16 interactive nodes, 0 problems
+06-phone-portrait-layers (density 420): 29 interactive nodes, 0 problems
+08-phone-portrait-fullscreen (density 420): 0 interactive nodes, 0 problems
+10-phone-drawn (density 420): 11 interactive nodes, 0 problems
+11-phone-after-undo (density 420): 12 interactive nodes, 0 problems
+64-gallery-with-project (density 420): 6 interactive nodes, 0 problems
+67-panels-full (density 420): 11 interactive nodes, 0 problems
+67-panels-off (density 420): 11 interactive nodes, 0 problems
+71-selection-ellipse (density 420): 16 interactive nodes, 0 problems
+72b-transform (density 420): 16 interactive nodes, 0 problems
+72-selection-moving (density 420): 16 interactive nodes, 0 problems
+73-selection-moved (density 420): 16 interactive nodes, 0 problems
+73b-selection-copied (density 420): 17 interactive nodes, 0 problems
+74-selection-pasted (density 420): 17 interactive nodes, 0 problems
+75-selection-cleared (density 420): 17 interactive nodes, 0 problems
+76-selection-clipped-stroke (density 420): 17 interactive nodes, 0 problems
+76b-more-tools (density 420): 27 interactive nodes, 0 problems
+76c-select-tool (density 420): 17 interactive nodes, 0 problems
+76d-more-tools (density 420): 27 interactive nodes, 0 problems
+76e-selection-options (density 420): 31 interactive nodes, 1 problems
+  small target 46x27 dp: Switch 'Smooth edges' at [895,1850][1017,1921]
+76f-selection-options (density 420): 31 interactive nodes, 1 problems
+  small target 46x27 dp: Switch 'Smooth edges' at [895,1850][1017,1921]
+78-selection-lasso-add (density 420): 17 interactive nodes, 0 problems
+78b-selection-overflow (density 420): 22 interactive nodes, 0 problems
+79-selection-inverted (density 420): 17 interactive nodes, 0 problems
+80-selection-undo-invert (density 420): 18 interactive nodes, 0 problems
+80a-more-tools (density 420): 28 interactive nodes, 0 problems
+80b-selection-options (density 420): 32 interactive nodes, 1 problems
+  small target 46x27 dp: Switch 'Smooth edges' at [895,1850][1017,1921]
+80c-selection-options (density 420): 32 interactive nodes, 1 problems
+  small target 46x27 dp: Switch 'Smooth edges' at [895,1850][1017,1921]
+90-workspace-deep_blue (density 420): 11 interactive nodes, 0 problems
+90-workspace-pure_black (density 420): 11 interactive nodes, 0 problems
+90-workspace-warm_beige (density 420): 11 interactive nodes, 0 problems
+91-brush-selector (density 420): 43 interactive nodes, 3 problems
+  small target 116x37 dp: FrameLayout 'Chalk' at [63,2050][367,2148]
+  small target 116x37 dp: FrameLayout 'Textured Brush' at [388,2050][692,2148]
+  small target 116x37 dp: FrameLayout 'Watercolor' at [713,2050][1017,2148]
+93-layers-panel (density 420): 29 interactive nodes, 0 problems
+95-layer-dropped (density 420): 29 interactive nodes, 0 problems
+98-workspace (density 420): 11 interactive nodes, 0 problems
+99-settings-themes (density 420): 18 interactive nodes, 1 problems
+  small target 46x27 dp: Switch 'Show tool names' at [916,1863][1038,1934]
+99b-settings-warm-beige (density 420): 18 interactive nodes, 1 problems
+  small target 46x27 dp: Switch 'Show tool names' at [916,1863][1038,1934]
+100-fill (density 420): 11 interactive nodes, 0 problems
+100b-more-tools (density 420): 21 interactive nodes, 0 problems
+101-bucket-fill (density 420): 11 interactive nodes, 0 problems
+101b-more-tools (density 420): 21 interactive nodes, 0 problems
+102-gradient-preview (density 420): 16 interactive nodes, 0 problems
+104-smudge-tool (density 420): 11 interactive nodes, 0 problems
+20-phone-landscape-canvas (density 420): 11 interactive nodes, 0 problems
+22-phone-landscape-layers (density 420): 25 interactive nodes, 2 problems
+  small target 48x45 dp: LinearLayout 'Options of “Glow”' at [2085,877][2211,996]
+  small target 48x45 dp: LinearLayout 'Hide layer' at [2211,877][2337,996]
+23-phone-landscape-selection (density 420): 16 interactive nodes, 0 problems
+30-tablet-portrait-canvas (density 320): 11 interactive nodes, 0 problems
+32-tablet-portrait-layers-pinned (density 320): 47 interactive nodes, 0 problems
+33-tablet-portrait-selection (density 320): 16 interactive nodes, 0 problems
+33b-more-tools (density 320): 26 interactive nodes, 0 problems
+40-tablet-landscape-canvas (density 320): 11 interactive nodes, 0 problems
+41-tablet-landscape-library-and-pinned-layers (density 320): 62 interactive nodes, 2 problems
+  small target 140x18 dp: FrameLayout 'Textured Brush' at [1184,1429][1464,1464]
+  small target 140x18 dp: FrameLayout 'Watercolor' at [1480,1429][1760,1464]
+43-tablet-landscape-selection (density 320): 16 interactive nodes, 0 problems
+50-small-window-brush-panel (density 320): 13 interactive nodes, 1 problems
+  small target 312x34 dp: LinearLayout 'Edit brush' at [48,1020][672,1088]
+TOTAL: 1078 interactive nodes checked, 14 problems (3 rows scrolled almost out of view not checked)

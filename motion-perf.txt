@@ -1,0 +1,2 @@
+panels motion full: frames 191, janky 182 (95.29%), p50 101ms, p90 200ms, p95 350ms, p99 450ms, slow UI thread 121
+panels motion off: frames 212, janky 197 (92.92%), p50 69ms, p90 150ms, p95 150ms, p99 300ms, slow UI thread 98
