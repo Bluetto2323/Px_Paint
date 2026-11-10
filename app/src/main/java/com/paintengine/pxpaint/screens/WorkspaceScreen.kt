@@ -1019,8 +1019,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setOnClickListener { viewOp(ViewOp.FIT); motion.pop(this) }
             setOnLongClickListener { canvasMenu(this); true }
         }
-        c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+        // Phones: the top-right corner is free (the tools are in the dock); centred, the chip slid
+        // under the gallery / actions capsule.
+        val chipCorner = s.toolbar != ToolbarPlacement.TOP
+        c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or (if (chipCorner) Gravity.END else Gravity.CENTER_HORIZONTAL)).apply {
             topMargin = ins.top + m
+            if (chipCorner) rightMargin = ins.right + m
             // Centred over the canvas area: FrameLayout shifts a centred child by the whole margin.
             if (pinnedRight) rightMargin = pinnedW / 2
             if (pinnedLeft) leftMargin = pinnedW / 2
