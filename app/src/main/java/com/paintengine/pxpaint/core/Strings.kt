@@ -237,6 +237,8 @@ enum class S(val en: String, val it: String) {
     ),
     TOOL_ERASER("Eraser", "Gomma"),
     TOOL_SMUDGE("Smudge", "Sfumino"),
+    TOOL_LASSO("Lasso", "Lazo"),
+    SEL_MORE_TITLE("Selection", "Selezione"),
     TOOL_SMUDGE_DESC("Drags and blends the colours on the canvas. Opacity sets the strength.", "Trascina e fonde i colori sulla tela. L'opacità ne regola la forza."),
     TOOL_ERASER_DESC("Erases back to the background.", "Cancella fino allo sfondo."),
     TOOL_MOVE("Move", "Sposta"),

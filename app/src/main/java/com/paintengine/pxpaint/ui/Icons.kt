@@ -16,7 +16,7 @@ enum class Icon {
     PLUS, SEARCH, SORT, SLIDERS, BACK, MORE, MARKER, ERASER, MOVE, LAYERS, UNDO, REDO, FIT, ROTATE, TRASH,
     COPY, EDIT, INFO, CHECK, CLOSE, SWAP, TARGET, CHEVRON_RIGHT, LOGO, CENTER, PIXELS, STAR, STAR_FILLED, RESET, BRUSH,
     EYE, EYE_OFF, LOCK, UNLOCK, ARROW_UP, ARROW_DOWN, MERGE, HISTORY,
-    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT, FILL, GRADIENT, SMUDGE,
+    LIBRARY, EYEDROPPER, PIN, FULLSCREEN, FULLSCREEN_EXIT, GRIP, SELECT, FILL, GRADIENT, SMUDGE, LASSO,
 }
 
 class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: Float = 1.8f) : Drawable() {
@@ -97,6 +97,12 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
                 poly(c, 13f, 4.5f, 20f, 11.5f, 12f, 19.5f, 8f, 19.5f, 4.5f, 16f, close = true)
                 line(c, 8.5f, 9f, 15.5f, 16f)
                 line(c, 12f, 19.5f, 20f, 19.5f)
+            }
+            Icon.LASSO -> {
+                // A rope loop with its tail.
+                path.reset(); path.addOval(3.5f, 4f, 20.5f, 15f, android.graphics.Path.Direction.CW); c.drawPath(path, stroke)
+                path.reset(); path.moveTo(7.5f, 14.2f); path.cubicTo(5f, 16.5f, 8.5f, 18.5f, 7f, 21f); c.drawPath(path, stroke)
+                c.drawCircle(7.6f, 14.4f, 1.3f, stroke)
             }
             Icon.SMUDGE -> {
                 // A fingertip pressing down, with the smear it leaves.
@@ -245,13 +251,15 @@ class IconDrawable(private val icon: Icon, color: Int, private val strokeUnits: 
     }
 
     /** PxPaint mark: a rounded "pixel" tile crossed by a sweeping stroke. */
+    /** The PxPaint mark: a brush gesture drawing a "P" (stem, one sweep for the bowl, a drop). */
     private fun drawLogo(c: Canvas) {
-        roundRect(c, 3.5f, 3.5f, 20.5f, 20.5f, 5f)
         path.reset()
-        path.moveTo(6.5f, 16.5f)
-        path.cubicTo(9f, 9.5f, 13.5f, 16f, 17.5f, 7f)
+        path.moveTo(7.2f, 4.6f); path.cubicTo(6.6f, 10f, 7.4f, 15f, 6.4f, 20.6f)
         c.drawPath(path, stroke)
-        circle(c, 17.5f, 7f, 1.6f, true)
+        path.reset()
+        path.moveTo(7.4f, 5f); path.cubicTo(12f, 2.6f, 19.6f, 4f, 19.4f, 9.4f); path.cubicTo(19.2f, 14.2f, 13.6f, 15.6f, 9.4f, 13.8f)
+        c.drawPath(path, stroke)
+        circle(c, 18f, 18.4f, 1.5f, true)
     }
 
     override fun setAlpha(alpha: Int) {

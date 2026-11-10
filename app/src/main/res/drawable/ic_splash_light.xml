@@ -1,24 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Light-theme splash icon: the PxPaint mark with the light theme's ink and ember.
-     PxPaint mark (same geometry as Icon.LOGO, scaled into the 66 dp safe zone):
-     a rounded "pixel" tile crossed by a sweeping ember stroke. -->
+<!-- PxPaint mark (Block 16): a single brush gesture drawing a "P" - the stem is a
+     tapered stroke, the bowl one sweep of paint that thins out, with the drop it
+     leaves. Inside the 66 dp adaptive-icon safe zone. Light-theme splash version. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Stem: wide where the brush lands, thin where it lifts. -->
     <path
-        android:pathData="M45.25,32.75 L62.75,32.75 A12.5,12.5 0 0 1 75.25,45.25 L75.25,62.75 A12.5,12.5 0 0 1 62.75,75.25 L45.25,75.25 A12.5,12.5 0 0 1 32.75,62.75 L32.75,45.25 A12.5,12.5 0 0 1 45.25,32.75 Z"
-        android:strokeColor="@color/px_ink_light"
-        android:strokeWidth="4.5"
-        android:fillColor="#00000000" />
+        android:pathData="M39.5,31.5 C43.5,29.5 49.5,30.5 50,34.5 C49,48 49.5,61 45.5,77 C44.6,80.4 40.2,80 40,76.5 C41.2,62 39,47 39.5,31.5 Z"
+        android:fillColor="#FF18191B" />
+    <!-- Bowl: one sweep, pressed at the start and fading as it comes back to the stem. -->
     <path
-        android:pathData="M40.25,65.25 C46.5,47.75 57.75,64 67.75,41.5"
-        android:strokeColor="@color/px_ember_light"
-        android:strokeWidth="5.5"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000" />
+        android:pathData="M43,33.5 C55,27 77,30 76.5,46.5 C76,60 60,65.5 48,59.5 C47,59 47.4,56.6 48.6,56.8 C59,58.6 67.5,54 67.6,46.5 C67.8,36.5 54,36.5 44.5,40.5 C42,41.5 40.6,34.8 43,33.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="44" android:startY="32" android:endX="72" android:endY="62">
+                <item android:offset="0" android:color="#FFE8862A" />
+                <item android:offset="1" android:color="#FFD42F5F" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- The drop of paint. -->
     <path
-        android:pathData="M67.75,41.5 m-4,0 a4,4 0 1 0 8,0 a4,4 0 1 0 -8,0"
-        android:fillColor="@color/px_ember_light" />
+        android:pathData="M71,70 m-3.4,0 a3.4,3.4 0 1 0 6.8,0 a3.4,3.4 0 1 0 -6.8,0"
+        android:fillColor="#FFD42F5F" />
 </vector>

@@ -119,7 +119,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     // Selection (Block 10). The engine owns the mask; this is the tool state.
     private val selGesture by lazy { SelectionGesture(tapSlopPx = theme.dpF(10f), closeRadiusPx = theme.dpF(22f)) }
-    private var selShape = SelectionShape.RECTANGLE
+    private var selShape = SelectionShape.LASSO
     private var selMode = SelectionMode.REPLACE
     private var selAntialias = true
     private var selInfo = NativeEngine.SelectionInfo.NONE
@@ -961,11 +961,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         pinnedView = null
         sizeSlider = null
         opacitySlider = null
-        // Procreate arrangement (Block 15): tools top-right (tablets, landscape) or in the bottom
-        // dock (phone portrait, like Procreate Pocket); gallery + actions top-left; undo / redo
-        // under the size and opacity sliders. No side rail.
+        // Block 16 workspace: one toolbar (brush, bucket, eraser, smudge, lasso + the colour and the
+        // four last colours) - along the bottom on a phone held upright, down the side on tablets
+        // and on anything held sideways (ibisPaint); back + name top-left, undo / redo / layers /
+        // actions top-right (Procreate).
         val s = LayoutPolicy.workspace(host.windowWidthDp, host.windowHeightDp, host.smallestWidthDp, host.settings).let {
-            if (it.toolbar == ToolbarPlacement.SIDE) it.copy(toolbar = ToolbarPlacement.TOP, toolLabels = false, showTitle = false) else it
+            (if (it.toolbar == ToolbarPlacement.TOP) it.copy(toolbar = ToolbarPlacement.SIDE) else it).copy(toolLabels = false)
         }
         spec = s
         val ins = host.insets
@@ -997,14 +998,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             Gravity.TOP or Gravity.START).apply {
             setMargins(ins.left + m + (if (s.toolbar == ToolbarPlacement.SIDE && railLeft) railW else 0), ins.top + m, 0, 0)
         })
-        if (s.toolbar == ToolbarPlacement.TOP) c.addView(toolCapsule(s, vertical = false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+        c.addView(topRightCluster(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END).apply {
-            setMargins(0, ins.top + m, ins.right + m, 0)
-        })
-        // Phones: undo / redo stay top-right, where the bottom sheets never cover them.
-        else c.addView(historyCluster(false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.END).apply {
-            setMargins(0, ins.top + m, ins.right + m, 0)
+            setMargins(0, ins.top + m, ins.right + m + (if (s.toolbar == ToolbarPlacement.SIDE && !railLeft) railW else 0), 0)
         })
         val belowBar = ins.top + m + barH + m
 
@@ -1055,8 +1051,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         var dockH = 0
         when (s.toolbar) {
             ToolbarPlacement.BOTTOM -> {
-                c.addView(toolCapsule(s, vertical = false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = ins.bottom + theme.dp(14) })
+                // Edge to edge (less the margins), at most 460 dp: the five tools share what the colours leave.
+                val barW = minOf(host.windowWidthDp - 16, 460)
+                c.addView(toolCapsule(s, vertical = false), FrameLayout.LayoutParams(theme.dp(barW), FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = ins.bottom + theme.dp(10) })
                 dockH = theme.touchTarget + theme.dp(8) + theme.dp(if (s.toolLabels) 18 else 0) + theme.dp(14)
             }
             ToolbarPlacement.SIDE -> {
@@ -1194,22 +1192,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     /** Top-left: back to the gallery, the project name on tablets, compositing and save state. */
     private fun navCluster(s: WorkspaceSpec): View = capsule(false).apply {
         addView(capsuleButton(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY))).apply { setOnClickListener { host.pop() } })
-        // Actions (Procreate's wrench): the other tools and the canvas / app actions.
-        val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS)))
-        more.setOnClickListener { togglePanel(Panel.ACTIONS) }
-        moreButton = more
-        addView(more)
-        if (s.toolbar == ToolbarPlacement.TOP) addView(capsuleButton(IconButton(context, theme, Icon.SELECT, tr(S.TOOL_SELECT))).apply {
-            setOnClickListener { if (tool == Tool.SELECT) setPanel(Panel.TOOL) else selectTool(Tool.SELECT) }
-            selectButton = this
-        })
         if (s.showTitle) {
             addView(theme.text(context, meta.name, PxTheme.Type.LABEL, lines = 1).apply {
                 setPadding(theme.dp(4), 0, theme.dp(8), 0)
                 gravity = Gravity.CENTER_VERTICAL
                 minHeight = theme.touchTarget
                 // Phones: what is left between the two capsules (back + actions here, undo / redo opposite).
-                maxWidth = if (s.toolbar == ToolbarPlacement.TOP) theme.dp(220) else theme.dp((host.windowWidthDp - 280).coerceIn(48, 220))
+                maxWidth = theme.dp((host.windowWidthDp - 340).coerceIn(40, 220))
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 background = theme.pressable(null, theme.radiusPill)
                 isClickable = true
@@ -1228,8 +1217,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
     }
 
-    /** Under the sliders: undo / redo (long press: History), as in Procreate. */
-    private fun historyCluster(vertical: Boolean): View = capsule(vertical).apply {
+    /** Top-right: undo / redo (long press: History), layers, actions. */
+    private fun topRightCluster(): View = capsule(false).apply {
         undoButton = capsuleButton(IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}")).apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
@@ -1239,6 +1228,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
         }.also { addView(it) }
         showHistoryButtons()
+        addView(separator(false))
+        addView(capsuleButton(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS))).apply { setOnClickListener { togglePanel(Panel.LAYERS) } })
+        val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS)))
+        more.setOnClickListener { togglePanel(Panel.ACTIONS) }
+        moreButton = more
+        addView(more)
     }
 
     private fun toolCapsule(s: WorkspaceSpec, vertical: Boolean): View = capsule(vertical).apply { addTools(this, s) }
@@ -1250,19 +1245,26 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private var moreButton: IconButton? = null
     private var selectButton: IconButton? = null
+    private val TOOLBAR = listOf(Tool.MARKER, Tool.FILL, Tool.ERASER, Tool.SMUDGE, Tool.SELECT)
+    private val MOVING_EXTRAS = listOf(SelectionAction.COPY, SelectionAction.CUT, SelectionAction.DUPLICATE, SelectionAction.CLEAR,
+        SelectionAction.INVERT, SelectionAction.DESELECT)
 
     /**
-     * Brush, eraser, colour, layers, more tools: the same group in every
-     * layout. Tapping the active brush (or eraser) opens its brush selector;
-     * long press opens its settings. Selection, move, eyedropper, history,
-     * hiding the interface and canvas options are under "more".
+     * The toolbar: brush, bucket, eraser, smudge, lasso, then the colour (tap: picker; drag onto
+     * the canvas: ColorDrop) and the four last colours. Tapping the active brush / eraser /
+     * smudge opens its brush library, the active bucket or lasso its options; long press: settings.
      */
     private fun addTools(box: LinearLayout, s: WorkspaceSpec) {
         val vertical = box.orientation == LinearLayout.VERTICAL
-        for (t in listOf(Tool.MARKER, Tool.SMUDGE, Tool.ERASER)) {
-            val b = capsuleButton(IconButton(context, theme, t.icon, tr(t.label), label = if (s.toolLabels) tr(t.label) else null))
+        for (t in TOOLBAR) {
+            val name = tr(if (t == Tool.SELECT) S.TOOL_LASSO else t.label)
+            val b = capsuleButton(IconButton(context, theme, if (t == Tool.SELECT) Icon.LASSO else t.icon, name))
             b.setOnClickListener {
-                if (tool == t) togglePanel(Panel.LIBRARY) else selectTool(t)
+                when {
+                    tool != t -> { if (t == Tool.SELECT) { selShape = SelectionShape.LASSO; selMode = SelectionMode.REPLACE }; selectTool(t) }
+                    t.paints -> togglePanel(Panel.LIBRARY)
+                    else -> togglePanel(Panel.TOOL)
+                }
             }
             b.setOnLongClickListener {
                 if (tool != t) selectTool(t)
@@ -1271,26 +1273,55 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 true
             }
             toolButtons[t] = b
-            box.addView(b, toolLp(vertical))
+            box.addView(b, if (vertical) toolLp(true) else LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
-        box.addView(capsuleButton(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null)).apply {
-            setOnClickListener { togglePanel(Panel.LAYERS) }
-        }, toolLp(vertical))
+        box.addView(separator(vertical))
         val swatch = FrameLayout(context).apply {
-            minimumWidth = theme.touchTarget
-            minimumHeight = theme.touchTarget
+            minimumWidth = theme.dp(44)
+            minimumHeight = theme.dp(44)
             contentDescription = tr(S.COLOR)
             tooltipText = tr(S.COLOR)
             isClickable = true
             background = theme.pressable(null, theme.radiusPill)
             addView(View(context).apply { background = theme.oval(color, theme.edge) },
-                FrameLayout.LayoutParams(theme.dp(26), theme.dp(26), Gravity.CENTER))
+                FrameLayout.LayoutParams(theme.dp(30), theme.dp(30), Gravity.CENTER))
             setOnClickListener { togglePanel(Panel.COLOR) }
             // ColorDrop: drag the colour onto the canvas to fill.
             setOnTouchListener { v, e -> colorDropTouch(v, e) }
         }
         colorButton = swatch
-        box.addView(swatch, toolLp(vertical))
+        box.addView(swatch, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        // The four last colours, 2 x 2.
+        recentGrid = android.widget.GridLayout(context).apply {
+            columnCount = 2
+            contentDescription = tr(S.RECENT_COLORS)
+        }.also { box.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            if (vertical) topMargin = theme.dp(4) else marginStart = theme.dp(2)
+        }) }
+        refreshRecents()
+    }
+
+    private var recentGrid: android.widget.GridLayout? = null
+
+    /** The four last colours other than the current one (placeholders until there are four). */
+    private fun refreshRecents() {
+        val g = recentGrid ?: return
+        g.removeAllViews()
+        val list = host.brush.recentColors.filter { (it or 0xFF000000.toInt()) != (color or 0xFF000000.toInt()) }.take(4)
+        for (i in 0 until 4) {
+            val c = list.getOrNull(i)
+            g.addView(FrameLayout(context).apply {
+                addView(View(context).apply {
+                    background = if (c != null) theme.oval(c or 0xFF000000.toInt(), theme.edge) else theme.oval(0, theme.outline)
+                }, FrameLayout.LayoutParams(theme.dp(18), theme.dp(18), Gravity.CENTER))
+                if (c != null) {
+                    isClickable = true
+                    background = theme.pressable(null, theme.radiusPill)
+                    contentDescription = "${tr(S.RECENT_COLORS)} ${i + 1}: ${String.format("#%06X", c and 0xFFFFFF)}"
+                    setOnClickListener { applyColor(c or 0xFF000000.toInt(), final = true); showColorPanels() }
+                }
+            }, android.widget.GridLayout.LayoutParams().apply { width = theme.dp(26); height = theme.dp(26) })
+        }
     }
 
     // ---- Actions (Procreate's wrench menu): tabs across the top, rows below.
@@ -1414,7 +1445,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         addView(View(context), LinearLayout.LayoutParams(1, theme.dp(14)))
         addView(opacity, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
         if (!tool.paints) { size.alpha = theme.disabledAlpha; opacity.alpha = theme.disabledAlpha }
-        if (spec?.toolbar == ToolbarPlacement.TOP) addView(historyCluster(true), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(14) })
     }
 
     private fun currentBrushTool(): BrushTool = brushTool(if (!tool.paints) Tool.MARKER else tool)
@@ -1427,7 +1457,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             mb.setIcon(when (tool) {
                 Tool.SELECT -> Icon.SELECT; Tool.MOVE -> Icon.MOVE; Tool.FILL -> Icon.FILL; Tool.GRADIENT -> Icon.GRADIENT; else -> Icon.MORE
             })
-            mb.isSelected = !tool.paints && !(tool == Tool.SELECT && selectButton != null)
+            mb.isSelected = tool !in TOOLBAR
         }
         selectButton?.isSelected = tool == Tool.SELECT
         val bt = currentBrushTool()
@@ -1891,6 +1921,12 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 if (err != 0) host.overlays.message(tr(S.SEL_ERR_GENERIC))
                 g.cancel()
                 refreshSelection()
+                // Lasso (Block 16): what was just selected can be dragged at once; the bar's
+                // three dots decide what else to do with it.
+                if (err == 0 && mode == NativeEngine.SelectMode.entries[SelectionMode.REPLACE.code] && tool == Tool.SELECT && selectionEditable()) {
+                    autoMove = true
+                    runSelection(SelectionAction.MOVE)
+                }
                 handler.postDelayed(historyRefresh, 50)
             }
         }
@@ -1941,8 +1977,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             host.runOnMain {
                 if (closed) return@runOnMain
                 logSelection(a.name, ms, r.error)
+                val quiet = a == SelectionAction.MOVE && autoMove   // (an empty area just stays selected)
+                if (a == SelectionAction.MOVE) autoMove = false
                 val err = SelectionErrors.message(a, r.error)
                 when {
+                    quiet -> Unit
                     err != null -> host.overlays.message(tr(err))
                     a == SelectionAction.COPY -> host.overlays.message(tr(S.SEL_DONE_COPY, layerName))
                     a == SelectionAction.COPY_MERGED -> host.overlays.message(tr(S.SEL_DONE_COPY_MERGED))
@@ -1962,9 +2001,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 refreshHistoryButtons()
                 handler.postDelayed(historyRefresh, 50)
                 refreshSelection()
+                // The action chosen from the three dots while moving: the move landed, now do it.
+                if (a == SelectionAction.MOVE_DONE) afterMove?.let { next -> afterMove = null; runSelection(next) }
             }
         }
     }
+
+    private var autoMove = false
+    private var afterMove: SelectionAction? = null
 
     /** Fetches the selection state, outline and coverage preview off the UI thread, then shows them. */
     private fun refreshSelection() {
@@ -2042,7 +2086,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         if (key != selBarKey) {
             selBarKey = key
             row.removeAllViews()
-            val (chipsShown, overflow) = SelectionAction.split(actions)
+            val (chipsShown, overflow0) = SelectionAction.split(actions)
+            // While the selection is being moved the three dots also offer what can be done with
+            // it afterwards (the move lands first).
+            val overflow = if (selInfo.moving) overflow0 + MOVING_EXTRAS else overflow0
             for (a in chipsShown) {
                 val primary = a == SelectionAction.MOVE_DONE || a == SelectionAction.POLYGON_CLOSE
                 row.addView(Widgets.chip(context, theme, tr(a.label), primary) { runSelection(a) }.apply {
@@ -2063,7 +2110,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                             SelectionAction.SKEW -> tf?.skewMode == true
                             else -> false
                         }
-                        OverlayHost.MenuItem(tr(a.label), if (on) Icon.CHECK else null, selected = on) { runSelection(a) }
+                        OverlayHost.MenuItem(tr(a.label), if (on) Icon.CHECK else null, selected = on) {
+                            if (selInfo.moving && a in MOVING_EXTRAS) { afterMove = a; runSelection(SelectionAction.MOVE_DONE) } else runSelection(a)
+                        }
                     })
                 }
                 selBarOverflow?.addView(more)
@@ -2573,6 +2622,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             refreshSelectionBar()
         }
         remember(c)
+        refreshRecents()
     }
 
     private fun showColorPanels() {

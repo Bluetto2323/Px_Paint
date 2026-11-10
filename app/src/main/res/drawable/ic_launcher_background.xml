@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Deep night-blue to indigo, lit from the top-left. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/px_bg" />
+    <gradient
+        android:type="linear"
+        android:angle="315"
+        android:startColor="#FF1B2440"
+        android:centerColor="#FF121829"
+        android:endColor="#FF0A0D16" />
 </shape>
