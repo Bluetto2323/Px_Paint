@@ -1,0 +1,3 @@
+11-10 14:39:50.538  7403  7403 I PxPaint : Intro: app ready at 734 ms, phase REVEAL
+11-10 14:39:59.830  7545  7545 I PxPaint : Intro: app not ready after 1223 ms, loading state shown
+11-10 14:40:01.215  7545  7545 I PxPaint : Intro: app ready at 2608 ms, phase LOADING

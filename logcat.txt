@@ -1,0 +1,115 @@
+--------- beginning of main
+11-10 14:43:15.496  8777  8777 I PxPaint : Selection: select ELLIPSE REPLACE (2 points) 60.92 ms (error 0)
+11-10 14:43:15.676  8777  8777 I PxPaint : Selection: MOVE 71.83 ms (error 0)
+11-10 14:43:31.395  8777  8777 I PxPaint : Selection: MOVE_DONE 124.41 ms (error 0)
+11-10 14:43:37.343  8777  8777 I PxPaint : Selection: COPY 18.46 ms (error 0)
+11-10 14:43:42.094  8777  8777 I PxPaint : Selection: PASTE 10.81 ms (error 0)
+11-10 14:43:47.984  8777  8777 I PxPaint : Selection: CLEAR 90.55 ms (error 0)
+11-10 14:44:35.698  8777  8777 I PxPaint : Selection: select LASSO ADD (25 points) 5.63 ms (error 0)
+11-10 14:44:46.316  8777  8777 I PxPaint : Selection: INVERT 1.42 ms (error 0)
+11-10 14:45:19.990  8777  8777 I PxPaint : Selection: select POLYGON REPLACE (3 points) 20.91 ms (error 0)
+11-10 14:45:20.181  8777  8777 I PxPaint : Selection: MOVE 52.04 ms (error 0)
+11-10 14:45:34.063 11284 11284 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 47.31 ms
+11-10 14:45:34.073 11284 11284 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:45:50.417 11449 11449 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 17.90 ms
+11-10 14:45:50.428 11449 11449 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:45:50.455 11449 11449 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 13.06 ms
+11-10 14:46:09.013 11620 11620 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 47.23 ms
+11-10 14:46:09.057 11620 11620 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:46:25.579 11788 11788 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 15.67 ms
+11-10 14:46:25.586 11788 11788 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:46:53.305 11991 11991 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 11.56 ms
+11-10 14:46:53.312 11991 11991 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:47:07.912 12080 12080 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 16.11 ms
+11-10 14:47:07.917 12080 12080 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:47:22.359 12184 12184 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 24.59 ms
+11-10 14:47:22.366 12184 12184 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:47:53.276 12510 12510 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 39.86 ms
+11-10 14:47:53.285 12510 12510 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:48:08.057 12609 12609 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 23.14 ms
+11-10 14:48:08.064 12609 12609 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:48:22.549 12702 12702 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 15.88 ms
+11-10 14:48:22.557 12702 12702 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:48:35.811 12762 12762 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 31.81 ms
+11-10 14:48:35.817 12762 12762 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:48:50.286 12851 12851 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 13.09 ms
+11-10 14:48:50.296 12851 12851 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:49:31.903 13148 13148 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 16.09 ms
+11-10 14:49:31.911 13148 13148 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:49:52.438 13148 13148 I PxPaint : Selection: fill 323.69 ms (error 0)
+11-10 14:50:16.028 13451 13451 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 43.55 ms
+11-10 14:50:16.034 13451 13451 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:50:38.755 13451 13451 I PxPaint : Selection: colordrop 337.63 ms (error 0)
+11-10 14:50:41.031 13451 13451 I PxPaint : Selection: colordrop 494.32 ms (error 0)
+11-10 14:50:57.221 13451 13451 I PxPaint : UI chrome PHONE_LANDSCAPE (914x339 dp, sw 389) built in 109.53 ms
+11-10 14:50:57.574 13451 13451 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 77.90 ms
+11-10 14:50:57.612 13451 13451 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 29.34 ms
+11-10 14:51:02.182 13766 13766 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 24.23 ms
+11-10 14:51:02.186 13766 13766 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:51:18.244 13893 13893 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 12.00 ms
+11-10 14:51:18.251 13893 13893 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:51:32.385 13996 13996 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 22.56 ms
+11-10 14:51:32.391 13996 13996 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:51:48.733 14195 14195 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 14.75 ms
+11-10 14:51:48.737 14195 14195 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:52:01.346 14195 14195 I PxPaint : Selection: select RECTANGLE REPLACE (2 points) 7.96 ms (error 0)
+11-10 14:52:01.473 14195 14195 I PxPaint : Selection: MOVE 15.64 ms (error 0)
+11-10 14:52:08.505 14371 14371 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 10.97 ms
+11-10 14:52:08.511 14371 14371 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:52:22.674 14479 14479 I PxPaint : UI chrome PHONE_LANDSCAPE (914x363 dp, sw 389) built in 21.57 ms
+11-10 14:52:22.681 14479 14479 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:52:36.068 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (610x899 dp, sw 610) built in 143.88 ms
+11-10 14:52:36.196 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (610x899 dp, sw 610) built in 67.03 ms
+11-10 14:52:36.572 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (800x1133 dp, sw 800) built in 61.41 ms
+11-10 14:52:36.626 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (800x1133 dp, sw 800) built in 48.13 ms
+11-10 14:52:36.734 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (800x1133 dp, sw 800) built in 85.70 ms
+11-10 14:52:37.105 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (800x1212 dp, sw 800) built in 122.50 ms
+11-10 14:52:37.384 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 72.40 ms
+11-10 14:52:37.432 14479 14479 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 38.23 ms
+11-10 14:52:41.200 14639 14639 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 20.26 ms
+11-10 14:52:41.207 14639 14639 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:52:58.008 14772 14772 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 28.23 ms
+11-10 14:52:58.014 14772 14772 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:53:12.527 14873 14873 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 39.24 ms
+11-10 14:53:12.533 14873 14873 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:53:29.172 14989 14989 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 19.87 ms
+11-10 14:53:29.179 14989 14989 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:53:41.910 14989 14989 I PxPaint : Selection: select ELLIPSE REPLACE (2 points) 45.23 ms (error 0)
+11-10 14:53:42.021 14989 14989 I PxPaint : Selection: MOVE 29.99 ms (error 0)
+11-10 14:53:56.424 14989 14989 I PxPaint : UI chrome TABLET_PORTRAIT (800x1152 dp, sw 800) built in 118.89 ms
+11-10 14:53:56.582 14989 14989 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 52.13 ms
+11-10 14:53:56.629 14989 14989 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 34.39 ms
+11-10 14:54:01.515 15195 15195 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 16.67 ms
+11-10 14:54:01.520 15195 15195 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:54:17.733 15316 15316 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 13.67 ms
+11-10 14:54:17.737 15316 15316 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:54:34.131 15448 15448 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 43.69 ms
+11-10 14:54:34.136 15448 15448 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:54:47.945 15545 15545 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 10.59 ms
+11-10 14:54:47.948 15545 15545 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:54:47.966 15545 15545 I PxPaint : UI chrome TABLET_LANDSCAPE (1280x698 dp, sw 758) built in 14.07 ms
+11-10 14:55:02.224 15545 15545 I PxPaint : Selection: select LASSO REPLACE (25 points) 12.00 ms (error 0)
+11-10 14:55:02.339 15545 15545 I PxPaint : Selection: MOVE 60.28 ms (error 0)
+11-10 14:55:07.727 15545 15545 I PxPaint : UI chrome PHONE_PORTRAIT (360x538 dp, sw 360) built in 49.57 ms
+11-10 14:55:08.046 15545 15545 I PxPaint : UI chrome PHONE_PORTRAIT (360x546 dp, sw 360) built in 39.64 ms
+11-10 14:55:08.108 15545 15545 I PxPaint : UI chrome PHONE_PORTRAIT (360x546 dp, sw 360) built in 39.85 ms
+11-10 14:55:08.238 15545 15545 I PxPaint : UI chrome PHONE_PORTRAIT (360x582 dp, sw 360) built in 25.60 ms
+11-10 14:55:08.266 15545 15545 I PxPaint : UI chrome PHONE_PORTRAIT (360x582 dp, sw 360) built in 21.38 ms
+11-10 14:55:13.143 15817 15817 I PxPaint : UI chrome PHONE_PORTRAIT (360x582 dp, sw 360) built in 21.49 ms
+11-10 14:55:13.147 15817 15817 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:55:28.374 15817 15817 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x999 dp, sw 1023) built in 66.01 ms
+11-10 14:55:28.474 15817 15817 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x1023 dp, sw 1023) built in 54.06 ms
+11-10 14:55:28.525 15817 15817 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x1023 dp, sw 1023) built in 48.28 ms
+11-10 14:55:28.784 15817 15817 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x963 dp, sw 1023) built in 42.25 ms
+11-10 14:55:28.873 15817 15817 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x963 dp, sw 1023) built in 57.88 ms
+11-10 14:55:33.677 15975 15975 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x963 dp, sw 1023) built in 16.68 ms
+11-10 14:55:33.681 15975 15975 I PxPaint : Creating engine: Config(backend=auto, allowFallback=true, validation=false, renderMode=ON_DEMAND, diagnostics=true, scene=CANVAS, canvasMemoryBudgetBytes=648845312)
+11-10 14:55:47.395 15975 15975 I PxPaint : UI chrome TABLET_LANDSCAPE (1920x963 dp, sw 1023) built in 105.92 ms
+11-10 14:55:47.532 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x820 dp, sw 411) built in 15.13 ms
+11-10 14:55:47.565 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x820 dp, sw 411) built in 29.50 ms
+11-10 14:55:47.591 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x820 dp, sw 411) built in 15.93 ms
+11-10 14:55:47.745 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 44.61 ms
+11-10 14:55:47.760 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 10.59 ms
+11-10 14:55:47.853 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 31.13 ms
+11-10 14:55:48.057 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 19.19 ms
+11-10 14:55:48.455 15975 15975 I PxPaint : UI chrome PHONE_PORTRAIT (411x842 dp, sw 411) built in 40.08 ms

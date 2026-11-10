@@ -1,0 +1,1 @@
+selection ants: frames 52, janky 46 (88.46%), p50 16ms, p90 17ms, p95 17ms, p99 32ms, slow UI thread 0
