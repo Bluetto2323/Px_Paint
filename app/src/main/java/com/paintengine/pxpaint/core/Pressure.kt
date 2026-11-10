@@ -128,8 +128,13 @@ data class PressureCurve(val x1: Float, val y1: Float, val x2: Float, val y2: Fl
         /** Gentle start and end, steep middle. */
         val S_CURVE = PressureCurve(0.35f, 0.12f, 0.65f, 0.88f)
 
-        /** Sensitivity -1..1 -> input gamma: +1 = light touch counts more (0.35), -1 = needs force (2.83). */
-        fun gamma(sensitivity: Float): Float = 2f.pow(-1.5f * sensitivity.finiteOr(0f).coerceIn(-1f, 1f))
+        /**
+         * Sensitivity -1..1 -> input gamma: +1 = light touch counts more (0.25), -1 = needs force (1.98).
+         * The neutral setting is 0.7, not 1: active pens are rarely pressed past ~60 % of their
+         * range while drawing, and a linear response left normal strokes thin and faint.
+         */
+        fun gamma(sensitivity: Float): Float = NEUTRAL_GAMMA * 2f.pow(-1.5f * sensitivity.finiteOr(0f).coerceIn(-1f, 1f))
+        const val NEUTRAL_GAMMA = 0.7f
 
         fun decode(v: String?): PressureCurve? {
             val p = v?.split(';') ?: return null

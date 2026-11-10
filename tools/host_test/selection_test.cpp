@@ -1062,6 +1062,28 @@ void testWetMedia() {
         const int hi = blueAt(1.0f, 470), lo = blueAt(0.15f, 470);
         check(lo > hi + 10, fmt("S13: 70 px past the edge: blue excess %.0f with pickup 15 %%, %.0f with 100 %%", lo, hi));
     }
+    {   // The default smudge brush (soft airbrush: flow 12 %, pressure -> opacity down to 10 %) with a
+        // lightly pressed pen still smudges: the strength is the tool's, not the preset's flow.
+        CanvasDocument d;
+        whiteBlue(d);
+        auto b = smudger(120, 0.8f, 0.5f);
+        b.hardness = 0.0f;
+        b.flow = 0.12f;
+        b.accumulation = pe::brush::Accumulation::Buildup;
+        b.pressureOpacity = true;
+        b.minOpacityFraction = 0.1f;
+        std::vector<pe::brush::StrokePoint> p;
+        for (int i = 0; i < 60; ++i) {
+            pe::brush::StrokePoint q{250.0 + 400.0 * i / 59, 350.0, i * 4.0};
+            q.axes.pressure = 0.3f;
+            p.push_back(q);
+        }
+        d.strokeBegin(b, p[0]);
+        d.strokeSamples(p.data() + 1, p.size() - 1);
+        d.strokeEnd();
+        const Rgba8 c = d.layerPixel(1, 470, 350);
+        check(c.b > c.r + 60, fmt("S13: soft airbrush + light pen pressure still drags the blue 70 px (r %.0f b %.0f)", c.r, c.b));
+    }
     {   // Selection: nothing changes outside it.
         CanvasDocument d;
         whiteBlue(d);

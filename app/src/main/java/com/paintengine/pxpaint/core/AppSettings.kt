@@ -54,6 +54,7 @@ data class AppSettings(
     val quickPinchFit: Boolean = true,      // fast pinch-in: fit the canvas
     val tapFullscreen: Boolean = true,      // four-finger tap: interface on / off
     val stylusButtonPick: Boolean = true,   // stylus side button held: eyedropper
+    val stylusButtonErase: Boolean = false, // ... or: erases while held (takes precedence)
     val longPressPick: Boolean = true,      // Block 12.5: a finger held still on the canvas: eyedropper
     /** Block 12.5: the controls setup offered at the first start has been seen. */
     val controlsSetupDone: Boolean = false,
@@ -92,6 +93,7 @@ data class AppSettings(
         K_PINCH_FIT to quickPinchFit.toString(),
         K_TAP_FULLSCREEN to tapFullscreen.toString(),
         K_STYLUS_PICK to stylusButtonPick.toString(),
+        K_STYLUS_ERASE to stylusButtonErase.toString(),
         K_LONG_PRESS_PICK to longPressPick.toString(),
         K_CONTROLS_SETUP to controlsSetupDone.toString(),
         K_SLIDER_SIDE to sliderSide.name,
@@ -126,6 +128,7 @@ data class AppSettings(
         const val K_PINCH_FIT = "quick_pinch_fit"
         const val K_TAP_FULLSCREEN = "tap_fullscreen"
         const val K_STYLUS_PICK = "stylus_button_pick"
+        const val K_STYLUS_ERASE = "stylus_button_erase"
         const val K_LONG_PRESS_PICK = "long_press_pick"
         const val K_CONTROLS_SETUP = "controls_setup_done"
         const val K_SLIDER_SIDE = "slider_side"
@@ -162,6 +165,7 @@ data class AppSettings(
                 quickPinchFit = boolOr(map[K_PINCH_FIT], d.quickPinchFit),
                 tapFullscreen = boolOr(map[K_TAP_FULLSCREEN], d.tapFullscreen),
                 stylusButtonPick = boolOr(map[K_STYLUS_PICK], d.stylusButtonPick),
+                stylusButtonErase = boolOr(map[K_STYLUS_ERASE], d.stylusButtonErase),
                 longPressPick = boolOr(map[K_LONG_PRESS_PICK], d.longPressPick),
                 controlsSetupDone = boolOr(map[K_CONTROLS_SETUP], d.controlsSetupDone),
                 sliderSide = enumOr(map[K_SLIDER_SIDE], d.sliderSide),

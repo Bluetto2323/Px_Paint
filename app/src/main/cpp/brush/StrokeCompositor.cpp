@@ -651,7 +651,9 @@ void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
                         for (int c = 0; c < 4; ++c) k[c] = o[c];
                         continue;
                     }
-                    const float a = wetA_ * covW;
+                    // Soft tips: the falloff is steepened (1 - (1 - c)^2) so the body of a 0 %
+                    // hardness brush still drags at close to the set strength.
+                    const float a = wetA_ * covW * (2.0f - cov);
                     const float pk = wetPick_ * cov;
                     for (int c = 0; c < 4; ++c) {
                         const float out = o[c] + (k[c] - o[c]) * a;

@@ -56,14 +56,16 @@ class PressureTest {
 
     @Test
     fun sensitivityAndTable() {
-        assertEquals(1f, PressureCurve.gamma(0f), 1e-6f)
-        assertTrue(PressureCurve.gamma(1f) < 0.4f && PressureCurve.gamma(-1f) > 2.5f)
+        assertEquals(PressureCurve.NEUTRAL_GAMMA, PressureCurve.gamma(0f), 1e-6f)
+        assertTrue(PressureCurve.gamma(1f) < 0.3f && PressureCurve.gamma(-1f) > 1.9f)
+        // Neutral: a normal drawing pressure (40 % of the pen's range) already gives over half the response.
+        assertTrue(PressureCurve.LINEAR.response(0.4f, 0f) > 0.5f)
         assertEquals(PressureCurve.gamma(1f), PressureCurve.gamma(5f), 0f)    // clamped
         val t = PressureCurve.LINEAR.table(0f)
         assertEquals(PressureCurve.TABLE_SIZE, t.size)
         assertEquals(0f, t[0], 0f)
         assertEquals(1f, t[t.size - 1], 0f)
-        assertEquals(0.5f, t[128], 1e-3f)
+        assertEquals(Math.pow(128.0 / 256.0, PressureCurve.NEUTRAL_GAMMA.toDouble()).toFloat(), t[128], 1e-3f)   // neutral gamma 0.7
         val sensitive = PressureCurve.LINEAR.table(1f)
         assertTrue("light touch counts more", sensitive[64] > t[64] + 0.2f)
         for (curve in listOf(PressureCurve.FIRM, PressureCurve.S_CURVE))

@@ -158,6 +158,14 @@ struct BrushSettings {
         s.mix = std::clamp(finite(mix, 0.0f), 0.0f, 1.0f);
         s.pickup = std::clamp(finite(pickup, 0.5f), 0.0f, 1.0f);
         if (static_cast<int>(wet) > 2 || erase || (wet == WetMode::Mix && s.mix <= 0.0f)) s.wet = WetMode::None;
+        if (s.wet == WetMode::Smudge) {
+            // The smudge strength is the tool's own slider: a preset made for faint, built-up
+            // paint (airbrush: flow 12 %, pressure down to 10 %) must still move the pixels.
+            s.flow = 1.0f;
+            s.flowJitter = 0.0f;
+            s.wetEdge = 0.0f;
+            s.minOpacityFraction = std::max(s.minOpacityFraction, 0.6f);
+        }
         return s;
     }
 

@@ -232,7 +232,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         @SuppressLint("ClickableViewAccessibility")
         sv.setOnTouchListener { _, e -> onCanvasTouch(e); true }
         // A hovering stylus is detected (and its axes shown in the stylus info) before it touches.
-        sv.setOnHoverListener { _, e -> host.stylus.onEvent(e); false }
+        sv.setOnHoverListener { _, e ->
+            host.stylus.onEvent(e)
+            hoverButtons = if (e.actionMasked == MotionEvent.ACTION_HOVER_EXIT && e.buttonState == 0) hoverButtons else e.buttonState
+            false
+        }
         root.addView(sv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         // Selection feedback between the canvas and the chrome (never takes touches).
         val so = SelectionOverlay(context, theme).also {
@@ -667,12 +671,16 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         // FLAG_CANCELED (API 33): the system decided the lifted pointer was
         // accidental (e.g. a palm); its stroke is cancelled, not committed.
         val canceled = Build.VERSION.SDK_INT >= 33 && (e.flags and FLAG_CANCELED) != 0
-        val kind = StylusInput.kind(e, i)
-        // Eyedropper: armed from the colour panel, or the stylus side button
-        // held when the stylus touches. The whole touch picks, nothing is painted.
+        var kind = StylusInput.kind(e, i)
+        // The stylus side button, held when the stylus touches. Pens report it in different
+        // ways (stylus primary / secondary, or as a mouse-style secondary button), and some
+        // only in the hover event just before the touch: all of them count.
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
-            val stylusButton = host.settings.stylusButtonPick && kind.isStylus &&
-                (e.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+            val pressed = kind.isStylus && ((e.buttonState or hoverButtons) and STYLUS_BUTTONS) != 0
+            hoverButtons = 0
+            stylusErasing = pressed && host.settings.stylusButtonErase
+            // Eyedropper: armed from the colour panel, or the side button. The whole touch picks.
+            val stylusButton = pressed && !stylusErasing && host.settings.stylusButtonPick
             picking = eyedropperArmed || stylusButton
             if (picking && panel != Panel.NONE && spec?.pinned != PinnedPanel.COLOR) setPanel(Panel.NONE)
         }
@@ -692,6 +700,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             }
             return
         }
+        if (stylusErasing && kind == ToolKind.STYLUS) kind = ToolKind.ERASER   // erases like the eraser end
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 ignoreUntilUp = false
@@ -757,6 +766,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     // Eyedropper by holding a finger still: the stroke it began is cancelled (canvas restored exactly).
+    private var stylusErasing = false
+    /** Side buttons seen while the stylus hovered (cleared when it touches or leaves). */
+    private var hoverButtons = 0
     private val holdPick by lazy { com.paintengine.pxpaint.core.LongPressPick(theme.dpF(10f)) }
     private var holdPointer = -1
     private var holdX = 0f
@@ -2718,5 +2730,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         private const val AUTOSAVE_MS = 20_000L
         private const val EXPORT_BATCH = 32
         private const val FLAG_CANCELED = 0x20   // MotionEvent.FLAG_CANCELED (API 33)
+        private const val STYLUS_BUTTONS = MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY or MotionEvent.BUTTON_SECONDARY
     }
 }

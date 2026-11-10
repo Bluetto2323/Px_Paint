@@ -66,6 +66,8 @@ pressure_size = true
 min_size = 0.6
 pressure_opacity = true
 min_opacity = 0.25
+tilt = true
+tilt_strength = 0.9
 
 [preset builtin.graphite]
 name = Graphite Pencil
@@ -89,6 +91,8 @@ pressure_size = true
 min_size = 0.5
 pressure_opacity = true
 min_opacity = 0.15
+tilt = true
+tilt_strength = 1
 
 [preset builtin.ink]
 name = Ink Pen
@@ -157,6 +161,8 @@ pressure_size = true
 min_size = 0.5
 pressure_opacity = true
 min_opacity = 0.2
+tilt = true
+tilt_strength = 1
 
 [preset builtin.chalk]
 name = Chalk
@@ -175,6 +181,8 @@ grain_pressure = 0.6
 pressure_size = false
 pressure_opacity = true
 min_opacity = 0.3
+tilt = true
+tilt_strength = 0.8
 
 [preset builtin.textured]
 name = Textured Brush

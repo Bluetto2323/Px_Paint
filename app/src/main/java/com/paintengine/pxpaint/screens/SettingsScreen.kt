@@ -109,6 +109,7 @@ class SettingsScreen(host: PxHost) : Screen(host) {
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_TAP_FULLSCREEN), null, s.tapFullscreen) { set(s.copy(tapFullscreen = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_HOLD_PICK), tr(S.GESTURE_HOLD_PICK_DESC), s.longPressPick) { set(s.copy(longPressPick = it)) })
         page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_STYLUS_PICK), tr(S.GESTURE_STYLUS_PICK_DESC), s.stylusButtonPick) { set(s.copy(stylusButtonPick = it)) })
+        page.addView(Widgets.switchRow(context, theme, tr(S.GESTURE_STYLUS_ERASE), tr(S.GESTURE_STYLUS_ERASE_DESC), s.stylusButtonErase) { set(s.copy(stylusButtonErase = it)) })
 
         // --- Stylus & pressure
         page.addView(Widgets.sectionHeader(context, theme, tr(S.SEC_STYLUS)))
