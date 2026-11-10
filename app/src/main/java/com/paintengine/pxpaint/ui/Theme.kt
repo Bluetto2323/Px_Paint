@@ -118,6 +118,13 @@ class PxTheme(context: Context, val settings: AppSettings) {
         if (stroke != 0) setStroke(maxOf(1, dp(1.5f)), stroke)
     }
 
+    /** The brand gradient (the logo's sweep of paint): the active tool, the colour well's ring. */
+    fun brand(radius: Float = radiusPill): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(BRAND_START, BRAND_END)).apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius
+        }
+
     /** Touch feedback over [content] (bounded to its shape). */
     fun pressable(content: Drawable?, radius: Float = radiusM): Drawable =
         RippleDrawable(ColorStateList.valueOf(ripple), content, rounded(Color.WHITE, radius))
@@ -148,5 +155,12 @@ class PxTheme(context: Context, val settings: AppSettings) {
 
     fun applyCardOutline(v: View, radius: Float = radiusM, fill: Int = surface) {
         v.background = pressable(rounded(fill, radius, outline), radius)
+    }
+
+    companion object {
+        const val BRAND_START = 0xFFFFB25C.toInt()
+        const val BRAND_END = 0xFFFF4F7B.toInt()
+        /** Ink on the brand gradient (contrast 7:1 or more on both ends). */
+        const val ON_BRAND = 0xFF1B1024.toInt()
     }
 }

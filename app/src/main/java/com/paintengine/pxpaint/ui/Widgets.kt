@@ -89,22 +89,37 @@ class IconButton(
     var round = false
         set(v) { field = v; refresh() }
 
+    /** Selected = filled with the brand gradient (the toolbar's active tool). */
+    var brand = false
+        set(v) { field = v; refresh() }
+
+    /** A floating glass disc of its own (the controls along the top). */
+    var orb = false
+        set(v) { field = v; elevation = if (v) theme.dpF(3f) else 0f; refresh() }
+
     override fun setEnabled(enabled: Boolean) {
         super.setEnabled(enabled)
         refresh()
     }
 
     private fun refresh() {
+        val onBrand = brand && isSelected
         val color = when {
             !isEnabled -> theme.textTertiary
+            onBrand -> PxTheme.ON_BRAND
             isSelected -> theme.accent
             else -> theme.text
         }
         drawable.setColor(color)
         labelView?.setTextColor(if (isSelected) theme.accent else theme.textSecondary)
-        val r = if (round) theme.radiusPill else theme.radiusS
-        background = theme.pressable(if (isSelected) theme.rounded(theme.accentSoft, r) else null, r)
-        alpha = if (isEnabled) 1f else 0.55f
+        val r = if (round || orb) theme.radiusPill else theme.radiusS
+        background = theme.pressable(when {
+            onBrand -> theme.brand(r)
+            isSelected -> theme.rounded(theme.accentSoft, r, if (orb) theme.edge else 0)
+            orb -> theme.glass(r)
+            else -> null
+        }, r)
+        alpha = if (isEnabled) 1f else if (orb) 0.7f else 0.55f
     }
 }
 

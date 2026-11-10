@@ -2,6 +2,7 @@ package com.paintengine.pxpaint.screens
 
 import android.annotation.SuppressLint
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -1076,11 +1077,13 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
 
         // Quick size / opacity sliders on a screen edge.
-        val sliderTop = belowBar + theme.touchTarget + theme.dp(12)   // clear of the selection bar
+        // Upright: clear of the selection bar. Sideways (short): right under the top row.
+        val sliderTop = if (s.toolbar == ToolbarPlacement.SIDE && host.windowHeightDp < 480) belowBar else belowBar + theme.touchTarget + theme.dp(12)
         val sliderBottom = ins.bottom + dockH + m
         val availPx = (if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()) - sliderTop - sliderBottom
         val historyPx = if (s.toolbar == ToolbarPlacement.TOP) 2 * theme.touchTarget + theme.dp(22) else 0   // undo / redo under the sliders
-        val lengthPx = ((availPx - theme.dp(16) - historyPx) / 2).coerceIn(theme.dp(64), theme.dp(QuickSlider.LENGTH_DP))
+        // Never longer than the room there is (a phone held sideways): they were pushed off the bottom.
+        val lengthPx = ((availPx - theme.dp(16) - historyPx) / 2).coerceAtMost(theme.dp(QuickSlider.LENGTH_DP)).coerceAtLeast(theme.dp(40))
         val sliders = quickSliders(s, lengthPx)
         slidersView = sliders
         val sliderLeft = s.sliderSide == Side.LEFT
@@ -1189,18 +1192,38 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     private fun capsuleButton(b: IconButton): IconButton = b.apply { round = true }
 
+    /** A row of separate floating discs (the controls along the top). */
+    private fun orbRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        clipChildren = false
+        clipToPadding = false
+        setPadding(theme.dp(2), theme.dp(2), theme.dp(2), theme.dp(6))   // room for the discs' shadows
+    }
+    private fun orb(icon: Icon, description: String): IconButton = IconButton(context, theme, icon, description).apply { orb = true }
+    private fun LinearLayout.addOrb(b: View, gapDp: Int = 6) = addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+        if (childCount > 0) marginStart = theme.dp(gapDp)
+    })
+
     /** Top-left: back to the gallery, the project name on tablets, compositing and save state. */
-    private fun navCluster(s: WorkspaceSpec): View = capsule(false).apply {
-        addView(capsuleButton(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY))).apply { setOnClickListener { host.pop() } })
+    private fun navCluster(s: WorkspaceSpec): View = orbRow().apply {
+        addOrb(orb(Icon.BACK, tr(S.BACK_TO_GALLERY)).apply { setOnClickListener { host.pop() } })
+        // The name and the save state: one glass chip.
+        val chip = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            theme.float(this, theme.radiusPill, theme.chrome, 3f)
+            minimumHeight = theme.touchTarget
+            setPadding(theme.dp(if (s.showTitle) 12 else 6), 0, theme.dp(6), 0)
+        }
+        addOrb(chip)
         if (s.showTitle) {
-            addView(theme.text(context, meta.name, PxTheme.Type.LABEL, lines = 1).apply {
-                setPadding(theme.dp(4), 0, theme.dp(8), 0)
+            chip.addView(theme.text(context, meta.name, PxTheme.Type.LABEL, lines = 1).apply {
+                setPadding(0, 0, theme.dp(8), 0)
                 gravity = Gravity.CENTER_VERTICAL
                 minHeight = theme.touchTarget
-                // Phones: what is left between the two capsules (back + actions here, undo / redo opposite).
-                maxWidth = theme.dp((host.windowWidthDp - 340).coerceIn(40, 220))
+                maxWidth = theme.dp((host.windowWidthDp - 372).coerceIn(40, 220))
                 ellipsize = android.text.TextUtils.TruncateAt.END
-                background = theme.pressable(null, theme.radiusPill)
                 isClickable = true
                 contentDescription = "${tr(S.ACTION_RENAME)}: ${meta.name}"
                 setOnClickListener { rename() }
@@ -1210,33 +1233,40 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         compositeIndicator = ProgressIndicator(context, theme, sizeDp = 16f, strokeDp = 2f).apply {
             visibility = View.GONE
             contentDescription = tr(S.COMPOSITING)
-        }.also { addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = theme.dp(4) }) }
+        }.also { chip.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = theme.dp(4) }) }
         saveIndicator = SaveIndicator(context, theme) { save(force = true) }.also {
             it.show(saveTracker.state)
-            addView(it)
+            chip.addView(it)
         }
     }
 
     /** Top-right: undo / redo (long press: History), layers, actions. */
-    private fun topRightCluster(): View = capsule(false).apply {
-        undoButton = capsuleButton(IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}")).apply {
+    private fun topRightCluster(): View = orbRow().apply {
+        undoButton = orb(Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}").apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
-        }.also { addView(it) }
-        redoButton = capsuleButton(IconButton(context, theme, Icon.REDO, "${tr(S.REDO)} — ${tr(S.REDO_DESC)}")).apply {
+        }.also { addOrb(it) }
+        redoButton = orb(Icon.REDO, "${tr(S.REDO)} — ${tr(S.REDO_DESC)}").apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.REDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
-        }.also { addView(it) }
+        }.also { addOrb(it) }
         showHistoryButtons()
-        addView(separator(false))
-        addView(capsuleButton(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS))).apply { setOnClickListener { togglePanel(Panel.LAYERS) } })
-        val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS)))
+        addOrb(orb(Icon.LAYERS, tr(S.LAYERS)).apply { setOnClickListener { togglePanel(Panel.LAYERS) } }, gapDp = 14)
+        val more = orb(Icon.MORE, tr(S.MORE_TOOLS))
         more.setOnClickListener { togglePanel(Panel.ACTIONS) }
         moreButton = more
-        addView(more)
+        addOrb(more)
     }
 
-    private fun toolCapsule(s: WorkspaceSpec, vertical: Boolean): View = capsule(vertical).apply { addTools(this, s) }
+    /** The toolbar: a rounded glass island (not a pill), the active tool filled with the brand gradient. */
+    private fun toolCapsule(s: WorkspaceSpec, vertical: Boolean): View = LinearLayout(context).apply {
+        orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        theme.float(this, theme.dpF(22f), theme.chrome, 8f)
+        val p = theme.dp(6)
+        setPadding(p, p, p, p)
+        addTools(this, s)
+    }
 
     private fun separator(vertical: Boolean): View = View(context).apply { setBackgroundColor(theme.outline) }.also {
         it.layoutParams = if (vertical) LinearLayout.LayoutParams(theme.dp(22), maxOf(1, theme.dp(1f))).apply { setMargins(0, theme.dp(4), 0, theme.dp(4)) }
@@ -1258,7 +1288,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val vertical = box.orientation == LinearLayout.VERTICAL
         for (t in TOOLBAR) {
             val name = tr(if (t == Tool.SELECT) S.TOOL_LASSO else t.label)
-            val b = capsuleButton(IconButton(context, theme, if (t == Tool.SELECT) Icon.LASSO else t.icon, name))
+            val b = capsuleButton(IconButton(context, theme, if (t == Tool.SELECT) Icon.LASSO else t.icon, name)).apply {
+                brand = true
+                if (vertical && toolRowDp < 48) { minimumHeight = theme.dp(toolRowDp) }
+            }
             b.setOnClickListener {
                 when {
                     tool != t -> { if (t == Tool.SELECT) { selShape = SelectionShape.LASSO; selMode = SelectionMode.REPLACE }; selectTool(t) }
@@ -1273,7 +1306,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 true
             }
             toolButtons[t] = b
-            box.addView(b, if (vertical) toolLp(true) else LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            box.addView(b, if (vertical) LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, if (toolRowDp < 48) theme.dp(toolRowDp) else LinearLayout.LayoutParams.WRAP_CONTENT)
+            else LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = theme.dp(2) })
         }
         box.addView(separator(vertical))
         val swatch = FrameLayout(context).apply {
@@ -1284,7 +1318,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             isClickable = true
             background = theme.pressable(null, theme.radiusPill)
             addView(View(context).apply { background = theme.oval(color, theme.edge) },
-                FrameLayout.LayoutParams(theme.dp(30), theme.dp(30), Gravity.CENTER))
+                FrameLayout.LayoutParams(theme.dp(28), theme.dp(28), Gravity.CENTER))
+            // The well's ring: the brand gradient, a gap, then the colour.
+            addView(View(context).apply {
+                background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0, 0)).apply {
+                    shape = GradientDrawable.OVAL
+                    setStroke(theme.dp(2f), PxTheme.BRAND_END)
+                }
+            }, FrameLayout.LayoutParams(theme.dp(38), theme.dp(38), Gravity.CENTER))
             setOnClickListener { togglePanel(Panel.COLOR) }
             // ColorDrop: drag the colour onto the canvas to fill.
             setOnTouchListener { v, e -> colorDropTouch(v, e) }
@@ -1302,6 +1343,14 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private var recentGrid: android.widget.GridLayout? = null
+    /** Height of a tool in the side rail: shrinks so brush .. lasso, the colour and the last colours fit a short (landscape phone) window. */
+    private val toolRowDp: Int get() {
+        val ins = host.insets
+        val density = context.resources.displayMetrics.density
+        // (rail margins 16, scroll padding 16, island padding 12; separator 9, colour 44, last colours 60)
+        val avail = host.windowHeightDp - ((ins.top + ins.bottom) / density).toInt() - 44
+        return ((avail - 113) / TOOLBAR.size).coerceIn(32, 48)
+    }
 
     /** The four last colours other than the current one (placeholders until there are four). */
     private fun refreshRecents() {
@@ -1455,7 +1504,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         // "More": shows the extra tool in use (select / move), highlighted.
         moreButton?.let { mb ->
             mb.setIcon(when (tool) {
-                Tool.SELECT -> Icon.SELECT; Tool.MOVE -> Icon.MOVE; Tool.FILL -> Icon.FILL; Tool.GRADIENT -> Icon.GRADIENT; else -> Icon.MORE
+                Tool.MOVE -> Icon.MOVE; Tool.GRADIENT -> Icon.GRADIENT; else -> Icon.MORE
             })
             mb.isSelected = tool !in TOOLBAR
         }
