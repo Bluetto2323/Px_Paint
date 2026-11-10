@@ -53,6 +53,8 @@ import com.paintengine.pxpaint.core.PanelStyle
 import com.paintengine.pxpaint.core.PinnedPanel
 import com.paintengine.pxpaint.core.QuickPinch
 import com.paintengine.pxpaint.core.Side
+import com.paintengine.pxpaint.core.AppSettings
+import com.paintengine.pxpaint.core.ThemeMode
 import com.paintengine.pxpaint.core.TapGesture
 import com.paintengine.pxpaint.core.ToolbarPlacement
 import com.paintengine.pxpaint.core.tr
@@ -157,7 +159,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val paints: Boolean get() = this == MARKER || this == ERASER || this == SMUDGE
     }
 
-    private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY, HISTORY }
+    private enum class Panel { NONE, TOOL, COLOR, LAYERS, LIBRARY, HISTORY, ACTIONS }
 
     private val handler = Handler(Looper.getMainLooper())
     private var engine: NativeEngine? = null
@@ -999,6 +1001,11 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             Gravity.TOP or Gravity.END).apply {
             setMargins(0, ins.top + m, ins.right + m, 0)
         })
+        // Phones: undo / redo stay top-right, where the bottom sheets never cover them.
+        else c.addView(historyCluster(false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.END).apply {
+            setMargins(0, ins.top + m, ins.right + m, 0)
+        })
         val belowBar = ins.top + m + barH + m
 
         // Pinned panel (tablets): beside the canvas, under the floating controls.
@@ -1021,11 +1028,10 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         // Phones: the top-right corner is free (the tools are in the dock); centred, the chip slid
         // under the gallery / actions capsule.
-        val chipCorner = s.toolbar != ToolbarPlacement.TOP
+        val chipBelow = s.toolbar != ToolbarPlacement.TOP   // phones: the top row is full, the chip goes under it
         c.addView(zoomChip, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or (if (chipCorner) Gravity.END else Gravity.CENTER_HORIZONTAL)).apply {
-            topMargin = ins.top + m
-            if (chipCorner) rightMargin = ins.right + m
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = if (chipBelow) belowBar else ins.top + m
             // Centred over the canvas area: FrameLayout shifts a centred child by the whole margin.
             if (pinnedRight) rightMargin = pinnedW / 2
             if (pinnedLeft) leftMargin = pinnedW / 2
@@ -1075,7 +1081,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val sliderTop = belowBar + theme.touchTarget + theme.dp(12)   // clear of the selection bar
         val sliderBottom = ins.bottom + dockH + m
         val availPx = (if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()) - sliderTop - sliderBottom
-        val historyPx = 2 * theme.touchTarget + theme.dp(22)   // undo / redo under the sliders
+        val historyPx = if (s.toolbar == ToolbarPlacement.TOP) 2 * theme.touchTarget + theme.dp(22) else 0   // undo / redo under the sliders
         val lengthPx = ((availPx - theme.dp(16) - historyPx) / 2).coerceIn(theme.dp(64), theme.dp(QuickSlider.LENGTH_DP))
         val sliders = quickSliders(s, lengthPx)
         slidersView = sliders
@@ -1190,7 +1196,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         addView(capsuleButton(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY))).apply { setOnClickListener { host.pop() } })
         // Actions (Procreate's wrench): the other tools and the canvas / app actions.
         val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS)))
-        more.setOnClickListener { moreTools(more) }
+        more.setOnClickListener { togglePanel(Panel.ACTIONS) }
         moreButton = more
         addView(more)
         if (s.toolbar == ToolbarPlacement.TOP) addView(capsuleButton(IconButton(context, theme, Icon.SELECT, tr(S.TOOL_SELECT))).apply {
@@ -1202,7 +1208,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 setPadding(theme.dp(4), 0, theme.dp(8), 0)
                 gravity = Gravity.CENTER_VERTICAL
                 minHeight = theme.touchTarget
-                maxWidth = theme.dp(220)
+                // Phones: what is left between the two capsules (back + actions here, undo / redo opposite).
+                maxWidth = if (s.toolbar == ToolbarPlacement.TOP) theme.dp(220) else theme.dp((host.windowWidthDp - 280).coerceIn(48, 220))
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 background = theme.pressable(null, theme.radiusPill)
                 isClickable = true
                 contentDescription = "${tr(S.ACTION_RENAME)}: ${meta.name}"
@@ -1221,7 +1229,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     /** Under the sliders: undo / redo (long press: History), as in Procreate. */
-    private fun historyCluster(): View = capsule(true).apply {
+    private fun historyCluster(vertical: Boolean): View = capsule(vertical).apply {
         undoButton = capsuleButton(IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}")).apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
@@ -1285,28 +1293,93 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         box.addView(swatch, toolLp(vertical))
     }
 
-    /** The tools that are not always on screen, and the canvas / app actions. */
-    private fun moreTools(anchor: View) {
-        host.overlays.menu(anchor, listOf(
-            OverlayHost.MenuItem(tr(S.TOOL_SELECT), Icon.SELECT, selected = tool == Tool.SELECT) {
-                if (tool == Tool.SELECT) setPanel(Panel.TOOL) else selectTool(Tool.SELECT)
-            },
-            OverlayHost.MenuItem(tr(S.TOOL_FILL), Icon.FILL, selected = tool == Tool.FILL) {
-                if (tool == Tool.FILL) setPanel(Panel.TOOL) else selectTool(Tool.FILL)
-            },
-            OverlayHost.MenuItem(tr(S.TOOL_GRADIENT), Icon.GRADIENT, selected = tool == Tool.GRADIENT) {
-                if (tool == Tool.GRADIENT) setPanel(Panel.TOOL) else selectTool(Tool.GRADIENT)
-            },
-            OverlayHost.MenuItem(tr(S.TOOL_MOVE), Icon.MOVE, selected = tool == Tool.MOVE) { selectTool(Tool.MOVE) },
-            OverlayHost.MenuItem(tr(S.EYEDROPPER), Icon.EYEDROPPER) { armEyedropper() },
-            OverlayHost.MenuItem(tr(S.BRUSH_SETTINGS), Icon.SLIDERS) {
-                if (!tool.paints) selectTool(Tool.MARKER)
-                setPanel(Panel.TOOL)
-            },
-            OverlayHost.MenuItem(tr(S.HISTORY), Icon.HISTORY) { setPanel(Panel.HISTORY) },
-            OverlayHost.MenuItem(tr(S.FULLSCREEN), Icon.FULLSCREEN) { setFullscreen(true) },
-            OverlayHost.MenuItem(tr(S.CANVAS_MENU) + "…", Icon.INFO) { canvasMenu(anchor) },
-        ))
+    // ---- Actions (Procreate's wrench menu): tabs across the top, rows below.
+    private enum class ActionsTab(val label: S) { TOOLS(S.ACTIONS_TOOLS), CANVAS(S.ACTIONS_CANVAS), PREFS(S.ACTIONS_PREFS), HELP(S.ACTIONS_HELP) }
+    private var actionsTab = ActionsTab.TOOLS
+
+    private fun actionRow(icon: Icon, title: String, selected: Boolean = false, destructive: Boolean = false, onClick: () -> Unit): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = theme.touchTarget + theme.dp(4)
+            setPadding(theme.dp(12), 0, theme.dp(12), 0)
+            background = theme.pressable(if (selected) theme.rounded(theme.accentSoft, theme.radiusM, 0, 0f) else null, theme.radiusM)
+            isClickable = true
+            isSelected = selected
+            contentDescription = title
+            val tint = if (destructive) theme.danger else if (selected) theme.accent else theme.text
+            addView(View(context).apply { background = com.paintengine.pxpaint.ui.IconDrawable(icon, tint) }, LinearLayout.LayoutParams(theme.dp(22), theme.dp(22)))
+            addView(theme.text(context, title, PxTheme.Type.BODY, tint, lines = 1).apply {
+                setPadding(theme.dp(14), 0, 0, 0)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            })
+            setOnClickListener { onClick() }
+        }
+
+    private fun actionsPanel(): View = column(context, theme, horizontalPadding = false) {
+        addView(theme.text(context, tr(S.ACTIONS_TITLE), PxTheme.Type.HEADLINE).apply { minHeight = theme.dp(36); gravity = Gravity.CENTER_VERTICAL })
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            for (t in ActionsTab.entries) addView(Widgets.chip(context, theme, tr(t.label), t == actionsTab) {
+                if (actionsTab != t) { actionsTab = t; showPanel(Panel.ACTIONS) }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = theme.dp(4) })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(4); bottomMargin = theme.dp(8) })
+        val st = host.settings
+        fun set(n: AppSettings) = host.updateSettings(n)
+        fun pick(t: Tool) { if (tool == t && t != Tool.MOVE) setPanel(Panel.TOOL) else { setPanel(Panel.NONE); selectTool(t) } }
+        when (actionsTab) {
+            ActionsTab.TOOLS -> {
+                addView(actionRow(Icon.SELECT, tr(S.TOOL_SELECT), tool == Tool.SELECT) { pick(Tool.SELECT) })
+                addView(actionRow(Icon.FILL, tr(S.TOOL_FILL), tool == Tool.FILL) { pick(Tool.FILL) })
+                addView(actionRow(Icon.GRADIENT, tr(S.TOOL_GRADIENT), tool == Tool.GRADIENT) { pick(Tool.GRADIENT) })
+                addView(actionRow(Icon.MOVE, tr(S.TOOL_MOVE), tool == Tool.MOVE) { pick(Tool.MOVE) })
+                addView(actionRow(Icon.EYEDROPPER, tr(S.EYEDROPPER)) { setPanel(Panel.NONE); armEyedropper() })
+                addView(actionRow(Icon.SLIDERS, tr(S.BRUSH_SETTINGS)) {
+                    if (!tool.paints) selectTool(Tool.MARKER)
+                    setPanel(Panel.TOOL)
+                })
+            }
+            ActionsTab.CANVAS -> {
+                val c = screenCenter()
+                addView(actionRow(Icon.FIT, tr(S.FIT)) { viewOp(ViewOp.FIT) })
+                addView(actionRow(Icon.PIXELS, tr(S.ACTUAL_PIXELS)) { viewOp(ViewOp.SET_ZOOM_AT, 1.0, c[0], c[1]) })
+                addView(actionRow(Icon.ROTATE, tr(S.RESET_ROTATION)) { viewOp(ViewOp.SET_ROTATION_AT, 0.0, c[0], c[1]) })
+                addView(actionRow(Icon.CENTER, tr(S.CENTER)) { viewOp(ViewOp.CENTER) })
+                addView(actionRow(Icon.FULLSCREEN, tr(S.FULLSCREEN)) { setPanel(Panel.NONE); setFullscreen(true) })
+                addView(actionRow(Icon.HISTORY, tr(S.HISTORY)) { setPanel(Panel.HISTORY) })
+                addView(actionRow(Icon.EDIT, tr(S.ACTION_RENAME)) { rename() })
+                addView(actionRow(Icon.INFO, tr(S.CANVAS_INFO)) { canvasInfo() })
+                addView(actionRow(Icon.TRASH, tr(S.CLEAR_CANVAS), destructive = true) { confirmClear() })
+            }
+            ActionsTab.PREFS -> {
+                // Procreate's Prefs: interface, handedness, eyedropper and pen shortcuts, pressure, gestures.
+                addView(theme.text(context, tr(S.PREFS_INTERFACE), PxTheme.Type.LABEL, theme.textSecondary).apply { setPadding(theme.dp(12), theme.dp(4), 0, theme.dp(6)) })
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(theme.dp(8), 0, theme.dp(8), theme.dp(4))
+                    for (m in ThemeMode.entries) addView(Widgets.chip(context, theme, tr(m.label), m == st.theme) {
+                        if (m != host.settings.theme) set(host.settings.copy(theme = m))
+                    }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = theme.dp(4) })
+                })
+                addView(Widgets.switchRow(context, theme, tr(S.PREFS_RIGHT_HAND), tr(S.PREFS_RIGHT_HAND_DESC), st.sliderSide == Side.RIGHT) {
+                    set(host.settings.copy(sliderSide = if (it) Side.RIGHT else Side.LEFT))
+                })
+                addView(Widgets.switchRow(context, theme, tr(S.GESTURE_HOLD_PICK), null, st.longPressPick) { set(host.settings.copy(longPressPick = it)) })
+                addView(Widgets.switchRow(context, theme, tr(S.GESTURE_STYLUS_PICK), null, st.stylusButtonPick) { set(host.settings.copy(stylusButtonPick = it)) })
+                addView(Widgets.switchRow(context, theme, tr(S.GESTURE_STYLUS_ERASE), null, st.stylusButtonErase) { set(host.settings.copy(stylusButtonErase = it)) })
+                addView(actionRow(Icon.SLIDERS, tr(S.PREFS_PRESSURE)) { host.push(PressureScreen(host)) })
+                addView(actionRow(Icon.MOVE, tr(S.PREFS_GESTURES)) { ControlsSetup.show(host) })
+                addView(actionRow(Icon.MORE, tr(S.PREFS_ALL)) { host.push(SettingsScreen(host)) })
+            }
+            ActionsTab.HELP -> {
+                addView(theme.text(context, tr(S.ACTIONS_HELP_TEXT), PxTheme.Type.BODY, theme.textSecondary).apply { setPadding(theme.dp(12), theme.dp(4), theme.dp(12), theme.dp(8)) })
+                addView(actionRow(Icon.MOVE, tr(S.CONTROLS_SETUP_TITLE)) { ControlsSetup.show(host) })
+                addView(actionRow(Icon.TARGET, tr(S.TEST_RENDERING)) { testRendering() })
+                addView(theme.text(context, "PxPaint ${com.paintengine.BuildConfig.VERSION_NAME}", PxTheme.Type.CAPTION, theme.textTertiary).apply {
+                    setPadding(theme.dp(12), theme.dp(10), 0, theme.dp(4))
+                })
+            }
+        }
     }
 
     private fun toolLp(vertical: Boolean) = if (vertical)
@@ -1341,7 +1414,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         addView(View(context), LinearLayout.LayoutParams(1, theme.dp(14)))
         addView(opacity, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
         if (!tool.paints) { size.alpha = theme.disabledAlpha; opacity.alpha = theme.disabledAlpha }
-        addView(historyCluster(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(14) })
+        if (spec?.toolbar == ToolbarPlacement.TOP) addView(historyCluster(true), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(14) })
     }
 
     private fun currentBrushTool(): BrushTool = brushTool(if (!tool.paints) Tool.MARKER else tool)
@@ -2098,6 +2171,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         Panel.LAYERS -> layersPanel()
         Panel.LIBRARY -> libraryPanel()
         Panel.HISTORY -> historyPanel()
+        Panel.ACTIONS -> actionsPanel()
         Panel.NONE -> null
     }
 

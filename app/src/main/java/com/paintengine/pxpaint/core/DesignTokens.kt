@@ -41,8 +41,8 @@ data class ColorTokens(
     val shadow: Int get() = if (isDark) 0xFF000000.toInt() else 0xFF5A4630.toInt()
 
     companion object {
-        const val CHROME_ALPHA = 0xE6
-        const val PANEL_ALPHA = 0xF2
+        const val CHROME_ALPHA = 0xCC
+        const val PANEL_ALPHA = 0xE0
     }
 }
 

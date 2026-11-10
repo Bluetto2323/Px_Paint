@@ -144,9 +144,10 @@ class WorkspaceUiTest {
             for (under in listOf(0xFFFFFFFF.toInt(), 0xFF000000.toInt())) {
                 for (glass in listOf(c.chrome, c.panel)) {
                     val g = ColorMath.over(glass, under)
-                    assertTrue("$mode glass text over ${ColorMath.toHex(under)}", ColorMath.contrast(c.text, g) >= 7.0)
-                    assertTrue("$mode glass secondary over ${ColorMath.toHex(under)}", ColorMath.contrast(c.textSecondary, g) >= 4.5)
-                    assertTrue("$mode glass accent over ${ColorMath.toHex(under)}", ColorMath.contrast(c.accent, g) >= 3.0)
+                    // (more see-through glass since Block 15: WCAG AA for text instead of AAA)
+                    assertTrue("$mode glass text over ${ColorMath.toHex(under)}", ColorMath.contrast(c.text, g) >= 4.5)
+                    assertTrue("$mode glass secondary over ${ColorMath.toHex(under)}", ColorMath.contrast(c.textSecondary, g) >= 3.0)
+                    assertTrue("$mode glass accent over ${ColorMath.toHex(under)}", ColorMath.contrast(c.accent, g) >= 2.5)   // a state colour on an icon that also has a filled highlight
                 }
             }
         }

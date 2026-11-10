@@ -318,6 +318,12 @@ if xy=$(centre 104-smudge-tool "Color" exact); then
   shot 105c-colordrop-done
 else echo "  no colour chip for ColorDrop"; fi
 
+# ---------------- Actions (Procreate's wrench menu) and its Prefs tab
+tapc 105c-colordrop-done "More tools"
+shot 106-actions-tools
+tapc 106-actions-tools "Prefs" exact
+shot 107-actions-prefs
+
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420
 start --es pxpaint.demo canvas
