@@ -131,6 +131,7 @@ private:
     void rasterGeneric(canvas::RasterStore& store, const Dab& d, bool toTail, uint32_t index);
     void composite(canvas::RasterStore& store, StrokeTile& st);
     void applyWet(canvas::RasterStore& store, const Dab& d);
+    DabGeometry geometryAt(const Dab& d, uint32_t index) const;   // dynamics + start taper
     void releaseTiles();
     static void grow(canvas::RectI& r, const canvas::RectI& add);
 
@@ -164,8 +165,11 @@ private:
     double brushMix_[4] = {};    // brush colour in the mixing space (ln r, ln g, ln b, luminance)
     double paintMix_[4] = {};    // colour loaded on the brush, same space
     bool paintLoaded_ = false;
-    static constexpr int kMixLut = 1023;   // mask >> 6
-    std::vector<float> mixLut_;            // mix: coverage -> per-dab deposit
+    double chargeLen_ = 0.0;     // mix: distance over which the paint runs out (0 = never)
+    double wetDist_ = 0.0;       // mix: distance painted in this stroke
+    double wetLast_[2] = {};
+    double taperStep_ = 1.0, taperLen_ = 0.0;   // start taper (px per dab, length; 0 = off)
+
     std::vector<float> carry_;   // smudge: carried premultiplied RGBA, 0..255 (alpha < 0 = empty)
     int32_t carryN_ = 0, carryCell_ = 1, carryHalf_ = 0;
 public:

@@ -23,6 +23,8 @@ class BrushPresetsTest {
             "builtin.round", "builtin.hard", "builtin.airbrush", "builtin.pencil", "builtin.graphite", "builtin.ink",
             "builtin.fineliner", "builtin.marker", "builtin.charcoal", "builtin.chalk", "builtin.textured", "builtin.watercolor",
             "builtin.oil", "builtin.gouache", "builtin.blender",
+            "builtin.technical", "builtin.brushpen", "builtin.calligraphy", "builtin.dryink", "builtin.6b", "builtin.softpastel",
+            "builtin.flat", "builtin.acrylic", "builtin.drybrush", "builtin.glaze", "builtin.wetwash", "builtin.spray", "builtin.foliage",
         )
     }
 
@@ -38,13 +40,13 @@ class BrushPresetsTest {
             assertTrue(p.id, p.tags.isNotEmpty())
         }
         assertEquals(
-            setOf(BrushCategory.SKETCHING, BrushCategory.INKING, BrushCategory.PAINTING, BrushCategory.AIRBRUSH, BrushCategory.DRY),
+            setOf(BrushCategory.SKETCHING, BrushCategory.INKING, BrushCategory.PAINTING, BrushCategory.AIRBRUSH, BrushCategory.DRY, BrushCategory.CALLIGRAPHY, BrushCategory.WATER),
             all.map { it.category }.toSet(),
         )
         // No two presets share their parameters (not renamed copies of one brush).
         for (i in all.indices) for (j in i + 1 until all.size) assertNotEquals(all[i].params, all[j].params)
         // Only the hard brush and the fine liner use the classic Block 3/4 rasteriser.
-        assertEquals(listOf("builtin.hard", "builtin.fineliner"), all.filter { it.params.classic }.map { it.id })
+        assertEquals(listOf("builtin.hard", "builtin.fineliner", "builtin.technical"), all.filter { it.params.classic }.map { it.id })
     }
 
     @Test
@@ -184,7 +186,18 @@ class BrushPresetsTest {
         // Encoded for the engine: mix and pickup after the 21 Block 5 floats; smudge is a flag, never with erase.
         val p = BrushParams(mix = 0.4f, pickup = 0.2f)
         val a = BrushEncoding.params(p, pressureSmoothing = 0f)
-        assertEquals(23, a.size)
+        assertEquals(26, a.size)
+        // Block 15: charge, dilution, taper follow; colour jitter stays in the app (applied per stroke).
+        val q = BrushParams(charge = 0.3f, dilution = 0.6f, taper = 0.5f, hueJitter = 0.2f)
+        val e = BrushEncoding.params(q, pressureSmoothing = 0f)
+        assertEquals(0.3f, e[23], 0f)
+        assertEquals(0.6f, e[24], 0f)
+        assertEquals(0.5f, e[25], 0f)
+        assertEquals(0xFF336699.toInt(), ColorJitter.apply(0xFF336699.toInt(), 0f, 0f, 7))
+        val j1 = ColorJitter.apply(0xFF336699.toInt(), 0.5f, 0.5f, 7)
+        assertTrue(j1 != 0xFF336699.toInt() && (j1 ushr 24) == 0xFF)
+        assertEquals(j1, ColorJitter.apply(0xFF336699.toInt(), 0.5f, 0.5f, 7))        // same stroke, same colour
+        assertTrue(j1 != ColorJitter.apply(0xFF336699.toInt(), 0.5f, 0.5f, 8))
         assertEquals(0.4f, a[21], 0f)
         assertEquals(0.2f, a[22], 0f)
         assertEquals(BrushEncoding.FLAG_SMUDGE, BrushEncoding.flags(p, erase = false, smudge = true) and BrushEncoding.FLAG_SMUDGE)

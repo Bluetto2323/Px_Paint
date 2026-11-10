@@ -118,6 +118,13 @@ struct BrushSettings {
     WetMode wet = WetMode::None;
     float mix = 0.0f;            // 0..1
     float pickup = 0.5f;         // 0..1, per brush diameter travelled
+    // Mix only: `charge` = paint loaded on the brush (1 = never runs out; lower: after a few
+    // diameters the stroke carries only what it picks up, and fades on bare canvas);
+    // `dilution` = paint thinned with water (lower deposit, colours show through and blend).
+    float charge = 1.0f;         // 0..1
+    float dilution = 0.0f;       // 0..1
+    // Stroke start taper: the size grows from 15 % over taper * 6 diameters (0 = off).
+    float taper = 0.0f;          // 0..1
 
     // Floors that keep a stroke visible whatever the pressure.
     static constexpr float kMinSizeFraction = 0.02f;
@@ -157,7 +164,11 @@ struct BrushSettings {
         s.wetEdge = std::clamp(finite(wetEdge, 0.0f), 0.0f, 1.0f);
         s.mix = std::clamp(finite(mix, 0.0f), 0.0f, 1.0f);
         s.pickup = std::clamp(finite(pickup, 0.5f), 0.0f, 1.0f);
-        if (static_cast<int>(wet) > 2 || erase || (wet == WetMode::Mix && s.mix <= 0.0f)) s.wet = WetMode::None;
+        s.charge = std::clamp(finite(charge, 1.0f), 0.0f, 1.0f);
+        s.dilution = std::clamp(finite(dilution, 0.0f), 0.0f, 1.0f);
+        s.taper = std::clamp(finite(taper, 0.0f), 0.0f, 1.0f);
+        if (static_cast<int>(wet) > 2 || erase ||
+            (wet == WetMode::Mix && s.mix <= 0.0f && s.charge >= 1.0f && s.dilution <= 0.0f)) s.wet = WetMode::None;
         if (s.wet == WetMode::Smudge) {
             // The smudge strength is the tool's own slider: a preset made for faint, built-up
             // paint (airbrush: flow 12 %, pressure down to 10 %) must still move the pixels.

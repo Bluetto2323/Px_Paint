@@ -267,3 +267,217 @@ spacing = 0.05
 hardness = 0.2
 mix = 1
 pickup = 0.6
+
+# Block 15: more brushes (start taper, paint charge, dilution, colour dynamics).
+[preset builtin.technical]
+name = Technical Pen
+name.it = Penna tecnica
+category = inking
+tags = technical pen line uniform drafting
+tip = round
+size = 6
+opacity = 1
+spacing = 0.05
+hardness = 1
+pressure_size = false
+pressure_opacity = false
+taper = 0.12
+
+[preset builtin.brushpen]
+name = Brush Pen
+name.it = Pennarello a pennello
+category = calligraphy
+tags = brush pen lettering taper ink
+tip = round
+size = 22
+opacity = 1
+spacing = 0.04
+hardness = 0.95
+pressure_size = true
+min_size = 0.05
+taper = 0.4
+
+[preset builtin.calligraphy]
+name = Calligraphy Nib
+name.it = Pennino calligrafico
+category = calligraphy
+tags = calligraphy nib italic lettering flat
+tip = round
+size = 24
+opacity = 1
+spacing = 0.03
+hardness = 1
+roundness = 0.18
+angle = 45
+angle_mode = fixed
+pressure_size = true
+min_size = 0.5
+
+[preset builtin.dryink]
+name = Dry Ink
+name.it = Inchiostro secco
+category = inking
+tags = dry ink rough texture comic
+tip = chalk
+size = 18
+opacity = 1
+spacing = 0.05
+grain = rough
+grain_depth = 0.5
+pressure_size = true
+min_size = 0.2
+taper = 0.3
+
+[preset builtin.6b]
+name = 6B Pencil
+name.it = Matita 6B
+category = sketching
+tags = pencil 6b soft dark sketch
+tip = round
+size = 9
+opacity = 1
+flow = 0.5
+spacing = 0.06
+hardness = 0.6
+grain = paper
+grain_depth = 0.7
+accumulation = buildup
+pressure_size = true
+min_size = 0.6
+pressure_opacity = true
+min_opacity = 0.15
+tilt = true
+tilt_strength = 1
+
+[preset builtin.softpastel]
+name = Soft Pastel
+name.it = Pastello morbido
+category = dry
+tags = pastel soft chalk texture
+tip = chalk
+size = 60
+opacity = 0.9
+spacing = 0.06
+grain = rough
+grain_depth = 0.55
+pressure_opacity = true
+min_opacity = 0.25
+tilt = true
+tilt_strength = 0.8
+
+[preset builtin.flat]
+name = Flat Brush
+name.it = Pennello piatto
+category = painting
+tags = flat brush bristle wet mix
+tip = bristle
+size = 70
+opacity = 1
+spacing = 0.03
+roundness = 0.35
+angle_mode = stroke
+pressure_size = true
+min_size = 0.6
+mix = 0.3
+pickup = 0.3
+
+[preset builtin.acrylic]
+name = Acrylic
+name.it = Acrilico
+category = painting
+tags = acrylic paint thick canvas
+tip = bristle
+size = 50
+opacity = 1
+spacing = 0.035
+angle_mode = stroke
+grain = canvas
+grain_depth = 0.2
+pressure_size = true
+min_size = 0.5
+mix = 0.25
+pickup = 0.2
+charge = 0.85
+
+[preset builtin.drybrush]
+name = Dry Brush
+name.it = Pennello asciutto
+category = painting
+tags = dry brush streak run out texture
+tip = bristle
+size = 64
+opacity = 1
+spacing = 0.035
+angle_mode = stroke
+grain = rough
+grain_depth = 0.6
+pressure_size = true
+min_size = 0.5
+mix = 0.1
+pickup = 0.2
+charge = 0.25
+
+[preset builtin.glaze]
+name = Glaze
+name.it = Velatura
+category = water
+tags = glaze thin transparent layer wash
+tip = round
+size = 90
+opacity = 1
+spacing = 0.05
+hardness = 0.3
+mix = 0.2
+pickup = 0.3
+dilution = 0.7
+
+[preset builtin.wetwash]
+name = Wet Wash
+name.it = Lavatura bagnata
+category = water
+tags = wash wet watercolor blend bleed
+tip = round
+size = 110
+opacity = 1
+spacing = 0.05
+hardness = 0.15
+grain = wash
+grain_depth = 0.4
+wet_edge = 0.5
+mix = 0.6
+pickup = 0.7
+dilution = 0.6
+
+[preset builtin.spray]
+name = Spray Paint
+name.it = Vernice spray
+category = airbrush
+tags = spray paint speckle graffiti
+tip = round
+size = 80
+opacity = 1
+flow = 0.25
+spacing = 0.1
+hardness = 0.1
+size_jitter = 0.5
+scatter = 0.8
+accumulation = buildup
+pressure_opacity = true
+min_opacity = 0.3
+
+[preset builtin.foliage]
+name = Foliage
+name.it = Fogliame
+category = dry
+tags = leaves foliage scatter colour confetti
+tip = chalk
+size = 40
+opacity = 1
+spacing = 0.5
+size_jitter = 0.6
+scatter = 1.2
+angle_jitter = 1
+hue_jitter = 0.25
+light_jitter = 0.5
+pressure_size = true
+min_size = 0.5

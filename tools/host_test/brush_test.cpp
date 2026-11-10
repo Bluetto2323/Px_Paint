@@ -979,7 +979,7 @@ void testPresetFile() {
     bool header = false;
     gPresets = pxtest::loadPresets(PE_BRUSH_ASSET, &header);
     check(header, "L1: format header 'pxbrushes 1'");
-    check(gPresets.size() == 15, fmt("L1: 15 built-in presets (%.0f)", static_cast<double>(gPresets.size())));
+    check(gPresets.size() == 28, fmt("L1: 28 built-in presets (%.0f)", static_cast<double>(gPresets.size())));
     int found = 0;
     for (const char* id : kExpectedPresets) found += pxtest::find(gPresets, id) ? 1 : 0;
     check(found == 12, "L1: every required preset is present (round, hard, airbrush, pencil, graphite, ink, fine liner, marker, charcoal, chalk, textured, watercolour)");
@@ -997,8 +997,8 @@ void testPresetFile() {
     check(valid, "L1: every value already inside its valid range (sanitizing changes nothing)");
     int classic = 0;
     for (const auto& p : gPresets) classic += p.s.classicRound() ? 1 : 0;
-    check(preset("builtin.hard").classicRound() && preset("builtin.fineliner").classicRound() && classic == 2,
-          "L1: only Hard Brush and Fine Liner use the classic (Block 3/4) rasteriser; 10 presets use the Block 5 model");
+    check(preset("builtin.hard").classicRound() && preset("builtin.fineliner").classicRound() && preset("builtin.technical").classicRound() && classic == 3,
+          "L1: only Hard Brush, Fine Liner and Technical Pen use the classic (Block 3/4) rasteriser");
     check(BrushSettings{}.classicRound(), "L1: default BrushSettings = classic round (old callers unchanged)");
 }
 
@@ -1073,6 +1073,7 @@ void testDistinct() {
         RasterStore again;
         renderPreset(again, b, finger);
         deterministic &= sameStore(f[i], again, 0);
+        if (std::getenv("PE_INK") || totalInk(f[i]) <= 1000) std::printf("    ink: %s (%.0f)\n", gPresets[i].id.c_str(), static_cast<double>(totalInk(f[i])));
         inked &= totalInk(f[i]) > 1000;
     }
     check(inked, "L4: every preset leaves ink (finger stroke, 40 px)");

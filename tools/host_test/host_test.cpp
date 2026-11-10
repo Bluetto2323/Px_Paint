@@ -1209,29 +1209,29 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
         {
             bool header = false;
             const auto presets = pxtest::loadPresets(PE_BRUSH_ASSET, &header);
-            check(header && presets.size() == 15, "S11: shipped preset file read (15 presets)");
+            check(header && presets.size() == 28, "S11: shipped preset file read (28 presets)");
             check(engine.createCanvas({1200, 800, kPaper}).empty(), "S11: canvas");
             engine.waitForStatus([](const EngineStatus& s) { return s.canvas.gpuReady && s.canvas.rasterTiles == 0; }, 10s);
             double one[] = {1.0, 450, 300};
             engine.viewportOp(pe::ViewOp::SetZoomAt, one, 3);
             double r0[] = {0.0, 450, 300};
             engine.viewportOp(pe::ViewOp::SetRotationAt, r0, 3);
-            // 5 columns x 3 rows of short S-strokes, one per preset, 30 px.
+            // 7 columns x 4 rows of short S-strokes, one per preset, 30 px.
             struct Box { int x0, y0, x1, y1; };
             std::vector<Box> boxes;
             for (size_t i = 0; i < presets.size(); ++i) {
-                const int col = static_cast<int>(i % 5), row = static_cast<int>(i / 5);
-                const double cx = 30 + col * 172, cy = 70 + row * 170;
+                const int col = static_cast<int>(i % 7), row = static_cast<int>(i / 7);
+                const double cx = 10 + col * 126, cy = 65 + row * 135;
                 std::vector<pe::canvas::Vec2> pts;
                 for (int k = 0; k < 40; ++k) {
                     const double t = k / 39.0;
-                    pts.push_back({cx + 25 + 110 * t, cy + 30 * std::sin(t * 2 * pe::canvas::kPi)});
+                    pts.push_back({cx + 22 + 76 * t, cy + 22 * std::sin(t * 2 * pe::canvas::kPi)});
                 }
                 pe::brush::BrushSettings b = presets[i].s;
                 b.diameter = 30;
                 b.argb = 0xFF203060u;
                 screenStroke(engine, b, pts, 4);
-                boxes.push_back({static_cast<int>(cx), static_cast<int>(cy - 60), static_cast<int>(cx + 165), static_cast<int>(cy + 60)});
+                boxes.push_back({static_cast<int>(cx), static_cast<int>(cy - 60), static_cast<int>(cx + 120), static_cast<int>(cy + 60)});
             }
             check(brushIdle(engine), "S11: all preset strokes processed");
             Cap c11;
@@ -1250,7 +1250,7 @@ int suiteBrush(const std::string& pref, const std::string& expected, bool noFall
                         }
                     const double rel = std::abs(gpu - cpu) / std::max(1.0, cpu);
                     worstRel = std::max(worstRel, rel);
-                    inked &= cpu > 255.0 * 300;
+                    inked &= cpu > 255.0 * 100;
                     if (rel > 0.02) {
                         match = false;
                         std::printf("    %s: GPU ink %.0f vs CPU %.0f\n", presets[i].id.c_str(), gpu, cpu);

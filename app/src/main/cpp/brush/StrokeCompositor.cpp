@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <cmath>
 #include <cstring>
 
@@ -115,6 +116,8 @@ void StrokeCompositor::begin(RasterStore& store, const BrushSettings& settings, 
                 std::lround(std::clamp(wetEdgeTransfer(static_cast<double>(i) / n, settings_.wetEdge), 0.0, 1.0) * 65535.0));
     }
     dabIndex_ = 0;
+    taperStep_ = settings_.spacingPx(settings_.diameter);
+    taperLen_ = settings_.taper > 0.0f ? settings_.taper * 6.0 * settings_.diameter : 0.0;
     wet_ = settings_.wet != WetMode::None;
     smudge_ = settings_.wet == WetMode::Smudge;
     if (wet_) {
@@ -137,12 +140,13 @@ void StrokeCompositor::begin(RasterStore& store, const BrushSettings& settings, 
             carry_.assign(static_cast<size_t>(carryN_) * carryN_ * 4, 0.0f);  // reuses the capacity
             for (size_t i = 3; i < carry_.size(); i += 4) carry_[i] = -1.0f;  // nothing picked up yet
         } else {
-            // A pixel is covered by ~1/step dabs: per dab coverage m deposits 1 - (1 - T m)^step, so
-            // the stroke reaches its opacity T (and soft edges / pressure keep their fall-off).
-            const double T = std::clamp(static_cast<double>(paintA_), 0.0, 1.0);
-            mixLut_.resize(kMixLut + 1);
-            for (int i = 0; i <= kMixLut; ++i)
-                mixLut_[static_cast<size_t>(i)] = static_cast<float>(1.0 - std::pow(std::max(0.0, 1.0 - T * i / kMixLut), step));
+            // The stroke keeps its coverage mask exactly as a plain stroke would (same edges,
+            // textures, opacity ceiling, buildup, wet edge); each dab deposits, in its own
+            // colour, only the opacity it adds to that mask.
+            wetA_ = std::clamp(paintA_, 0.0f, 1.0f) * (1.0f - 0.85f * settings_.dilution);
+            chargeLen_ = settings_.charge < 1.0f ? dia * (1.5 + 40.0 * settings_.charge * settings_.charge) : 0.0;
+            wetDist_ = 0.0;
+            wetLast_[0] = wetLast_[1] = std::numeric_limits<double>::quiet_NaN();
             wetPick_ = static_cast<float>(1.0 - std::pow(1.0 - static_cast<double>(settings_.pickup), step));
             const float* lin = srgbToLinearTable();
             brushLin_[0] = lin[static_cast<size_t>(paintR_)];
@@ -208,13 +212,26 @@ double StrokeCompositor::wetEdgeTransfer(double m, double e) {
     return (1.0 - e) * m + e * w;
 }
 
+DabGeometry StrokeCompositor::geometryAt(const Dab& d, uint32_t index) const {
+    DabGeometry g = dyn_.geometry(d.axes);
+    if (taperLen_ > 0.0) {
+        const double t = index * taperStep_ / taperLen_;
+        if (t < 1.0) {
+            const double f = 0.15 + 0.85 * t * t * (3.0 - 2.0 * t);
+            g.radius = std::max(0.5, g.radius * f);
+            g.major = std::max(g.radius, g.major * f);
+        }
+    }
+    return g;
+}
+
 void StrokeCompositor::rasterDab(RasterStore& store, const Dab& d, bool toTail, uint32_t index) {
     if (!std::isfinite(d.x) || !std::isfinite(d.y)) return;
     if (!classic_) {
         rasterGeneric(store, d, toTail, index);
         return;
     }
-    const DabGeometry g = dyn_.geometry(d.axes);
+    const DabGeometry g = geometryAt(d, index);
     if (g.elliptical) {
         rasterEllipse(store, d, g, toTail);
         return;
@@ -393,7 +410,7 @@ constexpr double kPiD = 3.14159265358979323846;
 
 void StrokeCompositor::rasterGeneric(RasterStore& store, const Dab& d, bool toTail, uint32_t index) {
     const BrushSettings& s = settings_;
-    const DabGeometry g = dyn_.geometry(d.axes);
+    const DabGeometry g = geometryAt(d, index);
     // Semi-axes: major along `angle`, minor squashed by the roundness.
     double a = g.major, b = g.radius * s.roundness;
     double angle;
@@ -559,7 +576,12 @@ void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
     constexpr float kInv16 = 1.0f / 65535.0f;
     const bool clipped = clip_ && clip_->active();
     uint8_t paint[4] = {0, 0, 0, 255};
+    float fade = 1.0f;   // mix: deposit left when the paint has run out (on bare canvas)
     if (!smudge_) {
+        if (std::isfinite(wetLast_[0])) wetDist_ += std::hypot(d.x - wetLast_[0], d.y - wetLast_[1]);
+        wetLast_[0] = d.x;
+        wetLast_[1] = d.y;
+        const double remaining = chargeLen_ > 0.0 ? std::exp(-wetDist_ / chargeLen_) : 1.0;
         // Colour under the dab as it was before this stroke (the stroke's own fresh paint is
         // not picked up again): coverage-weighted, transparent pixels add no colour.
         const float* lin = srgbToLinearTable();
@@ -606,14 +628,27 @@ void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
             for (int c = 0; c < 3; ++c) paintMix_[c] = loaded.logc[c];
             paintMix_[3] = loaded.lum;
         }
+        // Paint running out: the dab is more and more what the brush picked up, and where
+        // there was nothing to pick up it fades.
+        const double cover = sw > 0.0 ? swa / sw : 0.0;
+        fade = static_cast<float>(remaining + (1.0 - remaining) * cover);
         PaintColour dabC = brushC;
-        mixInto(dabC, loaded, settings_.mix);
+        mixInto(dabC, loaded, 1.0 - (1.0 - settings_.mix) * remaining);
         double rgb[3];
         paintToLinear(dabC, rgb);
         for (int c = 0; c < 3; ++c) paint[c] = linearToSrgb8(rgb[c]);
     }
     const int32_t ix = static_cast<int32_t>(std::floor(d.x)), iy = static_cast<int32_t>(std::floor(d.y));
     const int32_t off = carryHalf_ * carryCell_;
+    // Stroke mask -> opacity fraction (the wet-edge transfer of plain strokes).
+    auto transfer = [&](uint32_t m) -> float {
+        if (!wetLut_.empty() && m != 0) {
+            constexpr int kShift = 16 - kWetLutBits;
+            const uint32_t i = m >> kShift, f = m & ((1u << kShift) - 1u);
+            m = (wetLut_[i] * ((1u << kShift) - f) + wetLut_[std::min<uint32_t>(i + 1, 1u << kWetLutBits)] * f) >> kShift;
+        }
+        return static_cast<float>(m) * kInv16;
+    };
     for (auto& stp : tiles_) {
         StrokeTile& st = *stp;
         const RectI r = st.tailRect;
@@ -622,6 +657,7 @@ void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
         st.dirty = {};
         const int32_t ox = st.tx * kTile, oy = st.ty * kTile;
         uint16_t* plane = st.tail.get();
+        uint16_t* strokeMask = st.mask.get();
         const auto clipState = clipped ? clip_->state(st.tx, st.ty) : canvas::SelectionMask::TileState::Full;
         if (clipState == canvas::SelectionMask::TileState::Empty && !smudge_) {
             for (int32_t y = r.y; y < r.bottom(); ++y)
@@ -662,7 +698,13 @@ void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
                     }
                 } else {
                     if (covW <= 0.0f) continue;
-                    const float a = mixLut_[m >> 6] * (covW / cov);   // deposit; times the selection
+                    const uint32_t m0 = strokeMask[i];
+                    const uint32_t m1 = buildup_ ? m0 + (static_cast<uint32_t>(m) * (65535u - m0) + 32767u) / 65535u : std::max<uint32_t>(m0, m);
+                    if (m1 == m0) continue;
+                    strokeMask[i] = static_cast<uint16_t>(m1);
+                    const float c0 = wetA_ * transfer(m0), c1 = wetA_ * transfer(m1);
+                    if (c1 <= c0 || c0 >= 1.0f) continue;
+                    const float a = (c1 - c0) / (1.0f - c0) * (covW / cov) * fade;   // times the selection
                     for (int c = 0; c < 4; ++c) o[c] = static_cast<uint8_t>(std::min(255.0f, o[c] + (paint[c] - o[c]) * a + 0.5f));
                 }
             }

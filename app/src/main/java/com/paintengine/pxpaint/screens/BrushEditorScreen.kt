@@ -128,6 +128,12 @@ class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host
         page.addView(theme.text(context, tr(S.MIXING_NOTE), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(4)) })
         page.addView(slider(tr(S.P_MIX), p.mix, { pct(r2(it)) }) { v -> set { it.copy(mix = r2(v)) } })
         page.addView(slider(tr(S.P_PICKUP), p.pickup, { pct(r2(it)) }) { v -> set { it.copy(pickup = r2(v)) } })
+        page.addView(slider(tr(S.P_CHARGE), p.charge, { pct(r2(it)) }) { v -> set { it.copy(charge = r2(v)) } })
+        page.addView(slider(tr(S.P_DILUTION), p.dilution, { pct(r2(it)) }) { v -> set { it.copy(dilution = r2(v)) } })
+
+        page.addView(header(tr(S.SEC_BRUSH_COLOR_DYNAMICS)))
+        page.addView(slider(tr(S.P_HUE_JITTER), p.hueJitter, { pct(r2(it)) }) { v -> set { it.copy(hueJitter = r2(v)) } })
+        page.addView(slider(tr(S.P_LIGHT_JITTER), p.lightJitter, { pct(r2(it)) }) { v -> set { it.copy(lightJitter = r2(v)) } })
 
         page.addView(header(tr(S.SEC_BRUSH_JITTER)))
         page.addView(slider(tr(S.P_SIZE_JITTER), p.sizeJitter, { pct(r2(it)) }) { v -> set { it.copy(sizeJitter = r2(v)) } })

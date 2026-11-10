@@ -9,7 +9,7 @@ enum class BrushTool(val key: String) { PAINT("paint"), ERASER("eraser"), SMUDGE
 /** Library filters (chips). */
 enum class BrushFilter(val label: S) {
     ALL(S.FILTER_ALL), FAVORITES(S.FILTER_FAVORITES), RECENT(S.FILTER_RECENT), SKETCHING(S.CAT_SKETCHING),
-    INKING(S.CAT_INKING), PAINTING(S.CAT_PAINTING), AIRBRUSH(S.CAT_AIRBRUSH), DRY(S.CAT_DRY), MINE(S.FILTER_MINE),
+    INKING(S.CAT_INKING), PAINTING(S.CAT_PAINTING), AIRBRUSH(S.CAT_AIRBRUSH), DRY(S.CAT_DRY), CALLIGRAPHY(S.CAT_CALLIGRAPHY), WATER(S.CAT_WATER), MINE(S.FILTER_MINE),
 }
 
 /**
@@ -158,6 +158,8 @@ data class BrushLibrary(
             BrushFilter.PAINTING -> all().filter { it.category == BrushCategory.PAINTING }
             BrushFilter.AIRBRUSH -> all().filter { it.category == BrushCategory.AIRBRUSH }
             BrushFilter.DRY -> all().filter { it.category == BrushCategory.DRY }
+            BrushFilter.CALLIGRAPHY -> all().filter { it.category == BrushCategory.CALLIGRAPHY }
+            BrushFilter.WATER -> all().filter { it.category == BrushCategory.WATER }
         }
         val terms = fold(query).split(' ').filter { it.isNotEmpty() }
         if (terms.isEmpty()) return base

@@ -10,6 +10,8 @@ enum class BrushCategory(val key: String, val label: S) {
     PAINTING("painting", S.CAT_PAINTING),
     AIRBRUSH("airbrush", S.CAT_AIRBRUSH),
     DRY("dry", S.CAT_DRY),
+    CALLIGRAPHY("calligraphy", S.CAT_CALLIGRAPHY),
+    WATER("water", S.CAT_WATER),
     CUSTOM("custom", S.CAT_CUSTOM);
 
     companion object {
@@ -90,6 +92,15 @@ data class BrushParams(
     val mix: Float = 0f,
     /** Block 14: how fast the brush takes up canvas colour (mix) / refreshes what it drags (smudge). */
     val pickup: Float = 0.5f,
+    /** Block 15: paint loaded on the brush (1 = never runs out). */
+    val charge: Float = 1f,
+    /** Block 15: paint thinned with water (0 = full body). */
+    val dilution: Float = 0f,
+    /** Block 15: the stroke starts thin and grows to full size (0 = off). */
+    val taper: Float = 0f,
+    /** Block 15: each stroke's colour shifts in hue / lightness by up to this much (0 = off). */
+    val hueJitter: Float = 0f,
+    val lightJitter: Float = 0f,
 ) {
     /** Valid range and default of a numeric parameter. */
     data class Range(val key: String, val min: Float, val max: Float, val default: Float)
@@ -103,7 +114,8 @@ data class BrushParams(
             flowJitter = f(flowJitter, R_FLOW_JITTER), grainDepth = f(grainDepth, R_GRAIN_DEPTH),
             grainPressure = f(grainPressure, R_GRAIN_PRESSURE), wetEdge = f(wetEdge, R_WET_EDGE),
             minSize = f(minSize, R_MIN_SIZE), minOpacity = f(minOpacity, R_MIN_OPACITY), tiltStrength = f(tiltStrength, R_TILT_STRENGTH),
-            mix = f(mix, R_MIX), pickup = f(pickup, R_PICKUP),
+            mix = f(mix, R_MIX), pickup = f(pickup, R_PICKUP), charge = f(charge, R_CHARGE), dilution = f(dilution, R_DILUTION),
+            taper = f(taper, R_TAPER), hueJitter = f(hueJitter, R_HUE_JITTER), lightJitter = f(lightJitter, R_LIGHT_JITTER),
         )
     }
 
@@ -119,7 +131,8 @@ data class BrushParams(
         R_ROUNDNESS to roundness, R_ANGLE to angle, R_SIZE_JITTER to sizeJitter, R_SCATTER to scatter,
         R_ANGLE_JITTER to angleJitter, R_FLOW_JITTER to flowJitter, R_GRAIN_DEPTH to grainDepth,
         R_GRAIN_PRESSURE to grainPressure, R_WET_EDGE to wetEdge, R_MIN_SIZE to minSize, R_MIN_OPACITY to minOpacity,
-        R_TILT_STRENGTH to tiltStrength, R_MIX to mix, R_PICKUP to pickup,
+        R_TILT_STRENGTH to tiltStrength, R_MIX to mix, R_PICKUP to pickup, R_CHARGE to charge, R_DILUTION to dilution,
+        R_TAPER to taper, R_HUE_JITTER to hueJitter, R_LIGHT_JITTER to lightJitter,
     )
 
     /** key = value lines (all parameters, stable order). */
@@ -131,7 +144,8 @@ data class BrushParams(
         "grain_pressure" to num(grainPressure), "accumulation" to accumulation.key, "wet_edge" to num(wetEdge),
         "pressure_size" to pressureSize.toString(), "min_size" to num(minSize), "pressure_opacity" to pressureOpacity.toString(),
         "min_opacity" to num(minOpacity), "tilt" to tilt.toString(), "tilt_strength" to num(tiltStrength),
-        "mix" to num(mix), "pickup" to num(pickup),
+        "mix" to num(mix), "pickup" to num(pickup), "charge" to num(charge), "dilution" to num(dilution),
+        "taper" to num(taper), "hue_jitter" to num(hueJitter), "light_jitter" to num(lightJitter),
     )
 
     /** Uses the Block 3/4 rasteriser in the engine (BrushSettings::classicRound). */
@@ -160,6 +174,11 @@ data class BrushParams(
         val R_TILT_STRENGTH = Range("tilt_strength", 0f, 1f, 1f)
         val R_MIX = Range("mix", 0f, 1f, 0f)
         val R_PICKUP = Range("pickup", 0f, 1f, 0.5f)
+        val R_CHARGE = Range("charge", 0f, 1f, 1f)
+        val R_DILUTION = Range("dilution", 0f, 1f, 0f)
+        val R_TAPER = Range("taper", 0f, 1f, 0f)
+        val R_HUE_JITTER = Range("hue_jitter", 0f, 1f, 0f)
+        val R_LIGHT_JITTER = Range("light_jitter", 0f, 1f, 0f)
 
         /** Angle in (-180, 180]. */
         fun normalizeAngle(a: Float): Float {
@@ -194,6 +213,8 @@ data class BrushParams(
                 pressureOpacity = bo("pressure_opacity", base.pressureOpacity), minOpacity = fl("min_opacity", base.minOpacity),
                 tilt = bo("tilt", base.tilt), tiltStrength = fl("tilt_strength", base.tiltStrength),
                 mix = fl("mix", base.mix), pickup = fl("pickup", base.pickup),
+                charge = fl("charge", base.charge), dilution = fl("dilution", base.dilution), taper = fl("taper", base.taper),
+                hueJitter = fl("hue_jitter", base.hueJitter), lightJitter = fl("light_jitter", base.lightJitter),
             ).sanitized()
         }
     }
@@ -343,10 +364,10 @@ object BrushPresetFormat {
 
 /**
  * Engine encoding of a brush (NativeEngine.Brush params / flags, decoded by
- * JniBridge decodeBrush): 23 floats.
+ * JniBridge decodeBrush): 26 floats.
  */
 object BrushEncoding {
-    const val PARAMS = 23
+    const val PARAMS = 26
     const val FLAG_ERASE = 1
     const val FLAG_PRESSURE_SIZE = 2
     const val FLAG_PRESSURE_OPACITY = 4
@@ -361,7 +382,7 @@ object BrushEncoding {
             size, opacity, s.spacing, s.minSize, s.minOpacity, s.tiltStrength, pressureSmoothing,
             s.hardness, s.flow, s.roundness, s.angle, s.sizeJitter, s.scatter, s.angleJitter, s.flowJitter,
             s.grainDepth, s.grainPressure, s.wetEdge, s.tip.code.toFloat(), s.grain.code.toFloat(), s.accumulation.code.toFloat(),
-            s.mix, s.pickup,
+            s.mix, s.pickup, s.charge, s.dilution, s.taper,
         )
     }
 

@@ -826,7 +826,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
                 NativeEngine.Brush(
                     BrushEncoding.params(p, pressureSmoothing = host.settings.pressureSmoothing),
                     BrushEncoding.flags(p, eraser, smudge),
-                    if (eraser) 0xFF000000.toInt() else color,
+                    if (eraser) 0xFF000000.toInt() else com.paintengine.pxpaint.core.ColorJitter.apply(color, p.hueJitter, p.lightJitter, SystemClock.uptimeMillis().toInt()),
                     host.pressureTable(),
                 ),
             )

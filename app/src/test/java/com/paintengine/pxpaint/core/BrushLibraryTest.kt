@@ -17,7 +17,7 @@ class BrushLibraryTest {
         assertEquals("builtin.round", lib.selectedId(BrushTool.PAINT))
         assertEquals("builtin.hard", lib.selectedId(BrushTool.ERASER))
         assertEquals(builtIns.first { it.id == "builtin.round" }.params, lib.effective(BrushTool.PAINT))
-        assertEquals(15, lib.all().size)
+        assertEquals(28, lib.all().size)
     }
 
     @Test
@@ -98,7 +98,7 @@ class BrushLibraryTest {
         assertEquals("builtin.round", lib.selectedId(BrushTool.PAINT))
         assertEquals("builtin.hard", lib.selectedId(BrushTool.ERASER))
         assertEquals(lib, lib.delete("builtin.round"))     // built-ins cannot be deleted
-        assertEquals(15, lib.all().size)
+        assertEquals(28, lib.all().size)
     }
 
     @Test
@@ -211,7 +211,7 @@ class BrushLibraryTest {
         assertEquals(listOf("builtin.chalk"), ids("gessetto"))
         assertTrue(ids("inking").containsAll(listOf("builtin.ink", "builtin.fineliner", "builtin.marker")))
         assertTrue("builtin.textured" in ids("canvas"))                     // tag
-        assertEquals(listOf("builtin.pencil", "builtin.graphite"), ids("pencil", BrushFilter.SKETCHING))
+        assertEquals(listOf("builtin.pencil", "builtin.graphite", "builtin.6b"), ids("pencil", BrushFilter.SKETCHING))
         assertEquals(listOf("builtin.graphite"), ids("pencil shading"))    // every term must match
         assertEquals(listOf("builtin.round"), ids("Tondo"))
         assertTrue(ids("zzz").isEmpty())

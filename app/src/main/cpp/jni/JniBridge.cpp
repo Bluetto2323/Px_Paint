@@ -396,7 +396,7 @@ namespace {
 // Brush parameters from Kotlin (NativeEngine.Brush.params / flags), see
 // docs/ENGINE_API.md. Shorter arrays (older callers) keep the defaults of
 // the missing fields.
-constexpr jsize kBrushParams = 23;   // + mix, pickup (Block 14)
+constexpr jsize kBrushParams = 26;   // + mix, pickup (Block 14), charge, dilution, taper (Block 15)
 
 bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatArray curve, pe::brush::BrushSettings& b) {
     if (!params) return false;
@@ -431,6 +431,11 @@ bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatA
         b.mix = p[21];
         b.pickup = p[22];
     }
+    if (n >= 26) {
+        b.charge = p[23];
+        b.dilution = p[24];
+        b.taper = p[25];
+    }
     b.argb = static_cast<uint32_t>(argb);
     b.erase = (flags & 1) != 0;
     b.pressureSize = (flags & 2) != 0;
@@ -438,7 +443,7 @@ bool decodeBrush(JNIEnv* env, jfloatArray params, jint argb, jint flags, jfloatA
     b.tiltShape = (flags & 8) != 0;
     b.angleFollowsStroke = (flags & 16) != 0;
     b.wet = (flags & 32) != 0 ? pe::brush::WetMode::Smudge
-          : b.mix > 0.0f      ? pe::brush::WetMode::Mix
+          : (b.mix > 0.0f || b.charge < 1.0f || b.dilution > 0.0f) ? pe::brush::WetMode::Mix
                               : pe::brush::WetMode::None;   // sanitized() drops it for the eraser
     if (curve && env->GetArrayLength(curve) == static_cast<jsize>(pe::brush::PressureLut::kSize)) {
         auto lut = std::make_shared<pe::brush::PressureLut>();

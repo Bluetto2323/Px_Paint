@@ -248,28 +248,28 @@ void testPresets() {
     section("H4b the shipped brush presets (grain, jitter, buildup, wet edge): queued back to back, each one step, exact");
     const auto presets = pxtest::loadPresets(PE_BRUSH_ASSET);
     CanvasDocument d;
-    base(d, 1600, 2400);
+    base(d, 1600, 4000);
     std::vector<Snapshot> states{snap(d)};
     // Queued without processing in between, like the app's demo and fast drawing.
     for (size_t i = 0; i < presets.size(); ++i) {
         auto b = presets[i].s;
         b.diameter = std::min(presets[i].size, 100.0f);
         b.argb = 0xFF000000u | (0x1F2A44u + static_cast<uint32_t>(i) * 0x0A0B0Cu);
-        const double y = 150 + static_cast<double>(i) * 150;
+        const double y = 150 + static_cast<double>(i) * 130;
         stroke(d, b, 100, y, 1500, y + 40, 40);
     }
     const auto e = d.historyEntries();
-    check(presets.size() == 15 && e.size() == 15, fmt("H4b: 15 queued preset strokes = 15 steps (%.0f)", static_cast<double>(e.size())));
+    check(presets.size() == 28 && e.size() == presets.size(), fmt("H4b: 28 queued preset strokes = 28 steps (%.0f)", static_cast<double>(e.size())));
     // Exactness per preset: undo one by one, compare with a document that draws only the first k strokes.
     bool exact = true;
     for (size_t k = presets.size(); k-- > 0;) {
         CanvasDocument ref;
-        base(ref, 1600, 2400);
+        base(ref, 1600, 4000);
         for (size_t i = 0; i < k; ++i) {
             auto b = presets[i].s;
             b.diameter = std::min(presets[i].size, 100.0f);
             b.argb = 0xFF000000u | (0x1F2A44u + static_cast<uint32_t>(i) * 0x0A0B0Cu);
-            const double y = 150 + static_cast<double>(i) * 150;
+            const double y = 150 + static_cast<double>(i) * 130;
             stroke(ref, b, 100, y, 1500, y + 40, 40);
         }
         exact &= d.undo() == 1 && snap(d).pixels == snap(ref).pixels;
@@ -279,12 +279,12 @@ void testPresets() {
     while (d.redo() == 1) {
     }
     CanvasDocument all;
-    base(all, 1600, 2400);
+    base(all, 1600, 4000);
     for (size_t i = 0; i < presets.size(); ++i) {
         auto b = presets[i].s;
         b.diameter = std::min(presets[i].size, 100.0f);
         b.argb = 0xFF000000u | (0x1F2A44u + static_cast<uint32_t>(i) * 0x0A0B0Cu);
-        const double y = 150 + static_cast<double>(i) * 150;
+        const double y = 150 + static_cast<double>(i) * 130;
         stroke(all, b, 100, y, 1500, y + 40, 40);
     }
     redo &= snap(d).pixels == snap(all).pixels;

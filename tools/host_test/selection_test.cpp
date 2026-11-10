@@ -1143,6 +1143,27 @@ void testWetMedia() {
         const Rgba8 t = d.layerPixel(top, 300, 300);
         check(t.a == 255 && t.r == 0xF0 && t.b == 0x20, "S13: mixing on a transparent layer: the brush colour, opaque");
     }
+    {   // Block 15: paint charge, dilution, start taper.
+        CanvasDocument d;
+        base(d, W, H);
+        auto dry = mixer(40, 0xFFE03020u, 0.0f);
+        dry.charge = 0.1f;
+        straight(d, dry, 100, 200, 800, 200, 120);
+        const int a0 = d.layerPixel(1, 130, 200).a, a1 = d.layerPixel(1, 760, 200).a;
+        check(a0 > 180 && a1 < a0 / 2, fmt("S13: low charge: the paint runs out along the stroke (alpha %.0f -> %.0f)", a0, a1));
+        auto thin = mixer(40, 0xFFE03020u, 0.0f);
+        thin.dilution = 0.8f;
+        straight(d, thin, 100, 320, 800, 320, 120);
+        const int at = d.layerPixel(1, 450, 320).a;
+        check(at > 40 && at < 140, fmt("S13: dilution 80 %%: thin paint (alpha %.0f)", at));
+        auto tap = brush(40, 0xFF000000u);
+        tap.taper = 0.5f;
+        straight(d, tap, 100, 450, 800, 450, 120);
+        auto width = [&](int x) { int n = 0; for (int y = 400; y < 500; ++y) n += d.layerPixel(1, x, y).a > 127; return n; };
+        check(width(104) < 16 && width(160) > width(104) + 6 && width(400) >= 38,
+              fmt("S13: start taper: %.0f px wide at the start, %.0f at 60 px, %.0f later", width(104), width(160), width(400)));
+        check(d.undo() == 1 && d.undo() == 1 && d.undo() == 1 && d.layerPixel(1, 450, 320).a == 0, "S13: each is one undo step");
+    }
     {   // Cost: large smudge brush.
         CanvasDocument d;
         whiteBlue(d);
