@@ -238,6 +238,7 @@ enum class S(val en: String, val it: String) {
     TOOL_GRADIENT_DESC("Drag across the canvas: the gradient follows; adjust its ends, then Done.",
         "Trascina sulla tela: la sfumatura segue; regola gli estremi, poi Fatto."),
     FILL_TOLERANCE("Tolerance", "Tolleranza"),
+    COLORDROP_THRESHOLD("ColorDrop threshold", "Soglia ColorDrop"),
     FILL_EXPAND("Expand", "Espansione"),
     FILL_CONTIGUOUS("Contiguous area", "Area contigua"),
     FILL_CONTIGUOUS_DESC("Off: every matching pixel of the layer (global replace)", "No: ogni pixel simile del livello (sostituzione globale)"),

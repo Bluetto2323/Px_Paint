@@ -42,6 +42,7 @@ import com.paintengine.pxpaint.core.TileContent
 import com.paintengine.pxpaint.core.BrushEncoding
 import com.paintengine.pxpaint.core.BrushParams
 import com.paintengine.pxpaint.core.BrushTool
+import com.paintengine.pxpaint.core.ColorDrop
 import com.paintengine.pxpaint.core.TwoFinger
 import com.paintengine.pxpaint.core.WorkspaceSpec
 import com.paintengine.pxpaint.core.DesignTokens
@@ -1256,6 +1257,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             addView(View(context).apply { background = theme.oval(color, theme.edge) },
                 FrameLayout.LayoutParams(theme.dp(26), theme.dp(26), Gravity.CENTER))
             setOnClickListener { togglePanel(Panel.COLOR) }
+            // ColorDrop: drag the colour onto the canvas to fill.
+            setOnTouchListener { v, e -> colorDropTouch(v, e) }
         }
         colorButton = swatch
         box.addView(swatch, toolLp(vertical))
@@ -1374,6 +1377,145 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
 
     // ------------------------------------------------------------ fill and gradient (Block 13)
     // Fill options (this session): tolerance 0..255, expansion 0..8 px.
+    // ---- ColorDrop (Procreate's bucket): drag the colour chip onto the canvas.
+    private val colorDrop by lazy { ColorDrop(theme.dpF(12f), theme.dpF(8f), theme.dpF(320f)) }
+    private var dropDot: View? = null
+    private var dropChip: TextView? = null
+    private val dropLoc = IntArray(2)
+    /** Worker-side: the fill of this drag is in the history (the next threshold replaces it). */
+    @Volatile private var dropFilled = false
+    private val dropBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var dropWanted = -1
+    private var dropCx = 0
+    private var dropCy = 0
+    private val dropHold = Runnable {
+        if (closed || !colorDrop.hold()) return@Runnable
+        if (!dropPoint()) { colorDrop.cancel(); endColorDrop(); return@Runnable }
+        surfaceView?.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        dropDot?.visibility = View.INVISIBLE
+        dropFilled = false
+        requestDropFill()
+    }
+
+    private fun colorDropTouch(v: View, e: MotionEvent): Boolean {
+        val c = chrome ?: return false
+        c.getLocationOnScreen(dropLoc)
+        val x = e.rawX - dropLoc[0]
+        val y = e.rawY - dropLoc[1]
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                colorDrop.down(x, y, fillTolerance / 255f)
+                v.isPressed = true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val before = colorDrop.state
+                val retime = colorDrop.move(x, y)
+                if (before == ColorDrop.State.PRESSED && colorDrop.state == ColorDrop.State.DRAGGING) {
+                    v.isPressed = false
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    if (panel != Panel.NONE) setPanel(Panel.NONE)
+                    dropDot = View(context).apply {
+                        background = theme.oval(color, theme.edge)
+                        elevation = theme.dpF(6f)
+                    }.also { c.addView(it, FrameLayout.LayoutParams(theme.dp(40), theme.dp(40))) }
+                }
+                dropDot?.let { it.translationX = x - theme.dp(20); it.translationY = y - theme.dp(64) }   // above the finger
+                if (retime) {
+                    handler.removeCallbacks(dropHold)
+                    handler.postDelayed(dropHold, ColorDrop.HOLD_MS)
+                }
+                if (colorDrop.state == ColorDrop.State.THRESHOLD) requestDropFill()
+            }
+            MotionEvent.ACTION_UP -> {
+                handler.removeCallbacks(dropHold)
+                v.isPressed = false
+                when (colorDrop.up()) {
+                    ColorDrop.Release.TAP -> v.performClick()
+                    ColorDrop.Release.DROP -> if (dropPoint()) { dropFilled = false; requestDropFill() }
+                    ColorDrop.Release.DONE -> fillTolerance = (colorDrop.threshold * 255).roundToInt()
+                    ColorDrop.Release.NONE -> Unit
+                }
+                endColorDrop()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                handler.removeCallbacks(dropHold)
+                v.isPressed = false
+                colorDrop.cancel()
+                endColorDrop()
+            }
+        }
+        return true
+    }
+
+    /** The canvas pixel under the dragged colour (the dot floats above the finger). */
+    private fun dropPoint(): Boolean {
+        if (!toCanvas(colorDrop.x.toDouble(), (colorDrop.y - theme.dp(44)).toDouble())) return false
+        dropCx = kotlin.math.floor(selPt[0]).toInt()
+        dropCy = kotlin.math.floor(selPt[1]).toInt()
+        return true
+    }
+
+    private fun endColorDrop() {
+        dropDot?.let { chrome?.removeView(it) }
+        dropDot = null
+        dropChip?.let { chip -> chip.animate().alpha(0f).setStartDelay(600).setDuration(200).withEndAction { chrome?.removeView(chip); if (dropChip === chip) dropChip = null }.start() }
+    }
+
+    /** Fills at the drop point with the live threshold; a newer threshold replaces the fill (one history step). */
+    private fun requestDropFill() {
+        val e = engine ?: return
+        val tol = (colorDrop.threshold * 255).roundToInt()
+        showDropChip(tol)
+        dropWanted = tol
+        if (!dropBusy.compareAndSet(false, true)) return
+        val cx = dropCx; val cy = dropCy; val argb = color
+        val ex = fillExpand; val cont = fillContiguous; val aa = fillAntialias; val mg = fillMerged
+        layerExec.execute {
+            var err = 0
+            var done = -1
+            val t0 = System.nanoTime()
+            while (true) {
+                val want = dropWanted
+                if (want == done) break
+                if (dropFilled) { e.history(NativeEngine.HistoryOp.UNDO, 1); dropFilled = false }
+                err = e.bucketFill(cx, cy, argb, cont, aa, mg, want, ex)
+                dropFilled = err == 0
+                done = want
+            }
+            dropBusy.set(false)
+            val ms = (System.nanoTime() - t0) / 1e6
+            host.runOnMain {
+                if (closed) return@runOnMain
+                logSelection("colordrop", ms, err)
+                when (err) {
+                    0 -> Unit
+                    5, 6 -> paintBlocked()
+                    else -> host.overlays.message(tr(S.FILL_NOTHING))
+                }
+                if (dropWanted != done && colorDrop.state == ColorDrop.State.THRESHOLD) requestDropFill()
+                handler.postDelayed(historyRefresh, 50)
+            }
+        }
+    }
+
+    private fun showDropChip(tol: Int) {
+        val c = chrome ?: return
+        val chip = dropChip ?: theme.text(context, "", PxTheme.Type.LABEL, theme.text).apply {
+            gravity = Gravity.CENTER
+            setPadding(theme.dp(16), theme.dp(8), theme.dp(16), theme.dp(8))
+            background = theme.glass(theme.radiusPill)
+            elevation = theme.dpF(4f)
+        }.also {
+            dropChip = it
+            c.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = host.insets.top + theme.dp(72)
+            })
+        }
+        chip.animate().cancel()
+        chip.alpha = 1f
+        chip.text = "${tr(S.COLORDROP_THRESHOLD)} ${(tol * 100f / 255f).roundToInt()}%"
+    }
+
     private var fillTolerance = 32
     private var fillExpand = 1
     private var fillContiguous = true
