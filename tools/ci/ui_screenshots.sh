@@ -88,6 +88,8 @@ shot 08-phone-portrait-fullscreen
 dump 08-phone-portrait-fullscreen
 start --es pxpaint.demo editor --es pxpaint.brush builtin.watercolor
 shot 09-editor-watercolor
+tapc 09-editor-watercolor "Wet mix" exact
+shot 09b-studio-wet-mix
 # Drawing, then undo / redo with the toolbar buttons (emulator touch input).
 start --es pxpaint.demo canvas
 adb shell input swipe 300 1500 800 1250 400; sleep 2
@@ -241,7 +243,8 @@ for t in deep_blue pure_black warm_beige; do
 done
 start --es pxpaint.demo library --es pxpaint.theme deep_blue
 shot 91-brush-selector
-tapc 91-brush-selector "Ink Pen"
+tapc 91-brush-selector "Inking" exact
+tapc 91a-brush-set-inking "Ink Pen"
 shot 92-brush-selected-panel-closed
 adb shell input swipe 300 900 800 1100 400; sleep 2
 shot 92b-drawing-with-selected-brush
@@ -300,6 +303,20 @@ start --es pxpaint.demo canvas
 tapc 104-smudge-tool "Smudge" exact
 adb shell input swipe 420 560 470 1450 1200; sleep 3
 shot 104-smudged
+
+# ---------------- ColorDrop (Block 15): drag the colour chip onto the canvas, hold, slide for the threshold
+if xy=$(centre 104-smudge-tool "Color" exact); then
+  set -- $xy
+  adb shell input motionevent DOWN $1 $2; sleep 0.2
+  adb shell input motionevent MOVE $1 $(( $2 - 200 )); sleep 0.1
+  adb shell input motionevent MOVE 700 1700; sleep 0.1
+  adb shell input motionevent MOVE 702 1702; sleep 1.2      # held still: fills, threshold mode
+  shot 105-colordrop-hold
+  adb shell input motionevent MOVE 950 1702; sleep 1.5
+  shot 105b-colordrop-threshold
+  adb shell input motionevent UP 950 1702; sleep 2
+  shot 105c-colordrop-done
+else echo "  no colour chip for ColorDrop"; fi
 
 # ---------------- Phone landscape (2400x1080 -> ~914x411 dp)
 display 2400x1080 420

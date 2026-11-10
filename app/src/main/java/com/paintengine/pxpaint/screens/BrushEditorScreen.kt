@@ -46,21 +46,34 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 /**
- * Brush editor for the brush selected for [tool]: a live preview rendered by
- * the engine (stroke, pressure response, sizes, opacities), a pad to try the
- * brush with a finger or stylus (same renderer), and every parameter of the
- * brush model. Edits apply immediately and persist: a built-in brush keeps
- * them as a resettable customisation, a user brush is changed in place.
+ * Brush Studio (Procreate's brush editor) for the brush selected for [tool]:
+ * the attribute groups down the left, the settings of the chosen group in the
+ * middle, and a drawing pad rendered by the engine's own brush code (finger
+ * or stylus) that redraws as a setting changes. Edits apply immediately;
+ * Cancel puts the brush back as it was when the studio opened, Done keeps
+ * them (a built-in brush keeps them as a resettable customisation).
  */
 class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host) {
+    private enum class Group(val label: S) {
+        STROKE(S.SEC_BRUSH_STROKE), SHAPE(S.SEC_BRUSH_SHAPE), GRAIN(S.SEC_BRUSH_GRAIN), WET_MIX(S.SEC_BRUSH_WETMIX),
+        COLOR(S.SEC_BRUSH_COLOR_DYNAMICS), DYNAMICS(S.SEC_BRUSH_DYNAMICS), STYLUS(S.STYLUS_SECTION), PROPERTIES(S.STUDIO_PROPERTIES),
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var preview: BrushPreviewView? = null
     private var pad: TryPad? = null
     private var titleView: TextView? = null
     private var notes: LinearLayout? = null
+    private var page: LinearLayout? = null
+    private var rail: LinearLayout? = null
+    private var group = Group.STROKE
     private val id: String get() = host.brushes.selectedId(tool)
     private val preset: BrushPreset get() = host.brushes.selectedPreset(tool)
     private val params: BrushParams get() = host.brushes.effective(tool)
+    /** The brush as it was when the studio opened (Cancel restores it). */
+    private val openedId = host.brushes.selectedId(tool)
+    private val openedParams = host.brushes.effective(tool)
+    private val openedModified = host.brushes.isModified(openedId)
     private val refreshPreview = Runnable {
         preview?.show(params)
         pad?.paramsChanged()
@@ -69,108 +82,171 @@ class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host
     override fun createView(): View {
         val root = FrameLayout(context).apply { setBackgroundColor(theme.bg) }
         val ins = host.insets
-        val page = LinearLayout(context).apply {
+        val wide = host.windowWidthDp >= 700
+        pad = TryPad(context)
+        val settings = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(theme.pad, theme.dp(4), theme.pad, ins.bottom + theme.dp(32))
+            setPadding(theme.dp(12), theme.dp(4), theme.pad, ins.bottom + theme.dp(32))
+            page = this
         }
-        preview = BrushPreviewView(context, theme, host.previews, true) { host.pressureTable() }.also {
-            page.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, theme.dp(250)))
-            it.show(params)
+        val railBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(theme.dp(8), theme.dp(4), 0, ins.bottom + theme.dp(16))
+            rail = this
         }
-        notes = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }.also { page.addView(it) }
-        refreshNotes()
-
-        page.addView(header(tr(S.TRY_PAD)))
-        pad = TryPad(context).also {
-            page.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, theme.dp(170)))
+        val columns = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; addView(railBox) },
+                LinearLayout.LayoutParams(theme.dp(if (wide) 168 else 116), LinearLayout.LayoutParams.MATCH_PARENT))
+            addView(ScrollView(context).apply { clipToPadding = false; addView(settings) },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }
-        page.addView(Widgets.pill(context, theme, tr(S.ACTION_CLEAR), false) { pad?.clear() },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = theme.dp(8)
+        val padBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(theme.dp(12), theme.dp(4), theme.dp(12), theme.dp(8))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(theme.text(context, tr(S.STUDIO_PAD_HINT), PxTheme.Type.CAPTION, theme.textSecondary),
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(Widgets.pill(context, theme, tr(S.ACTION_CLEAR), false) { pad?.clear() })
             })
-
-        val p = params
-        val pct = { v: Float -> "${(v * 100).roundToInt()}%" }
-        fun r2(v: Float) = (v * 100f).roundToInt() / 100f
-
-        page.addView(header(tr(S.SEC_BRUSH_STROKE)))
-        page.addView(slider(tr(S.SIZE), BrushState.sizeToSlider(p.size), { BrushState.sizeLabel(BrushState.sliderToSize(it)) }) { v ->
-            set { it.copy(size = BrushState.sliderToSize(v)) }
-        })
-        page.addView(slider(tr(S.OPACITY), p.opacity, { pct(BrushState.sliderToOpacity(it)) }) { v -> set { it.copy(opacity = BrushState.sliderToOpacity(v)) } })
-        page.addView(slider(tr(S.P_FLOW), p.flow, { pct(r2(it).coerceAtLeast(0.01f)) }) { v -> set { it.copy(flow = r2(v).coerceAtLeast(0.01f)) } })
-        page.addView(slider(tr(S.SPACING), BrushState.spacingToSlider(p.spacing), { pct(BrushState.sliderToSpacing(it)) }) { v ->
-            set { it.copy(spacing = BrushState.sliderToSpacing(v)) }
-        })
-        page.addView(label(tr(S.P_ACCUMULATION)))
-        page.addView(choice(Accumulation.entries.map { it to tr(it.label) }, { params.accumulation }) { a -> set { it.copy(accumulation = a) } })
-
-        page.addView(header(tr(S.SEC_BRUSH_SHAPE)))
-        page.addView(label(tr(S.P_TIP)))
-        page.addView(choice(BrushTip.entries.map { it to tr(it.label) }, { params.tip }) { t -> set { it.copy(tip = t) } })
-        page.addView(slider(tr(S.P_HARDNESS), p.hardness, { pct(r2(it)) }) { v -> set { it.copy(hardness = r2(v)) } })
-        page.addView(slider(tr(S.P_ROUNDNESS), (p.roundness - 0.05f) / 0.95f, { pct(r2(0.05f + it * 0.95f)) }) { v ->
-            set { it.copy(roundness = r2(0.05f + v * 0.95f)) }
-        })
-        page.addView(slider(tr(S.P_ANGLE), (p.angle + 180f) / 360f, { "${(it * 360f - 180f).roundToInt()}°" }) { v ->
-            set { it.copy(angle = (v * 360f - 180f).roundToInt().toFloat()) }
-        })
-        page.addView(choice(AngleMode.entries.map { it to tr(it.label) }, { params.angleMode }) { m -> set { it.copy(angleMode = m) } })
-
-        page.addView(header(tr(S.SEC_BRUSH_TEXTURE)))
-        page.addView(label(tr(S.P_GRAIN)))
-        page.addView(choice(BrushGrain.entries.map { it to tr(it.label) }, { params.grain }) { g -> set { it.copy(grain = g) } })
-        page.addView(slider(tr(S.P_GRAIN_DEPTH), p.grainDepth, { pct(r2(it)) }) { v -> set { it.copy(grainDepth = r2(v)) } })
-        page.addView(slider(tr(S.P_GRAIN_PRESSURE), p.grainPressure, { pct(r2(it)) }) { v -> set { it.copy(grainPressure = r2(v)) } })
-        page.addView(slider(tr(S.P_WET_EDGE), p.wetEdge, { pct(r2(it)) }) { v -> set { it.copy(wetEdge = r2(v)) } })
-
-        page.addView(header(tr(S.SEC_BRUSH_MIXING)))
-        page.addView(theme.text(context, tr(S.MIXING_NOTE), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(4)) })
-        page.addView(slider(tr(S.P_MIX), p.mix, { pct(r2(it)) }) { v -> set { it.copy(mix = r2(v)) } })
-        page.addView(slider(tr(S.P_PICKUP), p.pickup, { pct(r2(it)) }) { v -> set { it.copy(pickup = r2(v)) } })
-        page.addView(slider(tr(S.P_CHARGE), p.charge, { pct(r2(it)) }) { v -> set { it.copy(charge = r2(v)) } })
-        page.addView(slider(tr(S.P_DILUTION), p.dilution, { pct(r2(it)) }) { v -> set { it.copy(dilution = r2(v)) } })
-
-        page.addView(header(tr(S.SEC_BRUSH_COLOR_DYNAMICS)))
-        page.addView(slider(tr(S.P_HUE_JITTER), p.hueJitter, { pct(r2(it)) }) { v -> set { it.copy(hueJitter = r2(v)) } })
-        page.addView(slider(tr(S.P_LIGHT_JITTER), p.lightJitter, { pct(r2(it)) }) { v -> set { it.copy(lightJitter = r2(v)) } })
-
-        page.addView(header(tr(S.SEC_BRUSH_JITTER)))
-        page.addView(slider(tr(S.P_SIZE_JITTER), p.sizeJitter, { pct(r2(it)) }) { v -> set { it.copy(sizeJitter = r2(v)) } })
-        page.addView(slider(tr(S.P_SCATTER), p.scatter / 2f, { pct(r2(it * 2f)) }) { v -> set { it.copy(scatter = r2(v * 2f)) } })
-        page.addView(slider(tr(S.P_ANGLE_JITTER), p.angleJitter, { pct(r2(it)) }) { v -> set { it.copy(angleJitter = r2(v)) } })
-        page.addView(slider(tr(S.P_FLOW_JITTER), p.flowJitter, { pct(r2(it)) }) { v -> set { it.copy(flowJitter = r2(v)) } })
-
-        page.addView(header(tr(S.STYLUS_SECTION)))
-        page.addView(theme.text(context, if (host.stylus.pressureAvailable) tr(S.PRESSURE_STYLUS_READY) else tr(S.NO_PRESSURE_STYLUS),
-            PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(4)) })
-        fun fraction(v: Float) = (BrushState.MIN_PRESSURE_FRACTION + v * (1f - BrushState.MIN_PRESSURE_FRACTION)).let { (it * 100).roundToInt() / 100f }
-        fun fslider(f: Float) = ((f - BrushState.MIN_PRESSURE_FRACTION) / (1f - BrushState.MIN_PRESSURE_FRACTION)).coerceIn(0f, 1f)
-        page.addView(switch(tr(S.PRESSURE_SIZE), null, p.pressureSize, true) { b -> set { it.copy(pressureSize = b) } })
-        page.addView(slider(tr(S.MIN_SIZE), fslider(p.minSize), { pct(fraction(it)) }) { v -> set { it.copy(minSize = fraction(v)) } })
-        page.addView(switch(tr(S.PRESSURE_OPACITY), null, p.pressureOpacity, true) { b -> set { it.copy(pressureOpacity = b) } })
-        page.addView(slider(tr(S.MIN_OPACITY), fslider(p.minOpacity), { pct(fraction(it)) }) { v -> set { it.copy(minOpacity = fraction(v)) } })
-        val tilt = host.stylus.tiltAvailable
-        page.addView(switch(tr(S.TILT_SHAPE), if (tilt) null else tr(S.TILT_UNAVAILABLE), p.tilt && tilt, tilt) { b -> set { it.copy(tilt = b) } })
-        page.addView(slider(tr(S.P_TILT_STRENGTH), p.tiltStrength, { pct(r2(it)) }) { v -> set { it.copy(tiltStrength = r2(v)) } })
-
-        if (!preset.builtIn) {
-            page.addView(header(tr(S.SEC_BRUSH_CATEGORY)))
-            page.addView(choice(BrushCategory.entries.map { it to tr(it.label) }, { preset.category }) { c ->
-                host.updateBrushes(host.brushes.setCategory(id, c))
-            })
+            addView(pad, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, if (wide) 0 else theme.dp(170), if (wide) 1f else 0f).apply { topMargin = theme.dp(6) })
         }
-
-        val sv = ScrollView(context).apply {
-            clipToPadding = false
+        val body = LinearLayout(context).apply {
             setPadding(ins.left, 0, ins.right, 0)
-            addView(MaxWidth(context, theme.dp(720)).apply { addView(page) })
+            if (wide) {
+                orientation = LinearLayout.HORIZONTAL
+                addView(columns, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.25f))
+                addView(padBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            } else {
+                orientation = LinearLayout.VERTICAL
+                addView(padBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+                addView(columns, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            }
         }
+        buildRail()
+        buildGroup()
         root.addView(topBar(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP))
-        root.addView(sv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+        root.addView(body, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
             topMargin = ins.top + theme.touchTarget + theme.dp(16)
         })
         return root
+    }
+
+    private fun buildRail() {
+        val r = rail ?: return
+        r.removeAllViews()
+        for (g in Group.entries) {
+            val on = g == group
+            r.addView(theme.text(context, tr(g.label), PxTheme.Type.LABEL, if (on) theme.accent else theme.text, lines = 2).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                minHeight = theme.touchTarget
+                setPadding(theme.dp(12), theme.dp(4), theme.dp(8), theme.dp(4))
+                background = theme.pressable(if (on) theme.rounded(theme.accentSoft, theme.radiusM, 0, 0f) else null, theme.radiusM)
+                isClickable = true
+                isSelected = on
+                contentDescription = tr(g.label)
+                setOnClickListener {
+                    if (group == g) return@setOnClickListener
+                    group = g
+                    buildRail()
+                    buildGroup()
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = theme.dp(2) })
+        }
+    }
+
+    /** The settings of the chosen attribute group (current values). */
+    private fun buildGroup() {
+        val page = page ?: return
+        page.removeAllViews()
+        preview = null
+        notes = null
+        val p = params
+        val pct = { v: Float -> "${(v * 100).roundToInt()}%" }
+        fun r2(v: Float) = (v * 100f).roundToInt() / 100f
+        page.addView(header(tr(group.label)).apply { setPadding(0, theme.dp(6), 0, theme.dp(4)) })
+        when (group) {
+            Group.STROKE -> {
+                page.addView(slider(tr(S.SIZE), BrushState.sizeToSlider(p.size), { BrushState.sizeLabel(BrushState.sliderToSize(it)) }) { v ->
+                    set { it.copy(size = BrushState.sliderToSize(v)) }
+                })
+                page.addView(slider(tr(S.OPACITY), p.opacity, { pct(BrushState.sliderToOpacity(it)) }) { v -> set { it.copy(opacity = BrushState.sliderToOpacity(v)) } })
+                page.addView(slider(tr(S.P_FLOW), p.flow, { pct(r2(it).coerceAtLeast(0.01f)) }) { v -> set { it.copy(flow = r2(v).coerceAtLeast(0.01f)) } })
+                page.addView(slider(tr(S.SPACING), BrushState.spacingToSlider(p.spacing), { pct(BrushState.sliderToSpacing(it)) }) { v ->
+                    set { it.copy(spacing = BrushState.sliderToSpacing(v)) }
+                })
+                page.addView(slider(tr(S.P_TAPER), p.taper, { pct(r2(it)) }) { v -> set { it.copy(taper = r2(v)) } })
+                page.addView(label(tr(S.P_ACCUMULATION)))
+                page.addView(choice(Accumulation.entries.map { it to tr(it.label) }, { params.accumulation }) { a -> set { it.copy(accumulation = a) } })
+            }
+            Group.SHAPE -> {
+                page.addView(label(tr(S.P_TIP)))
+                page.addView(choice(BrushTip.entries.map { it to tr(it.label) }, { params.tip }) { t -> set { it.copy(tip = t) } })
+                page.addView(slider(tr(S.P_HARDNESS), p.hardness, { pct(r2(it)) }) { v -> set { it.copy(hardness = r2(v)) } })
+                page.addView(slider(tr(S.P_ROUNDNESS), (p.roundness - 0.05f) / 0.95f, { pct(r2(0.05f + it * 0.95f)) }) { v ->
+                    set { it.copy(roundness = r2(0.05f + v * 0.95f)) }
+                })
+                page.addView(slider(tr(S.P_ANGLE), (p.angle + 180f) / 360f, { "${(it * 360f - 180f).roundToInt()}°" }) { v ->
+                    set { it.copy(angle = (v * 360f - 180f).roundToInt().toFloat()) }
+                })
+                page.addView(choice(AngleMode.entries.map { it to tr(it.label) }, { params.angleMode }) { m -> set { it.copy(angleMode = m) } })
+            }
+            Group.GRAIN -> {
+                page.addView(label(tr(S.P_GRAIN)))
+                page.addView(choice(BrushGrain.entries.map { it to tr(it.label) }, { params.grain }) { g -> set { it.copy(grain = g) } })
+                page.addView(slider(tr(S.P_GRAIN_DEPTH), p.grainDepth, { pct(r2(it)) }) { v -> set { it.copy(grainDepth = r2(v)) } })
+                page.addView(slider(tr(S.P_GRAIN_PRESSURE), p.grainPressure, { pct(r2(it)) }) { v -> set { it.copy(grainPressure = r2(v)) } })
+                page.addView(slider(tr(S.P_WET_EDGE), p.wetEdge, { pct(r2(it)) }) { v -> set { it.copy(wetEdge = r2(v)) } })
+                notes = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }.also { page.addView(it) }
+                refreshNotes()
+            }
+            Group.WET_MIX -> {
+                page.addView(theme.text(context, tr(S.MIXING_NOTE), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(4)) })
+                page.addView(slider(tr(S.P_MIX), p.mix, { pct(r2(it)) }) { v -> set { it.copy(mix = r2(v)) } })
+                page.addView(slider(tr(S.P_PICKUP), p.pickup, { pct(r2(it)) }) { v -> set { it.copy(pickup = r2(v)) } })
+                page.addView(slider(tr(S.P_CHARGE), p.charge, { pct(r2(it)) }) { v -> set { it.copy(charge = r2(v)) } })
+                page.addView(slider(tr(S.P_DILUTION), p.dilution, { pct(r2(it)) }) { v -> set { it.copy(dilution = r2(v)) } })
+            }
+            Group.COLOR -> {
+                page.addView(slider(tr(S.P_HUE_JITTER), p.hueJitter, { pct(r2(it)) }) { v -> set { it.copy(hueJitter = r2(v)) } })
+                page.addView(slider(tr(S.P_LIGHT_JITTER), p.lightJitter, { pct(r2(it)) }) { v -> set { it.copy(lightJitter = r2(v)) } })
+            }
+            Group.DYNAMICS -> {
+                page.addView(slider(tr(S.P_SIZE_JITTER), p.sizeJitter, { pct(r2(it)) }) { v -> set { it.copy(sizeJitter = r2(v)) } })
+                page.addView(slider(tr(S.P_SCATTER), p.scatter / 2f, { pct(r2(it * 2f)) }) { v -> set { it.copy(scatter = r2(v * 2f)) } })
+                page.addView(slider(tr(S.P_ANGLE_JITTER), p.angleJitter, { pct(r2(it)) }) { v -> set { it.copy(angleJitter = r2(v)) } })
+                page.addView(slider(tr(S.P_FLOW_JITTER), p.flowJitter, { pct(r2(it)) }) { v -> set { it.copy(flowJitter = r2(v)) } })
+            }
+            Group.STYLUS -> {
+                page.addView(theme.text(context, if (host.stylus.pressureAvailable) tr(S.PRESSURE_STYLUS_READY) else tr(S.NO_PRESSURE_STYLUS),
+                    PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(2), 0, theme.dp(4)) })
+                fun fraction(v: Float) = (BrushState.MIN_PRESSURE_FRACTION + v * (1f - BrushState.MIN_PRESSURE_FRACTION)).let { (it * 100).roundToInt() / 100f }
+                fun fslider(f: Float) = ((f - BrushState.MIN_PRESSURE_FRACTION) / (1f - BrushState.MIN_PRESSURE_FRACTION)).coerceIn(0f, 1f)
+                page.addView(switch(tr(S.PRESSURE_SIZE), null, p.pressureSize, true) { b -> set { it.copy(pressureSize = b) } })
+                page.addView(slider(tr(S.MIN_SIZE), fslider(p.minSize), { pct(fraction(it)) }) { v -> set { it.copy(minSize = fraction(v)) } })
+                page.addView(switch(tr(S.PRESSURE_OPACITY), null, p.pressureOpacity, true) { b -> set { it.copy(pressureOpacity = b) } })
+                page.addView(slider(tr(S.MIN_OPACITY), fslider(p.minOpacity), { pct(fraction(it)) }) { v -> set { it.copy(minOpacity = fraction(v)) } })
+                // Tilt is the brush's own setting: it can be set without a tilt-capable pen connected.
+                page.addView(switch(tr(S.TILT_SHAPE), if (host.stylus.tiltAvailable) null else tr(S.TILT_UNAVAILABLE), p.tilt, true) { b -> set { it.copy(tilt = b) } })
+                page.addView(slider(tr(S.P_TILT_STRENGTH), p.tiltStrength, { pct(r2(it)) }) { v -> set { it.copy(tiltStrength = r2(v)) } })
+            }
+            Group.PROPERTIES -> {
+                preview = BrushPreviewView(context, theme, host.previews, true) { host.pressureTable() }.also {
+                    page.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, theme.dp(220)))
+                    it.show(params)
+                }
+                notes = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }.also { page.addView(it) }
+                refreshNotes()
+                if (!preset.builtIn) {
+                    page.addView(label(tr(S.SEC_BRUSH_CATEGORY)))
+                    page.addView(choice(BrushCategory.entries.map { it to tr(it.label) }, { preset.category }) { c ->
+                        host.updateBrushes(host.brushes.setCategory(id, c))
+                    })
+                }
+            }
+        }
     }
 
     override fun onRemoved() {
@@ -192,7 +268,7 @@ class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host
         val n = notes ?: return
         n.removeAllViews()
         val p = preset
-        if (p.builtIn) {
+        if (p.builtIn && group == Group.PROPERTIES) {
             n.addView(theme.text(context, tr(S.BUILTIN_NOTE), PxTheme.Type.CAPTION, theme.textSecondary).apply { setPadding(0, theme.dp(8), 0, 0) })
             if (host.brushes.isModified(p.id)) n.addView(Widgets.pill(context, theme, tr(S.RESET_BRUSH), false) { reset() },
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(8) })
@@ -215,16 +291,37 @@ class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setBackgroundColor(theme.bg)
-        setPadding(host.insets.left + theme.dp(4), host.insets.top + theme.dp(8), host.insets.right + theme.dp(8), theme.dp(8))
-        addView(IconButton(context, theme, Icon.BACK, tr(S.ACTION_CLOSE)).apply { setOnClickListener { host.pop() } })
-        titleView = theme.text(context, preset.displayName(), PxTheme.Type.TITLE, lines = 1).apply {
-            setPadding(theme.dp(8), 0, 0, 0)
+        setPadding(host.insets.left + theme.dp(8), host.insets.top + theme.dp(8), host.insets.right + theme.dp(8), theme.dp(8))
+        addView(Widgets.pill(context, theme, tr(S.ACTION_CANCEL), false) { cancel() })
+        titleView = theme.text(context, "", PxTheme.Type.TITLE, lines = 1).apply {
+            gravity = Gravity.CENTER
+            setPadding(theme.dp(8), 0, theme.dp(8), 0)
             markHeading()
         }
+        showTitle()
         addView(titleView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         val more = IconButton(context, theme, Icon.MORE, tr(S.MORE_OPTIONS))
         more.setOnClickListener { menu(more) }
         addView(more)
+        addView(Widgets.pill(context, theme, tr(S.ACTION_DONE), true) { host.pop() })
+    }
+
+    private fun showTitle() {
+        titleView?.text = preset.displayName()
+        titleView?.contentDescription = "${tr(S.BRUSH_STUDIO)}: ${preset.displayName()}"
+    }
+
+    /** Cancel: the brush goes back to what it was when the studio opened. */
+    private fun cancel() {
+        val lib = host.brushes
+        if (lib.get(openedId) != null && lib.effective(tool) != openedParams && lib.selectedId(tool) == openedId) {
+            host.updateBrushes(if (!openedModified && lib.isBuiltIn(openedId)) lib.reset(openedId).let { r ->
+                // (a built-in brush that was untouched: drop the customisation, keep its quick size / opacity)
+                r.setLive(tool, size = openedParams.size, opacity = openedParams.opacity)
+            } else lib.update(openedId, openedParams))
+            host.overlays.message(tr(S.STUDIO_CANCELLED))
+        }
+        host.pop()
     }
 
     private fun menu(anchor: View) {
@@ -243,7 +340,7 @@ class BrushEditorScreen(host: PxHost, private val tool: BrushTool) : Screen(host
         if (lib.canRename(p.id)) items += OverlayHost.MenuItem(tr(S.ACTION_RENAME), Icon.EDIT) {
             host.overlays.prompt(tr(S.RENAME_BRUSH), p.name, tr(S.ACTION_SAVE), tr(S.ACTION_CANCEL)) { name ->
                 host.updateBrushes(host.brushes.rename(p.id, name))
-                titleView?.text = preset.displayName()
+                showTitle()
             }
         }
         if (lib.isModified(p.id)) items += OverlayHost.MenuItem(tr(S.RESET_BRUSH), Icon.RESET) { reset() }

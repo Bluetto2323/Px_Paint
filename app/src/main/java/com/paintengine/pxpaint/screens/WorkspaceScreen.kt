@@ -954,11 +954,17 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         selBar = null
         selBarRow = null
         toolButtons.clear()
+        selectButton = null
         panelView = null
         pinnedView = null
         sizeSlider = null
         opacitySlider = null
-        val s = LayoutPolicy.workspace(host.windowWidthDp, host.windowHeightDp, host.smallestWidthDp, host.settings)
+        // Procreate arrangement (Block 15): tools top-right (tablets, landscape) or in the bottom
+        // dock (phone portrait, like Procreate Pocket); gallery + actions top-left; undo / redo
+        // under the size and opacity sliders. No side rail.
+        val s = LayoutPolicy.workspace(host.windowWidthDp, host.windowHeightDp, host.smallestWidthDp, host.settings).let {
+            if (it.toolbar == ToolbarPlacement.SIDE) it.copy(toolbar = ToolbarPlacement.TOP, toolLabels = false, showTitle = false) else it
+        }
         spec = s
         val ins = host.insets
         val m = theme.dp(8)
@@ -989,9 +995,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             Gravity.TOP or Gravity.START).apply {
             setMargins(ins.left + m + (if (s.toolbar == ToolbarPlacement.SIDE && railLeft) railW else 0), ins.top + m, 0, 0)
         })
-        c.addView(historyCluster(s), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+        if (s.toolbar == ToolbarPlacement.TOP) c.addView(toolCapsule(s, vertical = false), FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END).apply {
-            setMargins(0, ins.top + m, ins.right + m + (if (s.toolbar == ToolbarPlacement.SIDE && !railLeft) railW else 0), 0)
+            setMargins(0, ins.top + m, ins.right + m, 0)
         })
         val belowBar = ins.top + m + barH + m
 
@@ -1064,7 +1070,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         val sliderTop = belowBar + theme.touchTarget + theme.dp(12)   // clear of the selection bar
         val sliderBottom = ins.bottom + dockH + m
         val availPx = (if (c.height > 0) c.height else (host.windowHeightDp * context.resources.displayMetrics.density).toInt()) - sliderTop - sliderBottom
-        val lengthPx = ((availPx - theme.dp(16)) / 2).coerceIn(theme.dp(72), theme.dp(QuickSlider.LENGTH_DP))
+        val historyPx = 2 * theme.touchTarget + theme.dp(22)   // undo / redo under the sliders
+        val lengthPx = ((availPx - theme.dp(16) - historyPx) / 2).coerceIn(theme.dp(64), theme.dp(QuickSlider.LENGTH_DP))
         val sliders = quickSliders(s, lengthPx)
         slidersView = sliders
         val sliderLeft = s.sliderSide == Side.LEFT
@@ -1176,6 +1183,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     /** Top-left: back to the gallery, the project name on tablets, compositing and save state. */
     private fun navCluster(s: WorkspaceSpec): View = capsule(false).apply {
         addView(capsuleButton(IconButton(context, theme, Icon.BACK, tr(S.BACK_TO_GALLERY))).apply { setOnClickListener { host.pop() } })
+        // Actions (Procreate's wrench): the other tools and the canvas / app actions.
+        val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS)))
+        more.setOnClickListener { moreTools(more) }
+        moreButton = more
+        addView(more)
+        if (s.toolbar == ToolbarPlacement.TOP) addView(capsuleButton(IconButton(context, theme, Icon.SELECT, tr(S.TOOL_SELECT))).apply {
+            setOnClickListener { if (tool == Tool.SELECT) setPanel(Panel.TOOL) else selectTool(Tool.SELECT) }
+            selectButton = this
+        })
         if (s.showTitle) {
             addView(theme.text(context, meta.name, PxTheme.Type.LABEL, lines = 1).apply {
                 setPadding(theme.dp(4), 0, theme.dp(8), 0)
@@ -1199,8 +1215,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
     }
 
-    /** Top-right: undo / redo (long press: History); on tablets the tools follow. */
-    private fun historyCluster(s: WorkspaceSpec): View = capsule(false).apply {
+    /** Under the sliders: undo / redo (long press: History), as in Procreate. */
+    private fun historyCluster(): View = capsule(true).apply {
         undoButton = capsuleButton(IconButton(context, theme, Icon.UNDO, "${tr(S.UNDO)} — ${tr(S.UNDO_DESC)}")).apply {
             setOnClickListener { historyOp(NativeEngine.HistoryOp.UNDO) }
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
@@ -1210,10 +1226,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             setOnLongClickListener { togglePanel(Panel.HISTORY); true }
         }.also { addView(it) }
         showHistoryButtons()
-        if (s.toolbar == ToolbarPlacement.TOP) {
-            addView(separator(vertical = false))
-            addTools(this, s)
-        }
     }
 
     private fun toolCapsule(s: WorkspaceSpec, vertical: Boolean): View = capsule(vertical).apply { addTools(this, s) }
@@ -1224,6 +1236,7 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
     }
 
     private var moreButton: IconButton? = null
+    private var selectButton: IconButton? = null
 
     /**
      * Brush, eraser, colour, layers, more tools: the same group in every
@@ -1247,6 +1260,9 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             toolButtons[t] = b
             box.addView(b, toolLp(vertical))
         }
+        box.addView(capsuleButton(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null)).apply {
+            setOnClickListener { togglePanel(Panel.LAYERS) }
+        }, toolLp(vertical))
         val swatch = FrameLayout(context).apply {
             minimumWidth = theme.touchTarget
             minimumHeight = theme.touchTarget
@@ -1262,13 +1278,6 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         }
         colorButton = swatch
         box.addView(swatch, toolLp(vertical))
-        box.addView(capsuleButton(IconButton(context, theme, Icon.LAYERS, tr(S.LAYERS), label = if (s.toolLabels) tr(S.LAYERS) else null)).apply {
-            setOnClickListener { togglePanel(Panel.LAYERS) }
-        }, toolLp(vertical))
-        val more = capsuleButton(IconButton(context, theme, Icon.MORE, tr(S.MORE_TOOLS), label = if (s.toolLabels) tr(S.MORE_TOOLS_SHORT) else null))
-        more.setOnClickListener { moreTools(more) }
-        moreButton = more
-        box.addView(more, toolLp(vertical))
     }
 
     /** The tools that are not always on screen, and the canvas / app actions. */
@@ -1326,7 +1335,8 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
         addView(size, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
         addView(View(context), LinearLayout.LayoutParams(1, theme.dp(14)))
         addView(opacity, LinearLayout.LayoutParams(theme.touchTarget, lengthPx))
-        if (!tool.paints) alpha = theme.disabledAlpha
+        if (!tool.paints) { size.alpha = theme.disabledAlpha; opacity.alpha = theme.disabledAlpha }
+        addView(historyCluster(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = theme.dp(14) })
     }
 
     private fun currentBrushTool(): BrushTool = brushTool(if (!tool.paints) Tool.MARKER else tool)
@@ -1339,14 +1349,15 @@ class WorkspaceScreen(host: PxHost, private var meta: ProjectMeta) : Screen(host
             mb.setIcon(when (tool) {
                 Tool.SELECT -> Icon.SELECT; Tool.MOVE -> Icon.MOVE; Tool.FILL -> Icon.FILL; Tool.GRADIENT -> Icon.GRADIENT; else -> Icon.MORE
             })
-            mb.isSelected = !tool.paints
+            mb.isSelected = !tool.paints && !(tool == Tool.SELECT && selectButton != null)
         }
+        selectButton?.isSelected = tool == Tool.SELECT
         val bt = currentBrushTool()
         val b = host.brushes.effective(bt)
         sizeSlider?.setValue(BrushState.sizeToSlider(b.size))
         opacitySlider?.setValue(b.opacity)
         opacitySlider?.contentDescription = tr(if (tool == Tool.SMUDGE) S.QUICK_STRENGTH else S.QUICK_OPACITY)
-        for (sl in listOfNotNull(sizeSlider, opacitySlider)) (sl.parent as? View)?.alpha = if (!tool.paints) theme.disabledAlpha else 1f
+        for (sl in listOfNotNull(sizeSlider, opacitySlider)) sl.alpha = if (!tool.paints) theme.disabledAlpha else 1f
     }
 
     private fun selectTool(t: Tool) {
