@@ -689,10 +689,19 @@ void StrokeCompositor::applyWet(RasterStore& store, const Dab& d) {
                     }
                     // Soft tips: the falloff is steepened (1 - (1 - c)^2) so the body of a 0 %
                     // hardness brush still drags at close to the set strength.
+                    // Only paint is carried: the carried image is laid OVER the pixels, so an empty
+                    // (transparent) part of it leaves them alone instead of thinning them - smudging
+                    // from bare canvas into colour drags no "white" in - while colour still spreads
+                    // out over bare canvas.
                     const float a = wetA_ * covW * (2.0f - cov);
                     const float pk = wetPick_ * cov;
+                    // (as much of the pixel shows through as keeps its alpha from dropping: none
+                    // when the carried paint is at least as opaque, so plain smearing is unchanged)
+                    const float ka = k[3] * (1.0f / 255.0f), ca = o[3] * (1.0f / 255.0f);
+                    const float through = ca > ka ? (ca - ka) / ca : 0.0f;
                     for (int c = 0; c < 4; ++c) {
-                        const float out = o[c] + (k[c] - o[c]) * a;
+                        const float over = k[c] + o[c] * through;
+                        const float out = o[c] + (over - o[c]) * a;
                         o[c] = static_cast<uint8_t>(std::min(255.0f, out + 0.5f));
                         k[c] += (out - k[c]) * pk;
                     }

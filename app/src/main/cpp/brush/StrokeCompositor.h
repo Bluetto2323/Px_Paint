@@ -35,7 +35,7 @@
 // strokes) and applied at once to the store, reading the pixels as they are
 // now - colour mixing (Mix) or carrying the pixels along (Smudge). The base
 // copies still give exact cancel / undo. All arithmetic is premultiplied, so
-// transparency is carried like colour (smudge) and transparent pixels never
+// the smudge carries paint only (bare canvas never thins the colour) and transparent pixels never
 // tint the paint (mix). The provisional tail is not drawn for wet strokes.
 #pragma once
 

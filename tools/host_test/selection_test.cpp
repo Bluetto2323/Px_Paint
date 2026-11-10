@@ -1111,9 +1111,10 @@ void testWetMedia() {
             }
         check(out.a > 30 && out.a < 255 && premul, fmt("S13: smudged into transparency: partial alpha %.0f, premultiplied valid", out.a));
         check(in.a == 255, "S13: dragging starts inside the paint: the paint behind stays opaque");
-        // Back the other way: transparency dragged into the paint thins it.
+        // Back the other way: bare canvas dragged into the paint does not thin it (no "white" pulled in).
         straight(d, smudger(60, 0.9f), 700, 420, 250, 420);
-        check(d.layerPixel(1, 380, 420).a < 250, fmt("S13: transparency smudged into paint lowers its alpha (%.0f)", d.layerPixel(1, 380, 420).a));
+        const Rgba8 kept = d.layerPixel(1, 380, 420);
+        check(kept.a == 255 && kept.r > 200 && kept.b < 60, fmt("S13: smudging from bare canvas into paint keeps it opaque and its colour (a %.0f r %.0f)", kept.a, kept.r));
     }
     {   // Colour mixing.
         CanvasDocument d;
