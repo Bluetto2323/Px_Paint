@@ -215,8 +215,10 @@ class BrushLibraryTest {
         assertEquals(listOf("builtin.graphite"), ids("pencil shading"))    // every term must match
         assertEquals(listOf("builtin.round"), ids("Tondo"))
         assertTrue(ids("zzz").isEmpty())
-        assertEquals(2, lib.list(BrushFilter.DRY).size)
-        assertEquals(1, lib.list(BrushFilter.AIRBRUSH).size)
+        assertEquals(4, lib.list(BrushFilter.DRY).size)
+        assertEquals(2, lib.list(BrushFilter.AIRBRUSH).size)
+        assertEquals(2, lib.list(BrushFilter.CALLIGRAPHY).size)
+        assertEquals(2, lib.list(BrushFilter.WATER).size)
     }
 
     @Test
